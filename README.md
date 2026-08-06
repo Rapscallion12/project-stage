@@ -84,7 +84,12 @@ away** — gating happens at the specific action, not the page.
    npm run dev
    ```
 
-   Open [http://localhost:3000](http://localhost:3000).
+   Next.js defaults to [http://localhost:3000](http://localhost:3000), but
+   **that port is not guaranteed** — if something else on your machine is
+   already listening on 3000 (another project's dev server, etc.), Next.js
+   automatically falls back to 3001, 3002, and so on. Always use the URL
+   printed in the terminal output (`- Local: http://localhost:XXXX`) rather
+   than assuming 3000.
 
 ## Scripts
 
