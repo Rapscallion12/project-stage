@@ -113,3 +113,55 @@ supabase/
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the reasoning behind this
 structure and the full data model.
+
+## Git workflow
+
+**Remote**: `origin` is `https://github.com/Rapscallion12/project-stage.git`
+(private). Authentication is handled by Git Credential Manager (bundled
+with Git for Windows) — the first push/pull from a new machine may open a
+browser window to log into GitHub; after that, credentials are cached and
+`git push` / `git pull` work with no extra steps.
+
+**Branching**:
+
+- `main` is always kept in a working, buildable state. **Never commit
+  directly to `main`.**
+- Every unit of work happens on a branch created from `main`, named
+  `feat/<short-description>` for new functionality or `fix/<short-description>`
+  for corrections (e.g. `feat/scheduled-events`, `fix/progressive-authentication`).
+- When the work is complete, lint/build/tests pass, and docs are updated,
+  merge the branch back into `main`. This repo has no CI or PR review gate
+  yet (solo prototype, single contributor), so merges so far have been done
+  as local fast-forward merges:
+
+  ```bash
+  git checkout main
+  git merge --ff-only feat/your-branch-name
+  git push
+  ```
+
+  If `main` has moved since the branch was created (won't happen with a
+  single contributor working sequentially, but matters once more than one
+  person/session works in parallel), rebase the feature branch on `main`
+  first rather than merging with a merge commit, to keep history linear —
+  or ask before doing anything that rewrites already-pushed history.
+- Feature branches are not deleted after merging — they're kept as a record
+  of what shipped in which unit of work. `git branch -v` shows all of them.
+
+**Commits**:
+
+- Commit at meaningful milestones, not every file save. Write messages in
+  the imperative mood with a `type: summary` first line (`feat:`, `fix:`,
+  `chore:`, `docs:`), followed by a body explaining *why*, per the
+  examples in this project's standing instructions.
+- Update `CHANGELOG.md` and `SESSION_LOG.md` in the same commit (or the
+  same session) as the change they describe — see those files' existing
+  entries for the expected format.
+
+**Pushing**: once a branch is merged into `main` locally, `git push` sends
+it to GitHub — no `-u`/upstream flag needed after the first push, since
+`main` already tracks `origin/main`.
+
+**Pulling on a new machine/session**: `git clone https://github.com/Rapscallion12/project-stage.git`,
+then follow "Getting started" above (`npm install`, copy `.env.local.example`,
+etc.) — none of that is stored in git.
