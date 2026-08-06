@@ -28,6 +28,20 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   to avoid iOS auto-zoom, 44px minimum touch targets, mobile-first CTA
   stacking).
 
+### Changed
+
+- **Authentication is now a progressive upgrade, not an entry gate.**
+  Corrected a Session 1 mistake: the landing page's only calls to action
+  previously routed every visitor through signup/login. The hero's primary
+  CTA no longer requires an account; account creation is now presented as
+  an optional, benefit-framed upgrade ("Create an account to request the
+  mic, comment, and start building reputation"), surfaced without blocking
+  the guest experience. Full guest/account capability split, the intended
+  funnel, and the account-prompt tone are documented in PRODUCT.md's new
+  Progressive authentication model section; the guest identity mechanism
+  (anonymous session cookie, rate limiting, duplicate-vote prevention) is
+  designed in ARCHITECTURE.md, pending Phase 3 implementation.
+
 ### Known limitations
 
 - No live Supabase project is connected in this environment — auth is

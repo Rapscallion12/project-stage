@@ -3,6 +3,71 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-06 — Authentication is a progressive upgrade, not an entry gate
+
+**Problem**: Session 1 built the landing page and header with signup/login
+as the primary, unavoidable calls to action — "Join the audience" led to
+`/signup`, and there was no path into the product that didn't route through
+account creation first. The user corrected this: nobody should have to
+create an account to open the app, view an event, or participate as
+audience.
+
+**Alternatives considered**:
+1. Keep authentication as the front door — simplest to build, matches a lot
+   of default SaaS templates, but means every visitor's first experience of
+   the product is a signup form, not the conversation itself.
+2. Progressive authentication — guests can fully watch/react/vote; an
+   account is required only for actions that need persistent identity
+   (requesting the mic, commenting, reputation).
+
+**Decision**: Option 2, specified in detail by the user: guest capabilities
+(view landing, view events, join as audience, watch, emoji react,
+continue/replace vote, view chat, leave anytime) vs. account-only
+capabilities (request mic, comment/prompt/question, build reputation and
+reliability, future speaking opportunities, saved history, hosting,
+persistent display name). Guest identity is a temporary anonymous session
+(cookie-based), not a `profiles` row; guest votes/reactions are rate-limited
+and duplicate-checked but never accrue reputation, reliability, hosting
+privileges, or payouts. Documented across PRODUCT.md (new Progressive
+authentication model section + Principle 12), ARCHITECTURE.md (Auth flow
+rewritten, new Guest identity and Rate limiting sections, Data model updated
+per-table for guest eligibility), README.md, AGENTS.md, and ROADMAP.md
+(every phase item annotated for guest eligibility).
+
+**Reason**: The prototype exists to test whether people voluntarily watch
+and stay invested in strangers' conversations (see PRODUCT.md's core
+question). A login wall in front of that test contaminates the result —
+you'd be measuring "who is willing to sign up for an unproven product,"
+not "who is willing to watch." Gating only the actions that genuinely need
+persistent identity (requesting the mic, building reputation) keeps the
+account meaningful — see PRODUCT.md Principle 4, reputation earns
+opportunity, not control — without making it a toll.
+
+**Reason for the specific mechanism (cookie-based guest identity, not, say,
+letting guests vote with no identity check at all)**: PRODUCT.md explicitly
+requires guest actions to be "rate-limited and protected against obvious
+duplicate abuse," which needs *some* stable-enough identity per guest per
+session. A signed session cookie is the minimal mechanism that satisfies
+that requirement without creating an account, an email address, or any
+`auth.users`/`profiles` row for the guest — see ARCHITECTURE.md's Guest
+identity section.
+
+**Tradeoffs**: Every account-only server action must check for an
+authenticated user itself and degrade to an inline "create an account to do
+this" prompt, rather than relying on a route-level gate to keep unauthorized
+users out — more discipline required per-action, but this is also just
+correct: a route-level gate would violate the "guests are never redirected
+away from where they are" requirement by construction. The guest identity
+mechanism (cookie, rate-limiting, dedup) is unbuilt as of this decision — no
+guest-facing write exists yet (that's Phase 3) — so this is currently a
+design commitment for future sessions to implement against, not working
+code. The existing landing page was refactored this session (Hero's primary
+CTA no longer points at `/signup`); see ROADMAP.md's Known gaps for the
+placeholder anchor link that needs to become a real guest-join flow once
+Phase 1's events exist.
+
+---
+
 ## 2026-08-06 — Responsive design is a permanent, first-class product principle
 
 **Problem**: Whether mobile support could be treated as a later adaptation

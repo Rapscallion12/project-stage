@@ -72,52 +72,139 @@ types (see the comment at the top of `database.ts`).
 
 ## Auth flow
 
+Authentication is an optional upgrade, never an entry gate — see
+[PRODUCT.md's progressive authentication model](./PRODUCT.md#progressive-authentication-model).
+Concretely, that means:
+
+- **No route requires an authenticated user to render.** There is no
+  redirect-to-login anywhere in this codebase (`src/proxy.ts` only
+  refreshes the session; it never inspects the result to gate a route), and
+  there must not be one added for viewing the landing page, event list, or
+  a live event as audience.
+- **Gating happens at the action, not the route.** A feature that's
+  account-only (requesting the mic, posting a comment) checks for an
+  authenticated user *inside the server action*, and returns a specific
+  "create an account to do this" response for the UI to show inline — it
+  does not redirect the guest away from the page they were on. See
+  PRODUCT.md for the required tone of that prompt (name the specific
+  action, don't show a generic wall).
 - Supabase Auth (email/password for the MVP; no OAuth providers configured
-  yet).
+  yet) is the account mechanism. Guests are handled entirely outside
+  Supabase Auth — see [Guest identity](#guest-identity) below.
 - `src/lib/supabase/client.ts` — used in Client Components (e.g. the
   login/signup forms) for calls that need to run in the browser.
 - `src/lib/supabase/server.ts` — used in Server Components/Actions to read
-  the authenticated user and perform authorized mutations.
+  the authenticated user (if any — always check for `null` rather than
+  assuming a session exists) and perform authorized mutations.
 - `src/proxy.ts` — runs on every request, refreshes the session token, and
   rewrites the auth cookies so Server Components always see a valid session
-  without every route re-implementing refresh logic.
+  without every route re-implementing refresh logic. It does not (and must
+  not) redirect based on auth state.
 - A Postgres trigger (`handle_new_user` in the first migration) creates a
   `profiles` row automatically when a `auth.users` row is created, so the
   app never has to orchestrate "create auth user, then create profile" as
-  two client-visible steps.
+  two client-visible steps. Guests never get an `auth.users` or `profiles`
+  row — there is deliberately nowhere to store guest reputation/reliability,
+  which makes "guests accrue nothing permanent" a structural fact rather
+  than a convention someone could forget to enforce.
+
+## Guest identity
+
+Guests need a stable-enough identity for the duration of an event to make
+votes/reactions rate-limitable and duplicate-checkable, without ever
+creating an account for them. Not yet implemented — no guest-facing write
+exists yet (that arrives with Phase 3's votes/reactions) — but the planned
+mechanism, to keep future sessions aligned:
+
+- On first visit, if no guest session cookie is present, mint a random
+  opaque session ID and set it in an `httpOnly`, `Secure`,
+  `SameSite=Lax` cookie (working name: `vs_guest_id`) with a multi-day
+  expiry. It's a bare identifier, not a JWT — no claims, no elevated
+  access — used purely to deduplicate a guest's actions within an event.
+- This is entirely separate from Supabase Auth. A guest session never
+  becomes a `profiles` row implicitly; if a guest signs up, they get a
+  normal new account via the existing signup flow (their guest activity is
+  not retroactively linked — see PRODUCT.md).
+- Guest-eligible server actions (reactions, continue/replace votes) accept
+  *either* an authenticated user or a guest session cookie and record
+  whichever identity acted. Account-only actions (mic request, comments)
+  require an authenticated user and, if absent, return the specific
+  account-prompt copy rather than silently failing.
+
+## Rate limiting & abuse prevention for guests
+
+Also not yet implemented (no guest write exists yet), planned for Phase 3
+alongside votes/reactions:
+
+- **Duplicate prevention**: a database-level unique constraint on votes —
+  `(event_id, vote_round_id, COALESCE(profile_id, guest_session_id))` — one
+  vote per round per identity, account or guest. Enforced in Postgres, not
+  just the UI, so it holds even if a client is compromised or buggy.
+- **Rate limiting**: reactions are high-frequency by design (PRODUCT.md
+  Principle 7); cap them per identity per short window (e.g. N per 10s),
+  checked server-side before writing/broadcasting. Guests and account
+  holders are rate-limited identically — the limit exists to stop abuse,
+  not to penalize not having an account.
+- **No IP-based blocking in the MVP.** A session-cookie-based limit is
+  enough to stop *obvious* duplicate abuse, which is what PRODUCT.md asks
+  for. Someone deliberately clearing cookies to re-vote is an accepted MVP
+  limitation (Principles 9/10) — not worth anti-fraud tooling before the
+  core hypothesis is validated.
 
 ## Data model
 
 Implemented so far (`supabase/migrations/00000000000001_profiles.sql`):
 
-- **`profiles`** — one row per user. `reliability_score` and
-  `reputation_score` (see PRODUCT.md for the distinction) default to neutral
-  values and are read-only from the client's perspective beyond the owner
-  updating their own `display_name`. Future migrations will move score
-  mutation into `security definer` functions/triggers driven by event
-  outcomes rather than direct client writes.
+- **`profiles`** — one row per *account*. Guests never get a row here — see
+  Guest identity above. `reliability_score` and `reputation_score` (see
+  PRODUCT.md for the distinction) default to neutral values and are
+  read-only from the client's perspective beyond the owner updating their
+  own `display_name`. Future migrations will move score mutation into
+  `security definer` functions/triggers driven by event outcomes rather
+  than direct client writes.
 
-Not yet implemented (planned — see ROADMAP.md for sequencing):
+Not yet implemented (planned — see ROADMAP.md for sequencing). Guest
+eligibility is called out explicitly per table since it's a schema-level
+decision, not just a UI one:
 
 - `events` — scheduled sessions (start time, status, two speaker seat refs).
+  Readable by anyone, no auth required (guest and account holder alike).
 - `event_speakers` — who is occupying which seat, join/leave timestamps.
-- `speaker_queue` — ordered per-event queue of audience members requesting a
-  seat, ordered by a function of wait time and reputation.
+  Account-only: a row here always references a `profiles.id`, never a guest.
+- `speaker_queue` — ordered per-event queue of account holders requesting a
+  seat, ordered by a function of wait time and reputation. Account-only —
+  no `guest_session_id` column; the insert path itself requires auth.
 - `reactions` — ephemeral emoji reactions per event (short retention).
-- `comments` — audience comments per event, with a ranking signal for "top
-  comments."
+  **Guest-eligible**: references either `profile_id` or a guest session
+  identifier, exactly one set (`CHECK` constraint), matching the guest
+  identity design above.
+- `comments` — audience comments/prompts/questions per event, with a
+  ranking signal for "top comments." Account-only, per PRODUCT.md.
 - `votes` — continue/replace/extend votes, scoped to event + vote round so
-  results can't be double-counted.
-- `reports` — moderation reports against a user/event.
+  results can't be double-counted. **Guest-eligible**, same
+  `profile_id`-or-guest-session pattern as `reactions`, plus the uniqueness
+  constraint described above.
+- `reports` — moderation reports against a user/event. Guest-eligible in
+  principle (a guest should be able to report something alarming without
+  needing an account first), scoped the same way as reactions/votes.
 
 All tables will have RLS enabled by default (see the `profiles` migration
-for the pattern) — this is a hard rule, not a per-table decision.
+for the pattern) — this is a hard rule, not a per-table decision. For the
+guest-eligible tables, RLS policies must permit inserts identified by a
+guest session cookie value passed through the request, not just
+`auth.uid()` — the exact mechanism (e.g. a Postgres function reading a
+custom request header set by the server action) is a Phase 3 design task,
+not decided yet.
 
 ## Realtime plan
 
 Supabase Realtime (Postgres changes + broadcast) will drive: audience count,
-live reactions, live comment feed, and vote tallies. Not yet implemented —
-the MVP currently has no live event UI at all (see ROADMAP.md).
+live reactions, live comment feed, and vote tallies. Audience count and
+presence include guests, not just account holders — a guest in the room is
+still part of "the audience should feel like a live crowd" (PRODUCT.md
+Principle 7); presence tracking should key off the guest session identity
+described above, not require auth. Not yet implemented — the MVP currently
+has no live event UI at all (see ROADMAP.md).
 
 ## Video plan
 
@@ -179,6 +266,12 @@ until:
   than failing outright.
 - For anything touching camera/microphone (Phase 2+): both permission
   granted and permission denied paths have been exercised.
+- **Any new route or feature has been walked through as a guest (no
+  session at all)** — confirming it renders and, where guest-eligible per
+  PRODUCT.md, functions fully — before it's considered done. If a feature
+  is account-only, confirm the guest gets the specific account-prompt copy
+  (never a redirect to `/login`, never a generic wall) inline at the point
+  of the action.
 - For anything involving the on-screen keyboard (Phase 2+ comment/chat
   input): the layout has been checked with the keyboard open.
 - `npm run lint`, `npm run build` (which type-checks), and any relevant

@@ -4,6 +4,99 @@ Newest entry first.
 
 ---
 
+## 2026-08-06 — Session 2: Progressive authentication correction
+
+**Goal**: Correct a product mistake from Session 1 — authentication had
+been built as a mandatory entry gate (landing page's primary CTA led
+straight to signup, with no guest path into the product at all). The user
+specified a progressive authentication model: guests can fully watch,
+react, vote, and view chat with no account; an account is required only for
+actions needing persistent identity (mic request, comments, reputation).
+
+**Completed work**:
+
+- Audited the existing auth implementation for anything that assumed every
+  visitor must log in. Found: `src/proxy.ts` only refreshes the session and
+  never redirects (confirmed clean — no code change needed there); the
+  actual violation was `src/components/landing/hero.tsx`, whose only two
+  CTAs were "Join the audience" → `/signup` and "Log in" → `/login`, i.e.
+  100% of the landing page's primary actions routed through auth.
+- Refactored `Hero`: primary CTA now points at an on-page `#how-it-works`
+  anchor (no auth required); added a low-key, benefit-framed account prompt
+  below it ("No account needed to watch. Create an account to request the
+  mic, comment, and start building reputation.") instead of a second
+  full-weight auth button.
+- Added a guest-access rule and an id anchor to `HowItWorks`
+  (`src/components/landing/how-it-works.tsx`) so the new CTA has somewhere
+  to land, and so the guest/account split is stated on the page itself, not
+  just in docs.
+- `SiteHeader`'s login/signup nav links were reviewed and left as-is — a nav
+  link is not a gate; a guest can ignore it and use the product fully.
+- Rewrote the documentation suite for the new model:
+  - **PRODUCT.md**: new "Progressive authentication model" section (guest
+    vs. account capability lists, the funnel, required account-prompt tone,
+    guest identity limits), new Principle 12, Principle 3 footnoted,
+    "Authentication" MVP scope line reworded, Core entities section
+    rewritten to distinguish Guest from Account holder.
+  - **ARCHITECTURE.md**: Auth flow section rewritten around "gating happens
+    at the action, not the route"; new Guest identity section (planned
+    cookie-based anonymous session, deliberately outside Supabase Auth);
+    new Rate limiting & abuse prevention section (dedup via a DB unique
+    constraint, per-identity rate limits, no IP blocking in the MVP); Data
+    model section annotated per-table for guest eligibility; Testing &
+    Definition of Done gained a "walk it through as a guest" checklist item.
+  - **README.md**: new "Design principle: authentication is an upgrade, not
+    a gate" section, mirroring the existing responsive-design section.
+  - **ROADMAP.md**: every phase item annotated guest-eligible vs.
+    **(account-only)**; added a Phase 2 item for the guest session cookie
+    mechanism; added a Known gaps entry noting the Hero's CTA is a
+    placeholder anchor until Phase 1's event list gives guests somewhere
+    real to land.
+  - **AGENTS.md**: new rule at the top of the project-specific list —
+    authentication is an upgrade, not a gate, with a pointer back to this
+    correction so a future session doesn't reintroduce a login wall.
+  - **DECISIONS.md**: full ADR for this correction (problem, alternatives,
+    decision, two "reason" entries — why progressive auth at all, and why a
+    cookie-based guest identity specifically — and tradeoffs).
+
+**Files changed**: `PRODUCT.md`, `ARCHITECTURE.md`, `README.md`,
+`ROADMAP.md`, `DECISIONS.md`, `AGENTS.md`, `SESSION_LOG.md` (this entry),
+`src/components/landing/hero.tsx`, `src/components/landing/how-it-works.tsx`.
+
+**Known issues**:
+
+- The guest identity mechanism (session cookie, rate limiting, duplicate
+  vote/reaction prevention) is a documented design, not implemented code —
+  there's no guest-facing write yet for it to protect (that's Phase 3).
+  Whoever builds Phase 3 must implement it then, not assume it already
+  exists.
+- The Hero's primary CTA is an on-page anchor link, not a real guest-join
+  flow, because Phase 1 (events) doesn't exist yet. Tracked in ROADMAP.md's
+  Known gaps.
+- Same live-credentials gap as Session 1: no real Supabase project
+  connected in this environment.
+
+**Tests run**:
+
+- `npm run lint` — passes, no warnings.
+- `npm run build` — passes, type-checks clean. Route table unchanged from
+  Session 1 (`/`, `/login`, `/signup`, `/auth/confirm`), as expected — this
+  session changed copy/navigation and documentation, not routes.
+- No new automated tests — this was a copy/navigation/documentation
+  correction, not new application logic.
+
+**Current build status**: Lint clean, build clean. Same "no live Supabase
+credentials" limitation as Session 1 — not a regression.
+
+**Recommended next task**: Unchanged from Session 1's recommendation — get a
+real Supabase project connected and smoke-test signup → confirm → login →
+logout — but when Phase 1 (scheduled events) starts, build the guest
+session cookie mechanism (ARCHITECTURE.md's Guest identity section)
+alongside it rather than deferring it further, since Phase 2's audience
+viewing and Phase 3's guest voting/reactions both depend on it.
+
+---
+
 ## 2026-08-06 — Session 1: Bootstrap, landing page, authentication
 
 **Goal**: Stand up the repository from an empty directory and deliver the

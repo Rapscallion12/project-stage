@@ -32,6 +32,20 @@ for the product rule and
 [ARCHITECTURE.md's testing checklist](./ARCHITECTURE.md#testing--definition-of-done)
 for what "done" requires before a feature is considered complete.
 
+## Design principle: authentication is an upgrade, not a gate
+
+Nobody should have to create an account to open the app, see what's on, or
+watch and interact with a live event as audience. An account unlocks
+contribution (requesting the mic, commenting, building reputation) — it is
+never required just to walk in the door. This is a permanent, non-negotiable
+product decision, corrected into the project after the first session
+initially wired login as the front door. See
+[PRODUCT.md's progressive authentication model](./PRODUCT.md#progressive-authentication-model)
+for the full guest/account capability split and
+[ARCHITECTURE.md's guest identity design](./ARCHITECTURE.md#guest-identity)
+for the implementation. **No route may redirect an unauthenticated visitor
+away** — gating happens at the specific action, not the page.
+
 ## Tech stack
 
 - **Frontend**: Next.js 16 (App Router), TypeScript, Tailwind CSS v4

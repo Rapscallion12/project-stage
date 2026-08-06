@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ButtonLink } from "@/components/ui/button";
 
 export function Hero() {
@@ -13,14 +14,24 @@ export function Hero() {
         Two people, one live conversation, and a crowd that controls the
         stage — who stays, who&apos;s next, and how long it runs.
       </p>
+      {/*
+        No account required to watch — see PRODUCT.md's progressive
+        authentication model. Once Phase 1 (scheduled events) ships, this
+        primary CTA should link straight to the events list / a live event
+        so guests land in the room, not on an anchor link.
+      */}
       <div className="mt-10 flex w-full flex-col items-center gap-3 sm:w-auto sm:flex-row sm:gap-4">
-        <ButtonLink href="/signup" className="w-full sm:w-auto">
-          Join the audience
-        </ButtonLink>
-        <ButtonLink href="/login" variant="secondary" className="w-full sm:w-auto">
-          Log in
+        <ButtonLink href="#how-it-works" className="w-full sm:w-auto">
+          See how it works
         </ButtonLink>
       </div>
+      <p className="mt-6 text-sm text-muted">
+        No account needed to watch.{" "}
+        <Link href="/signup" className="text-accent hover:underline">
+          Create an account
+        </Link>{" "}
+        to request the mic, comment, and start building reputation.
+      </p>
     </section>
   );
 }

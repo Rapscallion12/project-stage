@@ -18,6 +18,18 @@ last-entry-first before starting work.
 
 A few rules that are easy to violate by defaulting to generic habits:
 
+- **Authentication is an upgrade, never an entry gate.** No route may
+  redirect an unauthenticated visitor away — not the landing page, not an
+  event, not the live room as audience. Guests can watch, react, vote
+  (continue/replace), and view chat with zero session. Gate account-only
+  actions (mic request, comments, reputation) *inside the server action*,
+  and respond with a specific, benefit-framed prompt ("Create an account to
+  request the mic") — never a generic wall, never a redirect to `/login`.
+  See PRODUCT.md's progressive authentication model and ARCHITECTURE.md's
+  Guest identity section before touching auth, routing, or any
+  audience-facing feature. This was a correction the user had to make once
+  already (see DECISIONS.md) — don't reintroduce a login wall by default
+  when building Phase 1+ features.
 - **Every screen is responsive by requirement, not by convenience.**
   Desktop and smartphone are both first-class targets, built with layouts
   intentionally designed per screen size sharing the same business logic —

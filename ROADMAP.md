@@ -11,13 +11,23 @@ Every item below is subject to the [responsive design principle](./PRODUCT.md#re
 and its [testing checklist](./ARCHITECTURE.md#testing--definition-of-done) —
 not repeated per line item to avoid clutter, but not optional either.
 
+Every item is also subject to the
+[progressive authentication model](./PRODUCT.md#progressive-authentication-model):
+unless explicitly marked **(account-only)** below, a feature must work for a
+guest with no session at all. When in doubt about a specific line item's
+guest eligibility, PRODUCT.md's guest/account capability lists are the
+source of truth, not this file.
+
 ## Phase 0 — Foundation
 
 - [x] Repository, Next.js/TS/Tailwind scaffold, documentation suite
 - [x] Supabase client setup (browser + server) and session-refresh proxy
 - [x] `profiles` table + auto-provisioning trigger
-- [x] Landing page
-- [x] Authentication (sign up, log in, log out)
+- [x] Landing page (guest-first — no signup/login funneling as the primary
+      call to action; see DECISIONS.md for the correction that drove this)
+- [x] Authentication, as an **optional account upgrade** (sign up, log in,
+      log out) — not an entry gate. No route redirects an unauthenticated
+      visitor away.
 - [ ] Real Supabase project connected (currently no live credentials in this
       environment — `.env.local` must be created by a human or a session
       with access to a Supabase account)
@@ -31,35 +41,56 @@ not repeated per line item to avoid clutter, but not optional either.
 ## Phase 1 — Scheduled events & waiting room
 
 - [ ] `events` table + migration
-- [ ] Event list / event detail pages
-- [ ] Waiting room (pre-event lobby, countdown to start)
-- [ ] Basic moderator flag on `profiles` (needed before moderator controls
-      in Phase 3, cheap to add alongside events)
+- [ ] Event list / event detail pages — guest-viewable, no account required
+- [ ] Waiting room (pre-event lobby, countdown to start) — guest-viewable
+- [ ] Basic moderator flag on `profiles` **(account-only, by definition —
+      moderators are accounts)** (needed before moderator controls in
+      Phase 3, cheap to add alongside events)
 
 ## Phase 2 — Live room (two speakers + audience)
 
+- [ ] Guest session mechanism: anonymous session cookie (see
+      [ARCHITECTURE.md's guest identity design](./ARCHITECTURE.md#guest-identity)),
+      minted on first visit, used for presence/audience count and as the
+      prerequisite for Phase 3's guest votes/reactions.
 - [ ] LiveKit integration (install SDK, token endpoint, room component)
-- [ ] `event_speakers` table
+- [ ] `event_speakers` table **(account-only** — speakers must have an
+      account; see PRODUCT.md)
 - [ ] Two-speaker live audio/video room, with adaptive video quality and
       reconnect handling on flaky networks, and explicit handling of both
       camera/microphone permission granted and denied
-- [ ] Audience viewing (join a live room as a non-speaker)
-- [ ] Audience count (Supabase Realtime presence)
-- [ ] Emergency leave
+- [ ] Audience viewing (join a live room as a non-speaker) — guest-viewable,
+      no account required
+- [ ] Audience count (Supabase Realtime presence) — counts guests and
+      account holders alike
+- [ ] Emergency leave — available to guests and account holders alike
 
 ## Phase 3 — Audience power features
 
-- [ ] `speaker_queue` table + request-to-speak flow
-- [ ] Continue voting
-- [ ] Replace speaker voting
-- [ ] Timer extension (tied to continue voting)
+- [ ] `speaker_queue` table + request-to-speak flow **(account-only** — this
+      is the product's clearest "create an account to do this" moment; use
+      the account-prompt copy from PRODUCT.md, inline, not a redirect)
+- [ ] Continue voting — guest-eligible, rate-limited/deduped per
+      ARCHITECTURE.md's guest identity + abuse-prevention design
+- [ ] Replace speaker voting — guest-eligible, same as above
+- [ ] Timer extension (tied to continue voting) — guest-eligible by
+      inheritance from continue voting
 - [ ] Live emoji reactions (Realtime broadcast, ephemeral — no `reactions`
-      table needed unless we decide to persist them for analytics)
-- [ ] Comments + "top comments" ranking
-- [ ] Report button
+      table needed unless we decide to persist them for analytics) —
+      guest-eligible, rate-limited per identity (guest or account, same
+      limit)
+- [ ] Comments + "top comments" ranking **(account-only** — per PRODUCT.md;
+      guests may still *view* the comment feed)
+- [ ] Report button — guest-eligible; someone shouldn't need an account to
+      flag something alarming
 - [ ] Basic moderator controls (mute/remove speaker, end event early)
+      **(account-only**, moderator-flagged accounts specifically)
 
 ## Phase 4 — Reputation & reliability
+
+Everything in this phase is **account-only by definition** — guests
+structurally cannot have a `profiles` row, so there is nothing to attach a
+score to (see ARCHITECTURE.md's Guest identity section).
 
 - [ ] Reputation score updates driven by event outcomes (votes received
       while speaking, etc.) — implement as `security definer` functions, not
@@ -86,3 +117,9 @@ instruction that overrides PRODUCT.md.
   further.
 - **No CI pipeline yet.** `npm run lint` / `npm run build` are run manually
   each session — see SESSION_LOG.md for the last known-good status.
+- **The landing page's primary CTA is a placeholder anchor link**
+  (`#how-it-works`), not a real guest-join flow — there's nowhere to send a
+  guest yet since Phase 1's event list doesn't exist. Once Phase 1 ships,
+  repoint `src/components/landing/hero.tsx`'s CTA to the events list (or
+  straight into a live event if one's running) so the guest funnel in
+  PRODUCT.md is actually reachable end to end.

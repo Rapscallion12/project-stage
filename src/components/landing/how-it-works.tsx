@@ -1,5 +1,9 @@
 const RULES = [
   {
+    title: "Watch free, no account needed",
+    body: "Join any live event as a guest — watch, react, and vote on what happens next.",
+  },
+  {
     title: "The audience controls the stage",
     body: "Continue, replace, or extend — every call is a live vote, not a host's decision.",
   },
@@ -9,7 +13,7 @@ const RULES = [
   },
   {
     title: "Anyone can earn the microphone",
-    body: "Join the request queue from the audience. No invites, no gatekeeping.",
+    body: "Create an account to join the request queue. No invites, no gatekeeping.",
   },
   {
     title: "Reputation earns opportunity, not control",
@@ -19,7 +23,7 @@ const RULES = [
 
 export function HowItWorks() {
   return (
-    <section className="mx-auto max-w-4xl px-6 py-16">
+    <section id="how-it-works" className="mx-auto max-w-4xl px-6 py-16 scroll-mt-20">
       <h2 className="mb-10 text-center text-sm font-medium tracking-wide text-muted">
         HOW IT WORKS
       </h2>
