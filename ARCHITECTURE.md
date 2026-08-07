@@ -250,6 +250,49 @@ This section is the engineering implementation of that rule.
   and clean up listeners/timers/media streams/subscriptions on unmount —
   this matters most on mobile, where it's also battery cost, not just CPU.
 
+## Mobile orientation implementation
+
+See [PRODUCT.md's mobile orientation behavior](./PRODUCT.md#mobile-orientation-behavior)
+for the product rule: portrait and landscape are two intentional
+presentation modes of the live room, and rotating between them must never
+cost the user their video connection, chat state, votes, reactions, speaker
+state, or timers. Not yet implemented — there's no live room yet (Phase
+2+) — but the constraint this places on the implementation is decided now
+so whoever builds it doesn't default to the naive approach:
+
+- **The failure mode to design against**: conditionally rendering an
+  entirely different component tree per orientation (`isPortrait ?
+  <PortraitRoom /> : <LandscapeRoom />`) is the obvious way to build this,
+  and it's wrong by default — if the LiveKit connection, chat subscription,
+  vote/reaction state, or timers are owned *inside* either branch, React
+  unmounts that branch's hooks (and their cleanup — dropping the call,
+  closing the channel) the instant orientation flips, then mounts the other
+  branch fresh. That's exactly the reload-equivalent PRODUCT.md forbids,
+  just without an actual page reload.
+- **The rule**: anything stateful and live — the LiveKit room/track
+  subscriptions, the chat channel subscription, vote/reaction state, timer
+  intervals — must be owned by a hook/context in a component that renders
+  unconditionally (above the orientation branch), never inside
+  `PortraitRoom`/`LandscapeRoom` themselves. Those two components should be
+  close to pure presentation: given the same live state and the same
+  callbacks, they just arrange it differently. This is the same "shared
+  logic, split presentation" pattern already established above for
+  breakpoints — orientation is a second axis of the same rule, not a new
+  one, but it's called out explicitly here because getting it wrong doesn't
+  just look bad (as a breakpoint mistake would), it drops the user's live
+  connection.
+- **Detecting orientation**: use `window.matchMedia('(orientation:
+  portrait)')` with a change listener (wrapped in a small hook, e.g.
+  `useOrientation()`), not viewport-width breakpoints — orientation and
+  screen size are different axes (a tablet rotating doesn't necessarily
+  cross a width breakpoint the way a phone does). Since this is
+  client-only state, guard against a hydration mismatch with a sensible
+  default for the initial server render rather than reading `matchMedia`
+  during render.
+- **Smoothness**: prefer CSS transitions for the layout change itself over
+  JS-driven layout thrash; the goal is that rotating reads as "the same
+  live session redecorated," not a navigation.
+
 ## Testing & Definition of Done
 
 A feature is not done — regardless of what the roadmap checkbox says —
@@ -261,6 +304,13 @@ until:
 - It's been checked in: narrow phone widths, common smartphone sizes,
   tablet, laptop, and desktop browser widths; both portrait and landscape
   where orientation applies.
+- **For the live room specifically (Phase 2+)**: rotated live, mid-session,
+  in both directions — not just checked once per orientation in isolation.
+  No reload triggered, and live video connection, chat state, votes,
+  reactions, speaker state, and timers all survive the rotation intact. See
+  [Mobile orientation implementation](#mobile-orientation-implementation)
+  for the architectural rule this is checking (state must not live inside
+  the orientation-conditional branch).
 - It's been checked under a throttled/slow network and under a simulated
   reconnect, and degrades per the graceful-degradation rule above rather
   than failing outright.

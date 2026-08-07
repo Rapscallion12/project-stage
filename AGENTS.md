@@ -36,6 +36,18 @@ A few rules that are easy to violate by defaulting to generic habits:
   never one platform's layout stretched or squeezed for the other. See
   PRODUCT.md's responsive design principle and ARCHITECTURE.md's testing
   checklist before marking any UI work done.
+- **On the live room (Phase 2+), portrait and landscape are two
+  intentional modes, not one layout rotated 90°.** The obvious
+  implementation — a component tree picked by `isPortrait ? <A/> : <B/>` —
+  is wrong by default if the LiveKit connection, chat subscription, vote/
+  reaction state, or timers live inside either branch: React unmounts that
+  branch's hooks on rotation, dropping the call and resetting state, which
+  is the reload-equivalent PRODUCT.md explicitly forbids. That live state
+  must be owned by a hook/context in a component that renders
+  unconditionally, above the orientation branch — the portrait/landscape
+  components stay presentation-only. See PRODUCT.md's mobile orientation
+  behavior and ARCHITECTURE.md's mobile orientation implementation section
+  before writing the live room's layout code.
 - **Never build a feature that isn't in PRODUCT.md's MVP scope** (or a
   future session's explicit instruction) — check the out-of-scope list
   before adding anything that smells like a "nice to have."

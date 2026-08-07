@@ -50,6 +50,14 @@ source of truth, not this file.
 
 ## Phase 2 — Live room (two speakers + audience)
 
+This phase is also where [PRODUCT.md's mobile orientation
+behavior](./PRODUCT.md#mobile-orientation-behavior) first applies —
+portrait and landscape are two intentional modes of the live-room UI, not
+one layout rotated, and rotating must never drop the video connection or
+reset chat/vote/timer state. See
+[ARCHITECTURE.md's implementation notes](./ARCHITECTURE.md#mobile-orientation-implementation)
+before building the room's layout.
+
 - [ ] Guest session mechanism: anonymous session cookie (see
       [ARCHITECTURE.md's guest identity design](./ARCHITECTURE.md#guest-identity)),
       minted on first visit, used for presence/audience count and as the

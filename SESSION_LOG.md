@@ -4,6 +4,64 @@ Newest entry first.
 
 ---
 
+## 2026-08-06 — Session 5: Mobile orientation behavior principle
+
+**Goal**: Document a new permanent product/architecture principle from the
+user, specific to the live room's smartphone experience: portrait and
+landscape must be two intentional presentation modes of the same session,
+not the same layout rotated — and rotating between them must never drop
+the live video connection or reset chat/vote/timer state.
+
+**Completed work**: Pure documentation — no application code exists yet for
+this to apply to (the live room is Phase 2+, not yet built).
+
+- **PRODUCT.md**: new Principle 13 and a new top-level "Mobile orientation
+  behavior" section (portrait vs. landscape priorities, the no-reload/
+  no-state-loss requirement), matching the weight given to the two prior
+  standing principles (responsive design, progressive authentication).
+- **ARCHITECTURE.md**: new "Mobile orientation implementation" section
+  naming the specific failure mode to design against (a naive
+  `isPortrait ? <A/> : <B/>` split that owns live state — LiveKit
+  connection, chat subscription, vote/reaction state, timers — inside
+  either branch, which React unmounts on rotation) and the rule that
+  prevents it (that state must be owned by a hook/context in a component
+  that renders unconditionally, above the orientation branch). Also added
+  a dedicated Testing & Definition of Done checklist item requiring the
+  live room be rotated mid-session in both directions, not just checked
+  once per orientation in isolation.
+- **AGENTS.md**: standing rule warning against the naive per-orientation
+  component-tree approach, before whoever builds Phase 2 writes that code.
+- **ROADMAP.md**: cross-referenced from the Phase 2 section, matching how
+  the other two standing principles are already threaded through the
+  roadmap.
+- **DECISIONS.md**: full ADR — added for consistency with how the other
+  two standing principles were recorded, though not explicitly requested
+  this time.
+
+Caught and fixed one mistake while editing: an early edit to
+ARCHITECTURE.md accidentally deleted the "## Testing & Definition of Done"
+heading text (old_string/new_string boundary error) — noticed immediately
+via `grep -n "^## "` and restored before it could ship.
+
+**Files changed**: `PRODUCT.md`, `ARCHITECTURE.md`, `AGENTS.md`,
+`ROADMAP.md`, `DECISIONS.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: None — this is a design commitment for Phase 2, not
+working code. There is nothing to test yet; the checklist item added to
+ARCHITECTURE.md will apply once the live room exists.
+
+**Tests run**: `npm run lint` and `npm run build` — both pass (docs-only
+change; route table unchanged).
+
+**Current build status**: Lint clean, build clean.
+
+**Recommended next task**: Unchanged — Phase 1 (scheduled events) is next.
+When Phase 2 (live room) eventually starts, the orientation architecture
+decided here should shape the very first component structure, not be
+retrofitted after a naive version ships.
+
+---
+
 ## 2026-08-06 — Session 4: Live Supabase connection, confirm-route fix, progressive-auth audit
 
 **Goal**: Resolve the local runtime blocker (no Supabase credentials), connect

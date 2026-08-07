@@ -46,6 +46,10 @@ These override feature requests whenever the two conflict.
 12. **Guests can fully experience the show; accounts unlock contribution.**
     Nobody should have to sign up to watch, react, or vote — see
     [Progressive authentication model](#progressive-authentication-model).
+13. **Portrait and landscape are two intentional modes, not one layout
+    rotated.** Rotating the device must never cost the user their video
+    connection, chat state, votes, reactions, or place in the session — see
+    [Mobile orientation behavior](#mobile-orientation-behavior).
 
 ## Responsive design principle
 
@@ -81,6 +85,45 @@ works well on one doesn't get a real answer.
 See [ARCHITECTURE.md](./ARCHITECTURE.md#responsive-implementation-notes)
 for the engineering implementation of this principle, and its testing
 checklist for what "done" requires per feature.
+
+## Mobile orientation behavior
+
+On the smartphone live-room experience (Phase 2+), portrait and landscape
+are **two intentional presentation modes of the same session — not the
+same layout rotated 90°.** This is a permanent product decision, scoped
+specifically to the live room (speakers, chat, reactions, prompts, voting,
+request-to-speak), where orientation genuinely changes what the audience is
+there to do.
+
+**Portrait prioritizes participation and community context:**
+
+- Speakers remain clearly visible.
+- Chat, reactions, prompts, voting, and request-to-speak controls are easy
+  to reach.
+- Vertical space is used efficiently so the audience can follow the live
+  conversation and the surrounding audience activity at the same time.
+- Live chat is more prominent than it is in landscape.
+- Controls stay thumb-friendly and never cover important video content.
+- No layout should require horizontal scrolling.
+
+**Landscape prioritizes the live conversation itself:**
+
+- Speakers get substantially more screen space.
+- The two speaker feeds display side by side when practical.
+- Live chat is reduced, collapsed, or hidden by default.
+- Reactions and essential controls may remain visible as lightweight
+  overlays or compact controls.
+- There's always an easy way to reopen chat without leaving the live view.
+- The result should feel closer to a focused live-show viewing mode than a
+  chat app with video attached.
+
+**Rotating between them must never cost the user anything.** No reload, and
+nothing resets: live video stays connected, chat state is preserved, votes
+and reactions in progress aren't lost, speaker state and timers keep
+running, and the user doesn't lose their place in the session. See
+[ARCHITECTURE.md](./ARCHITECTURE.md#mobile-orientation-implementation) for
+how this constrains the implementation (state must not live inside
+whichever layout variant is currently rendered).
 
 ## Progressive authentication model
 

@@ -3,6 +3,63 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-06 — Portrait and landscape are two intentional live-room modes
+
+**Problem**: The live room (Phase 2+) is the one screen in this app where
+mobile orientation isn't just a layout question — portrait and landscape
+audiences want genuinely different things (following the crowd vs.
+focusing on the conversation). Left undecided, the default engineering
+approach would be a single responsive layout that just reflows on rotation
+— or worse, two component trees swapped by orientation that each own their
+own LiveKit connection and chat subscription, silently dropping the call
+and resetting state every time the phone rotates.
+
+**Alternatives considered**:
+1. Treat orientation as just another responsive breakpoint — one layout,
+   CSS reflow only, no orientation-specific behavior differences.
+2. Two distinct presentation modes (portrait: participation/community
+   context; landscape: focused live-show view), architecturally required to
+   share the same live state so rotating never drops the connection or
+   resets anything.
+
+**Decision**: Option 2, specified in detail by the user: portrait
+prioritizes speakers-visible + easy-to-reach chat/reactions/prompts/voting/
+request-to-speak + prominent chat + no horizontal scroll; landscape
+prioritizes the conversation itself — speakers get substantially more
+space, side-by-side feeds when practical, chat collapsed by default with
+an easy reopen, reactions/controls as lightweight overlays. Rotating
+between them must preserve live video, chat state, votes, reactions,
+speaker state, and timers, with no reload. Documented in PRODUCT.md (new
+Mobile orientation behavior section + Principle 13), ARCHITECTURE.md (new
+Mobile orientation implementation section — the architectural rule that
+live state must be owned above the orientation-conditional branch, not
+inside it — plus a new Testing & Definition of Done checklist item),
+AGENTS.md (standing rule against the naive per-orientation-component-tree
+approach), and ROADMAP.md (cross-referenced from Phase 2).
+
+**Reason**: This is a corollary of the existing responsive design
+principle (PRODUCT.md Principle 11) applied to the one place in the MVP
+where orientation carries real product meaning, not just layout
+convenience — the live room is simultaneously a video call and a crowd
+experience, and which one dominates should follow how the phone is held.
+Calling it out as its own principle (rather than leaving it implicit under
+"responsive design") exists because the failure mode is worse than a
+typical responsive bug: getting breakpoints wrong looks bad, but getting
+orientation wrong on this screen actually drops the user's live connection
+— severe enough to warrant an explicit, named rule future sessions can't
+miss.
+
+**Tradeoffs**: Requires more deliberate component architecture up front
+(shared state lifted above two presentation-only orientation branches)
+than the naive approach would. Accepted, since retrofitting this after
+building it the naive way would mean rearchitecting state ownership in a
+component that also has to manage a live WebRTC connection — considerably
+more expensive later than deciding it now, before Phase 2 exists at all.
+Currently a design commitment for a future session to implement against,
+not working code — there's no live room yet.
+
+---
+
 ## 2026-08-06 — Authentication is a progressive upgrade, not an entry gate
 
 **Problem**: Session 1 built the landing page and header with signup/login
