@@ -1,0 +1,13 @@
+-- Explicit table-level grants for profiles. RLS policies alone are not
+-- sufficient: Postgres checks the table-level GRANT before RLS ever runs,
+-- and Supabase's SQL Editor (unlike the Table Editor UI) does not
+-- auto-apply default privileges to tables created via raw SQL. Without
+-- this, even an authenticated request satisfying the RLS policies below
+-- fails with 42501 "permission denied for table profiles".
+--
+-- Matches exactly what the two policies in 00000000000001_profiles.sql
+-- allow: authenticated users can select any profile and update their own.
+-- No grant for anon, matching the "to authenticated" scope of both
+-- policies and the progressive-auth rule that guests never read/write
+-- profile data (see PRODUCT.md's progressive authentication model).
+grant select, update on public.profiles to authenticated;

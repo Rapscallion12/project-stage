@@ -28,9 +28,10 @@ source of truth, not this file.
 - [x] Authentication, as an **optional account upgrade** (sign up, log in,
       log out) — not an entry gate. No route redirects an unauthenticated
       visitor away.
-- [ ] Real Supabase project connected (currently no live credentials in this
-      environment — `.env.local` must be created by a human or a session
-      with access to a Supabase account)
+- [x] Real Supabase project connected and verified: URL/anon key valid,
+      `profiles` table exists with correct grants, and signup → email
+      confirmation → login → logout → login-again all completed
+      successfully in a real browser. See SESSION_LOG.md.
 - [ ] Manual responsive/device verification of landing + auth pages against
       the testing checklist. The responsive design principle was adopted
       partway through the session that built these pages; layouts use

@@ -42,11 +42,43 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   (anonymous session cookie, rate limiting, duplicate-vote prevention) is
   designed in ARCHITECTURE.md, pending Phase 3 implementation.
 
+### Fixed
+
+- `profiles` table was missing an explicit `GRANT` for the `authenticated`
+  role — Supabase's SQL Editor doesn't auto-apply the privileges the Table
+  Editor UI would. Added
+  `supabase/migrations/00000000000002_profiles_grants.sql`. Without this,
+  authenticated requests to `profiles` failed with `42501 permission
+  denied`, even though the RLS policies were correct.
+- Email confirmation links use Supabase's PKCE `?code=` style on this
+  project, but `src/app/auth/confirm/route.ts` only handled the older
+  `token_hash`+`type` style, so every confirmation click landed on an error
+  page instead of logging the user in. Fixed by handling `code` via
+  `exchangeCodeForSession`, with the old `verifyOtp` path kept as a
+  fallback for any non-PKCE flow.
+- README no longer implies the dev server always runs on port 3000 — it
+  now points readers at whatever port the terminal actually prints, since
+  Next.js falls back to 3001+ when 3000 is already taken.
+
+### Verified
+
+- Connected a real Supabase project end to end: URL/anon key validity,
+  `profiles` table existence and grants, and a full manual browser smoke
+  test (signup → email confirmation → login → logout → login again) all
+  confirmed working.
+- Repository-wide audit against the progressive authentication model
+  (every `redirect()`/`getUser()`/`auth.uid()` call, plus a check for any
+  client-side redirect logic): no route-protection violations found. The
+  current route surface (`/`, `/login`, `/signup`, `/auth/confirm`) never
+  gates a page behind authentication.
+- Connected the project to GitHub (`Rapscallion12/project-stage`, private)
+  as `origin`, with the workflow documented in README.md.
+
 ### Known limitations
 
-- No live Supabase project is connected in this environment — auth is
-  implemented against the SDK but has not been exercised against a real
-  backend. Runtime without `.env.local` fails with a clear Supabase error
-  (verified manually this session), not a silent failure.
 - LiveKit is not yet integrated (deferred to Roadmap Phase 2 — see
   DECISIONS.md).
+- Events, event details, joining as a guest, watching, and reactions
+  (Phases 1–3) are not yet implemented — there is currently nothing to
+  audit or test for those beyond confirming they're documented as
+  guest-eligible in PRODUCT.md/ROADMAP.md for when they're built.
