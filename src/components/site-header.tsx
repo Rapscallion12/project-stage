@@ -11,9 +11,14 @@ export async function SiteHeader() {
 
   return (
     <header className="flex items-center justify-between border-b border-border px-6 py-4">
-      <Link href="/" className="text-sm font-semibold tracking-wide">
-        VIRTUAL STAGE
-      </Link>
+      <div className="flex items-center gap-6">
+        <Link href="/" className="text-sm font-semibold tracking-wide">
+          VIRTUAL STAGE
+        </Link>
+        <Link href="/events" className="text-sm text-muted hover:text-foreground">
+          Events
+        </Link>
+      </div>
       {user ? (
         <div className="flex items-center gap-3">
           <span className="hidden text-sm text-muted sm:inline">{user.email}</span>

@@ -18,6 +18,11 @@ guest with no session at all. When in doubt about a specific line item's
 guest eligibility, PRODUCT.md's guest/account capability lists are the
 source of truth, not this file.
 
+Every item touching durable data is also subject to
+[ARCHITECTURE.md's vendor portability rule](./ARCHITECTURE.md#vendor-portability):
+new tables/queries get a `lib/repositories/` function, not a direct
+Supabase call scattered into a page or action.
+
 ## Phase 0 — Foundation
 
 - [x] Repository, Next.js/TS/Tailwind scaffold, documentation suite
@@ -39,14 +44,52 @@ source of truth, not this file.
       (real phone widths, throttled network, etc.) has not been walked yet
       in a real browser — see SESSION_LOG.md.
 
-## Phase 1 — Scheduled events & waiting room
+## Phase 1 — Scheduled events & pre-show lobby
 
-- [ ] `events` table + migration
-- [ ] Event list / event detail pages — guest-viewable, no account required
-- [ ] Waiting room (pre-event lobby, countdown to start) — guest-viewable
+- [x] `events` table + migration — no room/speaker/video columns by
+      design, so a single event can later host multiple simultaneous
+      conversation rooms without a schema redesign (see ARCHITECTURE.md's
+      data model).
+- [x] Event list / event detail pages — guest-viewable, no account
+      required. Phase/countdown is computed from timestamps at read time,
+      not a stored status column.
+- [x] Pre-show lobby — not a passive waiting room: live text chat, native
+      emoji input + quick-emoji buttons, message upvote reactions,
+      live attendee count (Realtime presence), and a clear "the live
+      conversation hasn't started yet" indicator. Guest-viewable *and*
+      guest-participable, no account required.
+- [x] Guest session mechanism: anonymous session cookie (`vs_guest_id`,
+      minted in `src/proxy.ts` — see
+      [ARCHITECTURE.md's guest identity design](./ARCHITECTURE.md#guest-identity)),
+      used for lobby chat/reaction attribution+dedup and presence. Built
+      here rather than deferred to Phase 2 as originally planned, since
+      the lobby needed it immediately — Phase 2 can lean on it as-is.
 - [ ] Basic moderator flag on `profiles` **(account-only, by definition —
       moderators are accounts)** (needed before moderator controls in
       Phase 3, cheap to add alongside events)
+
+### Pre-show lobby fast-follows
+
+Deliberately deferred out of the Phase 1 milestone — both were phrased
+conditionally in the original request ("if it can be implemented
+cleanly" / "without excessive complexity"), and neither was required by
+that milestone's Definition of Done. Documented here as planned
+enhancements, not abandoned scope — see SESSION_LOG.md for the full
+deferral rationale.
+
+- [ ] GIF support in chat — needs a new external API integration (e.g.
+      Tenor or GIPHY), with its own provisioned key the user would need to
+      set up, similar friction to the Supabase/LiveKit env vars.
+- [ ] Image uploads in chat — would need a Supabase Storage bucket + RLS
+      policies + a moderation-safety pass (anonymous, untraceable file
+      uploads are a real abuse surface); Storage is already in the stack,
+      but the safety review is real work, not just wiring.
+- [ ] Un-reacting (removing your own reaction to a message) — reactions
+      are currently insert-only for *everyone*, guest and account holder
+      alike. See ARCHITECTURE.md's Rate limiting section: a guest-safe
+      delete policy needs a way to verify which guest is asking, which
+      doesn't exist yet without real guest-aware RLS (a bigger design
+      task, not a quick addition).
 
 ## Phase 2 — Live room (two speakers + audience)
 
@@ -56,12 +99,12 @@ portrait and landscape are two intentional modes of the live-room UI, not
 one layout rotated, and rotating must never drop the video connection or
 reset chat/vote/timer state. See
 [ARCHITECTURE.md's implementation notes](./ARCHITECTURE.md#mobile-orientation-implementation)
-before building the room's layout.
+before building the room's layout. The pre-show lobby is a concrete
+precedent for the *other* half of that rule — see
+[ARCHITECTURE.md's mobile orientation implementation](./ARCHITECTURE.md#mobile-orientation-implementation)
+for why the lobby itself doesn't branch by orientation, and don't let that
+precedent bleed into the live room, which genuinely does need to.
 
-- [ ] Guest session mechanism: anonymous session cookie (see
-      [ARCHITECTURE.md's guest identity design](./ARCHITECTURE.md#guest-identity)),
-      minted on first visit, used for presence/audience count and as the
-      prerequisite for Phase 3's guest votes/reactions.
 - [ ] LiveKit integration (install SDK, token endpoint, room component)
 - [ ] `event_speakers` table **(account-only** — speakers must have an
       account; see PRODUCT.md)
@@ -119,16 +162,19 @@ instruction that overrides PRODUCT.md.
 
 ## Known gaps / blockers for future sessions
 
-- **No live Supabase or LiveKit credentials exist in this environment.**
-  Phase 0's auth and Phase 2's video work are built against the SDKs but are
-  untested against real infrastructure. The first session with real
-  credentials should smoke-test signup/login end-to-end before building
-  further.
+- **No LiveKit credentials/SDK exist yet** — Phase 2's video work is
+  entirely unbuilt (see the tech stack table in ARCHITECTURE.md for why
+  the dependency isn't even installed yet). A real Supabase project *is*
+  connected and verified (Phase 0/1 — see SESSION_LOG.md).
 - **No CI pipeline yet.** `npm run lint` / `npm run build` are run manually
   each session — see SESSION_LOG.md for the last known-good status.
-- **The landing page's primary CTA is a placeholder anchor link**
-  (`#how-it-works`), not a real guest-join flow — there's nowhere to send a
-  guest yet since Phase 1's event list doesn't exist. Once Phase 1 ships,
-  repoint `src/components/landing/hero.tsx`'s CTA to the events list (or
-  straight into a live event if one's running) so the guest funnel in
-  PRODUCT.md is actually reachable end to end.
+- **The Supabase CLI still isn't set up** — every migration so far
+  (including Phase 1's `events`/lobby tables) has been applied by hand via
+  the SQL Editor. Worth setting up before Phase 2 adds more schema — see
+  DECISIONS.md.
+- **Live reactions during the live room (Phase 3) must not reuse the
+  pre-show lobby's message-reactions table pattern** — that table persists
+  one row per reaction on purpose (needs per-person dedup, bounded
+  volume); live reactions are the actually high-frequency case and should
+  be ephemeral Realtime broadcast instead. See ARCHITECTURE.md's "Realtime
+  traffic vs. durable writes."

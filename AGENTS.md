@@ -51,9 +51,34 @@ A few rules that are easy to violate by defaulting to generic habits:
 - **Never build a feature that isn't in PRODUCT.md's MVP scope** (or a
   future session's explicit instruction) — check the out-of-scope list
   before adding anything that smells like a "nice to have."
-- **RLS is enabled on every table, from its first migration** — no
-  exceptions, no "add it later." See DECISIONS.md for why.
-- **`src/types/database.ts` is hand-maintained** until a real Supabase
-  project exists — any migration you add must update it in the same commit.
+- **Supabase is today's backend, not a permanent commitment — don't call
+  it directly outside `lib/repositories/`.** Any new durable-data read or
+  write (a new table, a new query) gets a function in
+  `lib/repositories/`, returning a plain domain type, never a type aliased
+  from `database.ts`. Pages/components/actions call that function, never
+  `createClient().from(...)` themselves. Auth (`lib/identity.ts`,
+  auth actions, `proxy.ts`) and Realtime (`hooks/use-lobby-realtime.ts`)
+  are the only documented exceptions — see ARCHITECTURE.md's Vendor
+  portability section before adding a third. Don't build a generic
+  database-interface/DI abstraction on top of this either — that's
+  over-engineering a prototype for hypothetical scale, which the same
+  section explicitly warns against. The seam is a folder boundary, not a
+  framework.
+- **High-frequency, truly ephemeral events (live reactions during the
+  future live room) must not get a database row per event** — broadcast
+  via Realtime, persist an aggregate at most. This is different from the
+  pre-show lobby's message reactions, which persist individually on
+  purpose (they need per-person dedup and are volume-bounded) — see
+  ARCHITECTURE.md's "Realtime traffic vs. durable writes" before deciding
+  which pattern a new feature needs.
+- **RLS is enabled on every table, from its first migration, with an
+  explicit `GRANT`** — no exceptions, no "add it later," and don't assume
+  the SQL Editor grants privileges the way the Table Editor UI does (it
+  doesn't — see DECISIONS.md for the bug this caused once already).
+- **`src/types/database.ts` is hand-maintained** until the Supabase CLI is
+  set up — any migration you add must update it in the same commit, and
+  every table needs `Relationships: []` plus top-level `Views`/`Functions`
+  keys or every query silently types as `never` with no error explaining
+  why (see ARCHITECTURE.md).
 - **Never work on `main` directly** — branch, commit, and keep
   ROADMAP.md/CHANGELOG.md/SESSION_LOG.md in sync with what actually shipped.

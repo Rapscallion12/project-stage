@@ -3,6 +3,75 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-08 — Data access goes through a repository layer, not scattered Supabase calls
+
+**Problem**: The scheduled-events + pre-show-lobby milestone was the first
+feature with real, substantial data access — events, chat messages,
+reactions, presence — and it was built with pages, Server Actions, and
+`lib/identity.ts` all calling `createClient().from(...)` directly. The
+user flagged this before it became a bigger habit: Supabase is the
+prototype's backend because it's fast to build on today, not necessarily
+the platform this product would stay on at large scale, and "scattered
+direct Supabase queries throughout UI components" is exactly what makes a
+later migration expensive.
+
+**Alternatives considered**:
+1. Leave it as built — direct Supabase calls in pages/actions/hooks — and
+   deal with portability later if it ever actually matters.
+2. A full abstraction: a generic repository *interface* + a Supabase
+   implementation behind it, ready to swap in a second backend.
+3. A lightweight repository layer — plain functions in
+   `lib/repositories/`, returning plain domain types not aliased from the
+   Supabase-generated schema type — as the only place durable-data queries
+   happen, with Auth and Realtime left as explicit, documented exceptions
+   rather than force-abstracted too.
+
+**Decision**: Option 3. Refactored the just-built events/lobby code
+(`lib/repositories/events.ts`, `chat.ts`, `profiles.ts`) the same session
+it was written, rather than letting the anti-pattern spread to more
+features first. Documented in ARCHITECTURE.md's new "Vendor portability"
+section (the repository rule, the Auth/Realtime exceptions and why they
+aren't abstracted too, and the realtime-vs-durable-writes distinction for
+reactions specifically), AGENTS.md (standing rule + a new Testing &
+Definition of Done checklist item), and this entry.
+
+**Reason**: A folder-boundary convention (repositories return plain types,
+callers never import Supabase-generated types) gets most of the
+portability benefit — contain a future backend swap to `lib/repositories/`
+and `lib/supabase/` — for close to zero cost today, since the functions
+are just `async function`s, not a class hierarchy or DI container. Option
+2 was rejected specifically because the user's own instruction paired
+"design for portability" with "do not prematurely introduce distributed
+infrastructure solely for hypothetical scale" — a generic interface with
+exactly one implementation is complexity paid for today against a benefit
+that only materializes if this product actually reaches a scale where
+Supabase stops fitting, which is explicitly not assumed. Auth and Realtime
+were deliberately left un-abstracted for the same reason in the other
+direction: both have provider-specific API shapes deep enough that a
+generic wrapper would just rename Supabase's API, not add real
+portability — abstracting them now would be the same over-engineering
+mistake in a different spot.
+
+**Reason for also documenting the realtime/durable-writes distinction**:
+the user's instruction specifically called out not persisting every
+high-frequency reaction individually if aggregation suffices. The lobby's
+message-reactions table does persist individually — a deliberate, correct
+choice (dedup requires knowing *who* reacted; volume is bounded by message
+count, not by tap frequency) — but it reads, out of context, like exactly
+the pattern the instruction warns against. Documented explicitly in
+ARCHITECTURE.md so Phase 3's live emoji reactions (the actually
+high-frequency case the instruction has in mind) don't copy this table's
+pattern by precedent.
+
+**Tradeoffs**: Every new table needs a repository file (or an addition to
+an existing one) before any page can use it — one extra hop compared to
+querying inline, paid on every future feature that touches data. Accepted
+as the cost of keeping the migration path real rather than aspirational.
+Auth and Realtime remain genuine, acknowledged rewrite risk if either
+provider is ever replaced — not mitigated by this decision, by design.
+
+---
+
 ## 2026-08-06 — Portrait and landscape are two intentional live-room modes
 
 **Problem**: The live room (Phase 2+) is the one screen in this app where

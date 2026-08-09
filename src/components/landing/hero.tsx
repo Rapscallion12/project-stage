@@ -14,14 +14,12 @@ export function Hero() {
         Two people, one live conversation, and a crowd that controls the
         stage — who stays, who&apos;s next, and how long it runs.
       </p>
-      {/*
-        No account required to watch — see PRODUCT.md's progressive
-        authentication model. Once Phase 1 (scheduled events) ships, this
-        primary CTA should link straight to the events list / a live event
-        so guests land in the room, not on an anchor link.
-      */}
+      {/* No account required to watch — see PRODUCT.md's progressive authentication model. */}
       <div className="mt-10 flex w-full flex-col items-center gap-3 sm:w-auto sm:flex-row sm:gap-4">
-        <ButtonLink href="#how-it-works" className="w-full sm:w-auto">
+        <ButtonLink href="/events" className="w-full sm:w-auto">
+          Browse events
+        </ButtonLink>
+        <ButtonLink href="#how-it-works" variant="secondary" className="w-full sm:w-auto">
           See how it works
         </ButtonLink>
       </div>
