@@ -27,6 +27,23 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   UI primitives and landing/auth pages built this session (16px form inputs
   to avoid iOS auto-zoom, 44px minimum touch targets, mobile-first CTA
   stacking).
+- **Scheduled events and the pre-show lobby** (Phase 1): `events`,
+  `event_chat_messages`, `event_chat_message_reactions` tables (RLS +
+  explicit grants + Realtime publication); event list and detail pages
+  with a computed (not stored) countdown/phase; a pre-show lobby with live
+  text chat, native emoji + quick-emoji buttons, insert-only upvote
+  reactions, and live attendee count via Realtime Presence — all
+  guest-accessible, no account required. Guest identity is now
+  implemented for real (a `vs_guest_id` cookie minted in `src/proxy.ts`,
+  `resolveIdentity()` in `lib/identity.ts`, a deterministic "Adjective
+  Animal" guest name, renameable). GIF support and image uploads in chat
+  are deliberately deferred as documented fast-follows (ROADMAP.md) — both
+  were conditional in the original request and would have added meaningful
+  new-dependency scope (an external GIF API, a Storage bucket + moderation
+  review) beyond what that milestone's Definition of Done required.
+- First test in the project: Vitest + React Testing Library + jsdom
+  (`npm test`), added specifically to regression-test the update-depth
+  bug described below.
 
 ### Changed
 
@@ -41,9 +58,30 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   Progressive authentication model section; the guest identity mechanism
   (anonymous session cookie, rate limiting, duplicate-vote prevention) is
   designed in ARCHITECTURE.md, pending Phase 3 implementation.
+- **Durable data access is now centralized behind `lib/repositories/`**,
+  not scattered `createClient().from(...)` calls in pages/actions —
+  Supabase is today's backend, not a permanent commitment (see
+  ARCHITECTURE.md's new "Vendor portability" section). Auth and Realtime
+  remain direct, documented exceptions. Refactored the events/lobby
+  feature into this shape before it was ever committed.
 
 ### Fixed
 
+- **"Maximum update depth exceeded" crash entering an event lobby.**
+  `src/hooks/use-now.ts`'s `useSyncExternalStore` call returned
+  `Date.now()` directly from `getSnapshot()`, which changes on nearly
+  every call — violating the hook's contract that `getSnapshot()` must be
+  stable between calls unless the store actually changed, which made React
+  perceive a change on almost every internal consistency check and loop
+  re-rendering. Fixed by caching the clock value and only updating it when
+  the subscribed interval actually fires. Reproduced deterministically
+  with a new regression test before fixing (`src/hooks/use-now.test.tsx`)
+  — see DECISIONS.md and SESSION_LOG.md for the full investigation.
+- `src/types/database.ts` was missing `Relationships: []` per table and
+  top-level `Views`/`Functions` keys, silently typing every Supabase query
+  result as `never` with no error explaining why — a latent bug since the
+  first migration, only exercised once this session's repositories added
+  the first real `.from(...).select()` calls.
 - `profiles` table was missing an explicit `GRANT` for the `authenticated`
   role — Supabase's SQL Editor doesn't auto-apply the privileges the Table
   Editor UI would. Added
@@ -73,12 +111,25 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   gates a page behind authentication.
 - Connected the project to GitHub (`Rapscallion12/project-stage`, private)
   as `origin`, with the workflow documented in README.md.
+- Guest-path RLS for the lobby verified directly against the live project:
+  guest inserts succeed, impersonating an authenticated author is
+  rejected, duplicate reactions are rejected, reaction deletes are
+  rejected for everyone. Realtime broadcast delivery confirmed via a
+  throwaway script against the real Supabase Realtime service. Full guest
+  and authenticated browser verification of the lobby (entry, sending
+  messages, reacting, history persisting across refresh, repeated
+  navigation) completed after the update-depth fix, with no crash.
 
 ### Known limitations
 
 - LiveKit is not yet integrated (deferred to Roadmap Phase 2 — see
-  DECISIONS.md).
-- Events, event details, joining as a guest, watching, and reactions
-  (Phases 1–3) are not yet implemented — there is currently nothing to
-  audit or test for those beyond confirming they're documented as
-  guest-eligible in PRODUCT.md/ROADMAP.md for when they're built.
+  DECISIONS.md). Live speakers, the speaker queue, continue/replace
+  voting, and reputation-affecting actions (Phases 2–4) remain unbuilt.
+- GIF support and image uploads in the pre-show lobby are deliberately
+  deferred fast-follows (see ROADMAP.md), as is un-reacting to a message.
+- The `/events` list page hides events more than 2 hours past their
+  `scheduled_start`, even though their lobby remains enterable directly by
+  URL indefinitely (no "ended" state exists yet) — a minor UX rough edge,
+  not a bug in the lobby itself.
+- The Supabase CLI still isn't set up; every migration so far has been
+  applied by hand via the SQL Editor.

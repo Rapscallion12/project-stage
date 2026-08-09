@@ -4,6 +4,199 @@ Newest entry first.
 
 ---
 
+## 2026-08-09 — Session 6: Scheduled events + pre-show lobby, repository refactor, update-depth bug fix
+
+**Goal**: Deliver the "Public Scheduled Events + Pre-Show Lobby Foundation"
+milestone — the full guest-accessible entry path (landing → browse events
+→ event detail → countdown/status → pre-show lobby with live chat) —
+explicitly *not* the live conversation system (no LiveKit, no speakers, no
+voting). Mid-session, apply a new standing vendor-portability principle to
+the just-built data layer, then find and fix a real runtime bug surfaced
+during verification.
+
+### Part 1 — Events + pre-show lobby feature
+
+**Data model** (`supabase/migrations/00000000000003_events_and_lobby.sql`):
+`events` (no room/speaker columns — a single event may later host multiple
+simultaneous rooms, kept as a schema *addition* not a redesign),
+`event_chat_messages`, `event_chat_message_reactions`. Guest-eligible via
+the `author_profile_id` XOR `author_guest_id` pattern already documented
+in ARCHITECTURE.md, enforced by RLS at insert time (a relaxed `not both`
+`CHECK` rather than a strict "exactly one," to survive a future account
+deletion cascading `author_profile_id` to null without violating the
+constraint). Reactions are insert-only for everyone — a guest-safe delete
+policy would need to verify *which* guest is asking, which an anon-key
+request can't prove, and opening delete to any anon request naming any
+reactor id is a real griefing vector, not an accepted limitation. Every
+table got an explicit `GRANT` and was added to the `supabase_realtime`
+publication (both lessons from earlier migrations' bugs, applied
+proactively this time instead of discovered the hard way again).
+
+**Guest identity, implemented for real** (previously just designed in
+ARCHITECTURE.md): `src/proxy.ts` mints a `vs_guest_id` cookie for
+unauthenticated visitors; `resolveIdentity()` (`lib/identity.ts`) is the
+one place "who is making this request" gets resolved, account or guest;
+guests get a deterministic "Adjective Animal" display name, renameable via
+a `vs_guest_name` cookie, without affecting already-sent messages
+(display-name snapshots).
+
+**Pre-show lobby**: live text chat (Server Action + Supabase Realtime
+Postgres Changes), native emoji input + a quick-emoji row, insert-only
+upvote reactions (deduplicated via a `COALESCE(profile_id, guest_id)`
+unique index), live attendee count via Realtime Presence, a phase banner
+("lobby hasn't started" / "starting now"), computed — not stored — event
+phase (`upcoming` / `lobby_open` / `ready`) from two timestamps. Root
+layout switched to `h-dvh` + `overflow-y-auto` on `body` so the lobby's
+chat panel scrolls internally instead of growing the whole page.
+
+**Deferred, at the user's explicit agreement**: GIF support and image
+uploads (both phrased conditionally in the original request; neither
+required by its Definition of Done; both would add meaningful scope —
+a new external API key for GIFs, a Storage bucket + RLS + moderation
+review for uploads). Documented as fast-follows in ROADMAP.md, not
+abandoned. Also deferred: un-reacting (removing your own reaction) — same
+guest-can't-prove-identity problem as reaction deletes generally.
+
+**Landing page**: repointed the Hero's primary CTA from the `#how-it-works`
+anchor placeholder to `/events`, closing a gap flagged in Session 2's
+ROADMAP notes.
+
+### Part 2 — Vendor portability refactor
+
+The user introduced a new standing principle mid-session: Supabase is
+today's backend, not a permanent commitment, and durable-data access
+should be centralized behind repository/service abstractions rather than
+scattered `createClient().from(...)` calls in pages/actions. Refactored
+the just-built feature (before it was ever committed) into
+`lib/repositories/{events,chat,profiles}.ts`, returning plain domain types
+never aliased from the Supabase-generated schema type. Auth and Realtime
+were deliberately left un-abstracted and documented as such — both have
+provider-specific API shapes deep enough that a generic wrapper would just
+rename Supabase's API, and building one now (before there's a second
+provider to actually support) would be the same over-engineering mistake
+the "don't prematurely introduce distributed infrastructure" half of the
+same instruction warns against. Documented at length in ARCHITECTURE.md's
+new "Vendor portability" section, including the realtime-vs-durable-writes
+distinction (message reactions persist individually on purpose — dedup
+needs identity; the *future* live-room reactions must not copy that
+pattern, they're the actually high-frequency case).
+
+**Found and fixed along the way**: `src/types/database.ts` was missing
+`Relationships: []` per table and top-level `Views`/`Functions` keys —
+`@supabase/postgrest-js` requires this exact shape and silently types
+every query result as `never` without it, with no error pointing at the
+cause. This was a latent bug since the very first migration; nothing had
+ever exercised a typed `.from(...).select()` call until this session's
+repositories did.
+
+### Part 3 — "Maximum update depth exceeded" in the lobby
+
+**Bug report**: entering an event lobby crashed with "Maximum update depth
+exceeded," reported stack pointing at `page.tsx` → `<LobbyRoom />`, with
+`initialMessages={messages.slice().reverse()}` flagged as a suspect
+(a new array reference every render).
+
+**Investigation**: read `use-lobby-realtime.ts`'s subscription effect
+(deps `[eventId]` only), `LobbyRoom`, `ChatPanel`'s two effects (deps
+`[pending, state]` and `[messages.length]`), and `MessageItem` — none of
+them use `initialMessages`, `identity`, or `event` as an effect dependency,
+and `useState(initialMessages)` only consumes its argument on mount, so a
+new array reference per parent render doesn't retrigger anything. The
+component-stack pointing at `page.tsx` turned out to just be where
+`<LobbyRoom>` is instantiated in JSX, not where the loop originated —
+`page.tsx` is an async Server Component and doesn't "re-render" in the
+client sense at all.
+
+**Root cause**: `grep`ping every `useEffect` in the codebase found only
+three, none matching the hypothesis — but `use-now.ts`'s `useSyncExternalStore`
+call was the real site: `getSnapshot()` returned `Date.now()` directly.
+`useSyncExternalStore`'s contract requires `getSnapshot()` to return a
+value stable between calls unless the external store actually changed —
+React calls it both before and after every commit to check for "tearing,"
+and a value that changes on nearly every call (time always advances) makes
+React perceive a change on almost every check, forcing an immediate
+re-render, which checks again, sees another new value, and so on. `useNow()`
+is consumed by `LobbyRoom`, `EventCountdown`, and `EventEntryStatus` — the
+lobby's larger render tree just reliably gives enough time between the two
+snapshot checks for the millisecond to tick over, which is why it
+reproduced there specifically rather than on the simpler event list/detail
+pages (though the same latent bug existed there too, just less reliably
+triggered).
+
+**Confirmed, not assumed**: a first regression-test attempt (plain
+`renderHook(() => useNow())`) passed even against the buggy code — a
+synchronous test render is too fast for `Date.now()` to actually differ
+between the two internal checks, so the race didn't reproduce reliably.
+Rewrote the test to force `Date.now()` to increment on every single call
+(`vi.spyOn(Date, "now")`), which reproduced the exact reported error
+deterministically, with React's own diagnostic confirming the cause
+verbatim: *"The result of getSnapshot should be cached to avoid an
+infinite loop."*
+
+**Fix**: `src/hooks/use-now.ts` now caches the clock value at module scope,
+only updating it inside the `subscribe` interval's callback — `getSnapshot`
+reads the cached value instead of calling `Date.now()` itself, so it's
+stable between calls except when the interval actually fires. No
+`eslint-disable`, no dependency removal, no added guards/timeouts — the
+actual contract violation was fixed.
+
+**Regression test infrastructure**: this was the first test in the
+project, so it needed a runner. Added Vitest + React Testing Library +
+jsdom (`vitest.config.mts`, `vitest.setup.ts`, `npm test`) — chosen over
+Jest for lower App-Router/ESM friction. `src/hooks/use-now.test.tsx`
+reproduces the bug against the old code and passes against the fix.
+
+**Browser verification** (by the user, since no browser automation is
+available in this environment): using the existing seeded "Strangers,
+Unscripted" event (its lobby has no expiry — the lobby route only blocks
+entry *before* `lobby_opens_at`, never after `scheduled_start` — so it
+remained enterable directly by URL even after falling off the `/events`
+list page's 2-hour display cutoff; no new test data was created). Guest
+lobby entry, authenticated lobby entry, sending messages, reactions,
+history persisting across refresh, and repeated navigation into/out of the
+lobby — all confirmed working, no crash.
+
+**Files changed**: migration `00000000000003`, `supabase/seed.sql`,
+`src/types/database.ts`, `src/proxy.ts`, `src/lib/{config,events,guest,identity}.ts`,
+`src/lib/repositories/{events,chat,profiles}.ts`, `src/app/events/**`,
+`src/app/not-found.tsx`, `src/components/{events,lobby}/**`,
+`src/components/site-header.tsx`, `src/components/landing/hero.tsx`,
+`src/app/layout.tsx`, `src/hooks/{use-lobby-realtime,use-now}.ts`,
+`src/hooks/use-now.test.tsx`, `vitest.config.mts`, `vitest.setup.ts`,
+`package.json`, `ARCHITECTURE.md`, `AGENTS.md`, `DECISIONS.md`,
+`ROADMAP.md`, `CHANGELOG.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: None open. The `/events` list page's 2-hour post-start
+display cutoff is a minor rough edge (an event whose lobby is still
+enterable can silently disappear from the browsable list) — not a bug in
+this milestone's scope, flagged for whenever an "ended" event state is
+designed.
+
+**Tests run**: `npx vitest run` (1/1 passing, including the update-depth
+regression test), `npm run lint`, `npx tsc --noEmit`, `npm run build` — all
+clean. Guest-path RLS verified directly against the live Supabase project
+(insert succeeds; impersonating an authenticated author is rejected;
+duplicate reactions are rejected; reaction deletes are rejected — all via
+raw PostgREST calls with the anon key). Realtime broadcast delivery
+confirmed via a throwaway Node script using the real `@supabase/supabase-js`
+client (deleted after use, never committed). Full guest + authenticated
+browser verification completed by the user against the running dev server.
+
+**Current build status**: Lint clean, typecheck clean, build clean, test
+suite passing (1 test). Lobby confirmed stable in a real browser, guest
+and authenticated.
+
+**Recommended next task**: Phase 2 — LiveKit integration and the live
+room. Apply the vendor-portability pattern from the start this time
+(repository functions from the first commit, not refactored in after the
+fact) and the mobile-orientation architecture decided in Session 5 (live
+state owned above the orientation branch). Also worth: fixing the
+`/events` list cutoff rough edge noted above, and setting up the Supabase
+CLI before Phase 2 adds more migrations (friction noted in Session 3/4,
+still unresolved).
+
+---
+
 ## 2026-08-06 — Session 5: Mobile orientation behavior principle
 
 **Goal**: Document a new permanent product/architecture principle from the
