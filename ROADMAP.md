@@ -112,14 +112,23 @@ precedent for the *other* half of that rule — see
 for why the lobby itself doesn't branch by orientation, and don't let that
 precedent bleed into the live room, which genuinely does need to.
 
-- [ ] LiveKit integration (install SDK, token endpoint, room component) —
-      including the write path for `event_speakers` (who's allowed to
-      occupy a seat), deferred here by design; see issue #1/DECISIONS.md.
 - [x] `event_speakers` table (issue #1) **(account-only** — speakers must
       have an account; see PRODUCT.md). Append-only occupancy episodes,
-      room-agnostic, read-only from the app until this issue's write path
+      room-agnostic, read-only from the app until issue #13's write path
       lands. See ARCHITECTURE.md's Data model section and DECISIONS.md.
-- [ ] Two-speaker live audio/video room, with adaptive video quality and
+- [x] LiveKit SDK (server) + token endpoint (issue #2) — mints tokens from
+      *current* `event_speakers` occupancy; server-authoritative
+      `canPublish`, generous TTL (expiry isn't the revocation mechanism).
+      See ARCHITECTURE.md's LiveKit authorization model.
+- [ ] Speaker state transitions (issue #13 — split out of #2 after
+      designing the full authorization model surfaced it needed its own
+      issue; see DECISIONS.md): atomic seat assignment, live
+      `updateParticipantPermissions()` sync, disconnect-webhook cleanup.
+      Blocks real dynamic speaker promotion; #3/#4 below can still be
+      built and manually tested against hand-seeded `event_speakers` rows
+      without it.
+- [ ] Two-speaker live audio/video room (`livekit-client`, room UI —
+      issue #3), with adaptive video quality and
       reconnect handling on flaky networks, and explicit handling of both
       camera/microphone permission granted and denied
 - [ ] Audience viewing (join a live room as a non-speaker) — guest-viewable,

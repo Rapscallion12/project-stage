@@ -53,7 +53,9 @@ away** — gating happens at the specific action, not the page.
 - **Schema management**: Supabase CLI, linked to the one live project —
   see "Database migrations" below
 - **Realtime**: Supabase Realtime
-- **Video**: LiveKit (not yet integrated — see ROADMAP.md)
+- **Video**: LiveKit — server-side token minting implemented (issue #2);
+  the room UI that actually connects is not yet built (issue #3) — see
+  ROADMAP.md and ARCHITECTURE.md's LiveKit authorization model
 - **Deployment**: Vercel (not yet deployed — local development only so far)
 
 > **Note on Next.js version**: this project uses Next.js 16, which renamed
@@ -92,7 +94,24 @@ away** — gating happens at the specific action, not the page.
    npx supabase db push --linked
    ```
 
-5. Run the dev server:
+5. **Optional until issue #3 (the live room UI) exists**: LiveKit
+   credentials, for token minting to actually work end to end rather than
+   just pass its unit tests. Create a free project at
+   [cloud.livekit.io](https://cloud.livekit.io), then from its Settings →
+   Keys page, fill in `.env.local`:
+
+   ```
+   LIVEKIT_API_KEY=
+   LIVEKIT_API_SECRET=
+   NEXT_PUBLIC_LIVEKIT_URL=
+   ```
+
+   Note: token *minting* (`lib/livekit/token.ts`) signs a JWT locally and
+   never calls LiveKit's API, so `npm test` and `npm run build` work
+   without these set — they're only needed to actually connect to a room,
+   which nothing in the app does yet.
+
+6. Run the dev server:
 
    ```bash
    npm run dev

@@ -10,7 +10,7 @@
 | Backend | Supabase (Postgres, Auth, Realtime) | One project covers DB, auth, and realtime — no separate backend service in the MVP. See [Vendor portability](#vendor-portability) for how this choice is kept reversible. |
 | Schema management | Supabase CLI | Linked to the one live project (`xuzlgcfuwlcpejhctofv`). Migrations applied via `supabase db push --linked`, never hand-pasted into the dashboard. See [Migration workflow](#migration-workflow). |
 | Realtime | Supabase Realtime | Implemented for the pre-show lobby: chat messages (Postgres Changes), reactions (Postgres Changes), attendee presence. Not yet used for the future live room's votes/live-reactions. |
-| Video | LiveKit | Used for the two-speaker live audio/video. Not yet integrated — no LiveKit dependency is installed until the live-room feature is built, to avoid unused/untested code in the tree. |
+| Video | LiveKit | Used for the two-speaker live audio/video. `livekit-server-sdk` installed and token minting implemented (issue #2); `livekit-client` (browser SDK) not yet installed — deferred to issue #3, which is the first thing that actually connects to a room. See [Video plan](#video-plan). |
 | Deployment | Vercel | Not yet deployed. Local dev only so far. |
 
 ### Next.js 16: read this before writing app code
@@ -60,11 +60,18 @@ src/
       server.ts   Server Supabase client (Server Components/Actions/Route
                    Handlers) — reads/writes the session via cookies.
     repositories/  All durable-data reads/writes go through here — see
-                   Vendor portability. events.ts, chat.ts, profiles.ts.
-                   Each exports plain domain types (not aliased from
-                   database.ts) and plain async functions; nothing outside
-                   this folder (and lib/supabase/, and the documented Auth
-                   exceptions) imports `createClient` from lib/supabase/.
+                   Vendor portability. events.ts, chat.ts, profiles.ts,
+                   event-speakers.ts (read-only until issue #13's write
+                   path lands). Each exports plain domain types (not
+                   aliased from database.ts) and plain async functions;
+                   nothing outside this folder (and lib/supabase/, and the
+                   documented Auth/Realtime/LiveKit exceptions) imports
+                   `createClient` from lib/supabase/.
+    livekit/
+      token.ts      LiveKit token minting — see the Auth flow's sibling,
+                   LiveKit authorization model, for the full design.
+                   Direct SDK use, like Auth/Realtime — see Vendor
+                   portability.
     identity.ts    resolveIdentity() — "who is making this request,"
                    account or guest. Calls Supabase Auth directly (see
                    Vendor portability's Auth exception) and the profiles
@@ -238,7 +245,7 @@ Concretely, that means:
 
 ### What's *not* abstracted, and why
 
-Two subsystems are used directly, without a repository-style seam —
+Three subsystems are used directly, without a repository-style seam —
 documented exceptions, not oversights:
 
 - **Auth** (`lib/identity.ts`, `site-header.tsx`, `login`/`signup`/`auth`
@@ -256,8 +263,14 @@ documented exceptions, not oversights:
   subscriptions, for the same reason: every realtime provider's
   subscribe/broadcast/presence API shape differs enough that a generic
   wrapper would be Supabase's API renamed, not a real abstraction.
+- **LiveKit** (`lib/livekit/token.ts`) calls `livekit-server-sdk`
+  directly for the same reason — video/audio transport is inherently
+  provider-specific. This one was never a Supabase concern to begin with
+  (it's a separate vendor), but it's called out here so it's not missed:
+  the "app code never talks to a third-party SDK outside a documented
+  seam" rule applies to every vendor in the stack, not just Supabase.
 
-Both are called out explicitly here specifically so a future session
+All three are called out explicitly here specifically so a future session
 doesn't "fix" this by half-abstracting them — that would add complexity
 without adding real portability.
 
@@ -513,10 +526,69 @@ above.
 
 ## Video plan
 
-LiveKit will host the two-speaker audio/video room. Deferred until the
-event/waiting-room data model exists, since the room needs an `events` row
-and speaker-seat assignment to know who gets a token. No LiveKit SDK is
-installed yet — see the tech stack table above for why.
+LiveKit will host the two-speaker audio/video room.
+
+**Token minting is implemented** (issue #2, `lib/livekit/token.ts` +
+`src/app/events/[id]/room/actions.ts`'s `getLiveKitToken` Server Action).
+The room UI itself (issue #3, which installs `livekit-client` and
+actually connects) is not — no `room/page.tsx` exists yet, only the
+action file, so there's nothing to render into yet. See
+[Authorization model](#livekit-authorization-model) below for the full
+design and why the write path (issue #13) is a deliberately separate
+piece of work.
+
+## LiveKit authorization model
+
+**The server is the sole source of truth for who may publish audio/video
+— the client is never trusted to decide.** Concretely:
+
+- The client never receives the LiveKit API secret, only a minted,
+  scoped JWT. LiveKit's own SFU enforces that JWT's grants — a client
+  cannot publish a track its token doesn't authorize, regardless of what
+  client-side code attempts.
+- **Identity**: `guest:<guest_id>` or `profile:<profile_id>`
+  (`getParticipantIdentity()`), namespaced so the two spaces can never
+  collide, and so LiveKit's own single-session-per-identity behavior
+  prevents duplicate participants from the same person's multiple tabs.
+- **Room naming**: `event:<event_id>:main` (`getRoomName()`). The `:main`
+  suffix costs nothing today (Phase 2 has exactly one room per event) and
+  means a future second room is an additive new room name, not a rename
+  of the first — same "additive, not a redesign" discipline as
+  `event_speakers`' room-agnostic design.
+- **Permission decision**: `canSubscribe: true` for everyone;
+  `canPublish` is `true` only if the requester currently holds an active
+  `event_speakers` row for that event (`determineCanPublish()`, a pure
+  function over an already-fetched occupancy record — deliberately
+  separated from the DB lookup so it's unit-testable without a live
+  fixture). Guests structurally can never come back `canPublish: true` —
+  `event_speakers` is account-only, so a guest can never have an active
+  row to find.
+- **`canPublishData: false`** for everyone — chat/reactions already go
+  through Supabase Realtime (`hooks/use-lobby-realtime.ts`); LiveKit's
+  data channel is deliberately unused, keeping the two realtime systems
+  from overlapping.
+- **Token TTL**: generous (4 hours) — deliberately *not* the security
+  boundary. See below.
+
+### Why token expiry doesn't enforce anything, and what does instead
+
+A token's grants are only re-evaluated when a client *requests a new
+token*. If revocation relied on that, a replaced speaker could keep
+publishing until their token happened to expire or they happened to
+reconnect — a real, visible contradiction of "the audience controls the
+stage." So token expiry is set generously (avoiding pointless
+reconnection churn) and revocation instead happens **live**, via
+LiveKit's Server SDK `updateParticipantPermissions()` call against an
+already-connected participant — no reconnect required, permission change
+takes effect immediately. That call, the atomic DB write that must
+accompany it, and cleanup for hard disconnects (a participant who closes
+their laptop instead of leaving, whose seat would otherwise stay
+permanently occupied — the partial unique index from
+[Data model](#data-model) prevents a *double*-booked seat, not a *stuck*
+one) are issue #13's scope, not this one's. Issue #2 only answers "what
+does the token say *right now*, given current `event_speakers` state" —
+it never mutates that state. See DECISIONS.md for the full reasoning
+behind that split.
 
 ## Responsive implementation notes
 
@@ -649,9 +721,16 @@ until:
   input): the layout has been checked with the keyboard open.
 - **Any new durable-data read/write goes through `lib/repositories/`**,
   not a direct `createClient().from(...)` call in a page, component, or
-  action — see [Vendor portability](#vendor-portability). Auth and
-  Realtime are the only documented exceptions; don't add a third without
-  updating that section's reasoning.
+  action — see [Vendor portability](#vendor-portability). Auth, Realtime,
+  and LiveKit are the only documented exceptions; don't add a fourth
+  without updating that section's reasoning.
+- **A test file that signs/verifies JWTs or otherwise needs real Node
+  WebCrypto must override Vitest's environment to `node`**
+  (`// @vitest-environment node` at the top of the file) — the project's
+  default `jsdom` environment (needed for React component tests) shims
+  crypto in a way that breaks `jose`-based signing (`livekit-server-sdk`'s
+  dependency) with an opaque "payload must be an instance of Uint8Array"
+  error that doesn't point at the actual cause. See `lib/livekit/token.test.ts`.
 - `npm run lint`, `npm run build` (which type-checks), and any relevant
   tests pass.
 - Relevant docs (this file, PRODUCT.md, ROADMAP.md, CHANGELOG.md,

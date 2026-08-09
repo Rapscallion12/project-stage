@@ -57,13 +57,34 @@ A few rules that are easy to violate by defaulting to generic habits:
   `lib/repositories/`, returning a plain domain type, never a type aliased
   from `database.ts`. Pages/components/actions call that function, never
   `createClient().from(...)` themselves. Auth (`lib/identity.ts`,
-  auth actions, `proxy.ts`) and Realtime (`hooks/use-lobby-realtime.ts`)
-  are the only documented exceptions — see ARCHITECTURE.md's Vendor
-  portability section before adding a third. Don't build a generic
-  database-interface/DI abstraction on top of this either — that's
-  over-engineering a prototype for hypothetical scale, which the same
-  section explicitly warns against. The seam is a folder boundary, not a
-  framework.
+  auth actions, `proxy.ts`), Realtime (`hooks/use-lobby-realtime.ts`), and
+  LiveKit (`lib/livekit/token.ts`) are the only documented exceptions —
+  see ARCHITECTURE.md's Vendor portability section before adding a
+  fourth. Don't build a generic database-interface/DI abstraction on top
+  of this either — that's over-engineering a prototype for hypothetical
+  scale, which the same section explicitly warns against. The seam is a
+  folder boundary, not a framework.
+- **The client is never trusted to decide who may publish audio/video.**
+  LiveKit tokens are minted server-side (`lib/livekit/token.ts`) from
+  *current* `event_speakers` occupancy — never from anything the client
+  sends. Token expiry is deliberately not the revocation mechanism (it's
+  set generously); a speaker losing their seat needs their publish
+  rights revoked *immediately*, which is a live
+  `updateParticipantPermissions()` push to an already-connected
+  participant (issue #13), not something to wait on. See
+  ARCHITECTURE.md's LiveKit authorization model before touching token
+  minting or seat assignment.
+- **Before implementing an issue that touches data model, auth, or
+  cross-system state, walk the design through out loud first** — what
+  does this actually represent, how does it relate to existing entities,
+  what happens under replacement/failure/concurrency — rather than
+  jumping straight to schema or code. This caught real scope gaps twice
+  already (issue #1's write-path deferral, issue #2's authorization
+  model revealing a split into #2/#13) without expanding scope
+  unilaterally in either case — both times, the fix was to name the gap
+  clearly and either confirm it was already covered elsewhere or ask
+  before creating new issues/touching code. Do this whether or not a
+  session explicitly asks for it.
 - **High-frequency, truly ephemeral events (live reactions during the
   future live room) must not get a database row per event** — broadcast
   via Realtime, persist an aggregate at most. This is different from the
@@ -124,9 +145,14 @@ A few rules that are easy to violate by defaulting to generic habits:
     that's naturally part of an already-open feature branch.
   - **Before starting a large milestone**, break it into smaller issues
     where doing so improves clarity, testing, parallel work, or review —
-    see the Phase 2 issues (#1-#6) for the granularity to aim for: each
-    one is independently reviewable and has an explicit dependency chain
-    noted in its body, rather than one giant "build the live room" issue.
+    see the Phase 2 issues (#1, #2, #13, #3-#6 — #13 added mid-stream
+    when implementing #2 revealed it needed splitting, see DECISIONS.md)
+    for the granularity to aim for: each one is independently reviewable
+    and has an explicit dependency chain noted in its body, rather than
+    one giant "build the live room" issue. A new issue discovered mid-work
+    gets positioned in the board's item order at its actual dependency
+    point (`gh api graphql` with `updateProjectV2ItemPosition` — `gh
+    project` has no CLI flag for this), not just appended to the end.
   - **Keep the board honest.** A stale board (cards left in the wrong
     column, issues closed without a card, work started without an issue)
     is worse than no board — update it as part of doing the work, not as

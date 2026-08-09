@@ -27,8 +27,8 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   speaker" pointer — see DECISIONS.md for why both alternatives were
   rejected. Account-only, room-agnostic (matching `events`' own
   precedent), publicly readable, no write grant yet (deferred to issue
-  #2's token-minting flow by design). `left_reason` is a `CHECK`-
-  constrained vocabulary, not free text. `lib/repositories/event-speakers.ts`
+  #13's write-path issue by design — see below). `left_reason` is a
+  `CHECK`-constrained vocabulary, not free text. `lib/repositories/event-speakers.ts`
   ships the read path (`listActiveSpeakers`); a committed regression test
   verifies both that reads work and that writes are actually rejected by
   RLS (`42501`), against the real linked project.
@@ -36,6 +36,23 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   (`event-speakers.test.ts`) — skip gracefully if `.env.local` isn't
   configured rather than hard-failing. Vitest now loads `.env.local` for
   tests that need real credentials.
+- **LiveKit token minting** (issue #2, `lib/livekit/token.ts` +
+  `getLiveKitToken` Server Action) — server-authoritative, read-only:
+  mints a scoped JWT from *current* `event_speakers` occupancy, never
+  from anything the client sends. Guests always come back
+  `canPublish: false` (structurally — `event_speakers` is account-only).
+  Namespaced participant identities (`guest:<id>` / `profile:<id>`),
+  room naming (`event:<event_id>:main`, multi-room-ready), and a
+  generous token TTL (expiry is deliberately not the revocation
+  mechanism — see ARCHITECTURE.md's LiveKit authorization model for what
+  is). The atomic seat-assignment write path, live permission sync, and
+  disconnect cleanup are split into a new issue (#13) rather than bundled
+  here — see DECISIONS.md for why.
+- `livekit-server-sdk` installed (server-side only; `livekit-client`
+  deferred to issue #3, the first thing that actually connects to a
+  room). New Vitest environment-override pattern documented
+  (`// @vitest-environment node`) for tests needing real Node WebCrypto,
+  which jsdom's shimmed crypto breaks for JWT signing.
 
 - Project bootstrap: Next.js 16 (App Router) + TypeScript + Tailwind CSS v4,
   scaffolded via `create-next-app`.

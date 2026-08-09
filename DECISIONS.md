@@ -3,6 +3,70 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-09 — LiveKit token minting (issue #2) is split from seat-state writes (issue #13)
+
+**Problem**: Issue #2 was originally scoped as "LiveKit SDK integration
+and token endpoint," with its own body already anticipating that token
+minting would need to check "occupying or entitled to occupy" a seat.
+Working through the full authorization model before implementing (per
+the user's request — audience joining, speaker promotion, replacement,
+reconnects, race conditions, expiry, moderator actions, multi-room)
+surfaced that "entitled to occupy" isn't just a read: it implies
+*deciding* who occupies a seat, which needs an atomic DB write, a live
+LiveKit permission push to already-connected participants, and
+disconnect cleanup — none of which "mint a token" by itself requires.
+
+**Alternatives considered**:
+1. Implement all of it as one piece of work under issue #2.
+2. Split: issue #2 mints tokens from *current* `event_speakers` state
+   only (a read); a new issue owns changing that state (atomic
+   assignment, live permission sync, disconnect cleanup).
+
+**Decision**: Option 2, at the user's direction. New issue #13 covers the
+write path; issue #2 stays a read-only token endpoint. Issue #13 was
+positioned in the Project board's item order directly after #2 and
+before #3/#4 (`updateProjectV2ItemPosition` via the GraphQL API — `gh
+project` has no CLI flag for this), reflecting the real dependency: #3/#4
+can be built and manually tested against hand-seeded `event_speakers`
+rows (the same way `supabase/seed.sql` hand-seeds events) without #13,
+but real dynamic speaker promotion needs it.
+
+**Reason**: This mirrors the exact split already made for `event_speakers`
+itself in issue #1 (ship the read path + RLS, defer the write
+path/authorization logic to the issue that actually needs to design it) —
+consistent, not novel. Bundling the write path into issue #2 would have
+meant designing atomic-assignment race safety, a LiveKit webhook
+receiver, and disconnect-grace-period handling as a side effect of "add
+a token endpoint," which is a much larger and less independently
+reviewable unit of work than the title suggested. Splitting keeps issue
+#3 (room UI) unblocked as soon as #2 lands, without waiting on the
+harder write-path problem.
+
+**The authorization model itself** (what issue #2 actually implements):
+the server is the sole source of truth for `canPublish` — the client
+never receives the LiveKit API secret, only a scoped JWT whose grants
+LiveKit's own SFU enforces server-side. `canPublish` is decided from
+whether the requester currently holds an active `event_speakers` row
+(`determineCanPublish()`, a pure function over an already-fetched
+occupancy record, kept separate from the DB lookup specifically so it's
+unit-testable without a live fixture — `event_speakers` has no write
+grant, so a test can't seed an "active speaker" row through the app's
+own client the way it seeded other fixtures). Token TTL is generous (4
+hours) and deliberately *not* the revocation mechanism — see
+ARCHITECTURE.md's LiveKit authorization model section for why relying on
+expiry would visibly contradict "the audience controls the stage," and
+why issue #13's live permission push is the real enforcement point.
+
+**Tradeoffs**: Issue #2 ships a token endpoint that, in practice, always
+returns `canPublish: false` today — nothing can create an active
+`event_speakers` row yet, so there's no way to manually verify the
+`true` branch end-to-end until #13 lands. Mitigated by unit-testing that
+branch directly with a constructed (not DB-fetched) occupancy record,
+same reasoning as issue #1's read-path tests not requiring a live
+fixture either.
+
+---
+
 ## 2026-08-09 — `event_speakers` models occupancy episodes, not a schedule or a pointer
 
 **Problem**: Issue #1 needed a data model for "who's speaking in an

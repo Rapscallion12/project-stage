@@ -4,6 +4,110 @@ Newest entry first.
 
 ---
 
+## 2026-08-09 — Session 10: Issue #2 — LiveKit token endpoint (split from #13)
+
+**Goal**: Design and ship the LiveKit token endpoint — the enforcement
+point for who may publish audio/video — starting from a full
+authorization-model review before implementing, per the user's request.
+
+**Completed work**:
+
+- **Design review before implementation**, covering all nine points the
+  user asked about: how audience members join as viewers, how current
+  speakers get publish rights, how a newly-selected speaker transitions
+  from audience to speaker, how a replaced speaker loses publish rights,
+  reconnect handling, race conditions between near-simultaneous seat
+  claims, token expiration/renewal, future moderator actions, and
+  multi-room readiness. Core design: `canPublish` decided server-side
+  from *current* `event_speakers` occupancy; token expiry deliberately
+  not the revocation mechanism; live `updateParticipantPermissions()`
+  pushes are what actually revoke/grant rights on already-connected
+  participants.
+- **Found a genuine scope gap while working through the design, and
+  stopped to explain it rather than expanding scope unilaterally**:
+  issue #2's own body already assumed a "become a speaker" write path,
+  but designing that write path properly (atomic assignment, race
+  safety, live permission sync, hard-disconnect cleanup via LiveKit
+  webhooks) turned out to be substantially more surface area than "SDK
+  install + token endpoint." Proposed splitting it out; user approved.
+- Created **issue #13** for the write path, with the 8 scope points the
+  user specified, and positioned it in the Project board's item order
+  directly after #2 and before #3/#4 (`updateProjectV2ItemPosition` via
+  raw GraphQL — `gh project` has no CLI flag for item ordering; verified
+  the resulting order by re-listing items: #1 → #2 → #13 → #3 → #4).
+- Implemented **issue #2 narrowly**, per the user's explicit scope list:
+  - Installed `livekit-server-sdk` only (not `livekit-client` — deferred
+    to issue #3, the first thing that actually connects to a room),
+    continuing the project's existing discipline against installing
+    dependencies before something uses them.
+  - `lib/livekit/token.ts`: `getRoomName()` (`event:<id>:main`,
+    multi-room-ready), `getParticipantIdentity()` (namespaced
+    `guest:`/`profile:` identities), `determineCanPublish()` (a pure
+    function over an already-fetched occupancy record, deliberately
+    separated from the DB lookup so it's unit-testable without a live
+    fixture — `event_speakers` has no write grant, so nothing can seed
+    an "active speaker" row through the app's own client), and
+    `mintLiveKitToken()` (4-hour TTL, `canPublishData: false` since chat
+    already goes through Supabase Realtime).
+  - `src/lib/repositories/event-speakers.ts` gained
+    `getActiveSeatForProfile()` — a targeted read, not a filter over
+    `listActiveSpeakers()`.
+  - `src/app/events/[id]/room/actions.ts`'s `getLiveKitToken` Server
+    Action — thin glue: resolve identity, look up occupancy (guests skip
+    the DB call entirely, since they can never have one), mint token.
+    No `room/page.tsx` exists yet (issue #3); the action file doesn't
+    need a page to exist to be valid Next.js.
+- **Real bug caught and fixed while writing tests**: minting a token
+  under the project's default `jsdom` Vitest environment failed with an
+  opaque "payload must be an instance of Uint8Array" error — `jose`
+  (which `livekit-server-sdk` uses for signing) needs real Node
+  WebCrypto, which jsdom shims incompatibly. Fixed with a per-file
+  `// @vitest-environment node` override; documented in ARCHITECTURE.md
+  so the next test that signs/verifies anything doesn't hit this fresh.
+- Tests (`token.test.ts`, 7 cases) cover the pure logic
+  (`determineCanPublish`, naming functions) and the actual JWT output
+  (decoded and asserted, for both a guest/no-seat case and an
+  active-speaker case using a constructed — not DB-fetched — occupancy
+  record) — all without needing the user's real LiveKit credentials,
+  since minting signs a JWT locally and never calls LiveKit's API.
+- Documented the model in ARCHITECTURE.md (new "LiveKit authorization
+  model" section, LiveKit added as a third documented Vendor-portability
+  exception alongside Auth/Realtime), a DECISIONS.md ADR (the #2/#13
+  split and why), README.md (optional LiveKit credential setup, since
+  nothing in the app connects to a room yet), AGENTS.md (server-decides-
+  publish-rights standing rule, plus generalizing the
+  "walk the design through before implementing" practice into a standing
+  rule of its own — it's caught real gaps twice now), and ROADMAP.md.
+
+**Files changed**: `src/lib/livekit/token.ts`,
+`src/lib/livekit/token.test.ts`, `src/app/events/[id]/room/actions.ts`,
+`src/lib/repositories/event-speakers.ts`, `package.json`,
+`package-lock.json`, `ARCHITECTURE.md`, `DECISIONS.md`, `README.md`,
+`AGENTS.md`, `ROADMAP.md`, `CHANGELOG.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: None for issue #2's own scope. The token endpoint's
+`canPublish: true` branch can't be exercised end-to-end through the real
+app yet (nothing can create an active `event_speakers` row until #13
+lands) — covered by the unit test using a constructed occupancy record
+instead, same reasoning as issue #1's read-path tests not needing a live
+fixture either. The user's real LiveKit project credentials aren't
+configured in this environment — not required for anything issue #2
+ships (token minting signs locally), only for issue #3 onward.
+
+**Tests run**: `npm run lint`, `npx tsc --noEmit`, `npm run build`,
+`npx vitest run` (10 tests across 3 files, including the 7 new LiveKit
+ones) — all clean.
+
+**Current build status**: Lint clean, typecheck clean, build clean, test
+suite passing (10/10).
+
+**Recommended next task**: Either issue #13 (speaker state transitions —
+unblocks real dynamic speaker promotion) or issue #3 (room UI, which can
+proceed against hand-seeded `event_speakers` rows without #13, per the
+dependency analysis above). #12 and #1 are already Done.
+
+---
+
 ## 2026-08-09 — Session 9: Issue #1 — `event_speakers` table
 
 **Goal**: Design and ship the `event_speakers` schema — the Phase 2

@@ -23,7 +23,7 @@ export type EventSpeaker = {
 /**
  * Currently-occupied seats for an event (left_at is null). Read-only —
  * this table has no insert/update grant yet. The write path (who's
- * allowed to occupy a seat) belongs to issue #2's token-minting flow, not
+ * allowed to occupy a seat) is issue #13's atomic assignment function, not
  * here; see the migration's comment and DECISIONS.md for why.
  */
 export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[]> {
@@ -35,4 +35,23 @@ export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[
     .is("left_at", null)
     .order("seat_number", { ascending: true });
   return (data ?? []) as EventSpeaker[];
+}
+
+/**
+ * Whether — and in which seat — a specific profile currently holds an
+ * active occupancy for an event. Used by the LiveKit token endpoint
+ * (issue #2) to decide `canPublish`; a targeted query rather than
+ * filtering `listActiveSpeakers()` client-side, since it expresses the
+ * actual question being asked.
+ */
+export async function getActiveSeatForProfile(eventId: string, profileId: string): Promise<EventSpeaker | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("event_speakers")
+    .select("*")
+    .eq("event_id", eventId)
+    .eq("profile_id", profileId)
+    .is("left_at", null)
+    .maybeSingle();
+  return (data as EventSpeaker | null) ?? null;
 }
