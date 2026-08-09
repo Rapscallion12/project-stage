@@ -21,6 +21,21 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   proof the forward workflow works. Full setup and day-to-day commands
   documented in README.md and ARCHITECTURE.md's new Migration workflow
   section.
+- **`event_speakers` table** (issue #1, migration `00000000000005`) —
+  append-only occupancy episodes (who occupied which seat, when, and why
+  they left), not a scheduled-speaker table or a mutable "current
+  speaker" pointer — see DECISIONS.md for why both alternatives were
+  rejected. Account-only, room-agnostic (matching `events`' own
+  precedent), publicly readable, no write grant yet (deferred to issue
+  #2's token-minting flow by design). `left_reason` is a `CHECK`-
+  constrained vocabulary, not free text. `lib/repositories/event-speakers.ts`
+  ships the read path (`listActiveSpeakers`); a committed regression test
+  verifies both that reads work and that writes are actually rejected by
+  RLS (`42501`), against the real linked project.
+- First integration-style tests against the live Supabase project
+  (`event-speakers.test.ts`) — skip gracefully if `.env.local` isn't
+  configured rather than hard-failing. Vitest now loads `.env.local` for
+  tests that need real credentials.
 
 - Project bootstrap: Next.js 16 (App Router) + TypeScript + Tailwind CSS v4,
   scaffolded via `create-next-app`.

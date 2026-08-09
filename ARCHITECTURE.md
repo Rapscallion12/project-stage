@@ -437,13 +437,38 @@ Implemented:
   message upvotes. **Guest-eligible**, same identity pattern as chat
   messages. Insert-only — see Rate limiting above for why there's no
   delete policy.
+- **`event_speakers`** (migration `00000000000005`, issue #1) —
+  **append-only occupancy episodes**: one row per (seat, occupant) stretch
+  of time, `joined_at`/`left_at`, never overwritten. Not a "scheduled
+  speaker" table (nothing in this product pre-books a seat) and not a
+  single mutable "current speaker" pointer (that would destroy history the
+  instant Phase 3's replace-speaker voting fires) — see DECISIONS.md for
+  the full reasoning against both alternatives. Replacing a speaker means
+  ending the current row (`left_at` + a constrained `left_reason`:
+  `voluntary` / `replaced` / `moderator_removed` / `event_ended` /
+  `disconnected`) and inserting a new one, never updating in place.
+  **Account-only**, like `speaker_queue` below: `profile_id` is `not null`,
+  no guest column. Publicly readable (guests watching need to see who's
+  speaking); **no write grant yet** — the authorization logic for "who's
+  allowed to occupy a seat" is issue #2's concern (LiveKit token minting),
+  not this migration's. `left_reason` is a `CHECK`-constrained `text`
+  column, not a native Postgres enum (easier to extend later — see
+  `lib/repositories/event-speakers.ts` for the corresponding hand-typed
+  TypeScript union, since the generator can't express a `CHECK`
+  constraint's vocabulary as a type). Deliberately **room-agnostic**, same
+  as `events` — see that table's entry above; the future multi-room change
+  is a nullable `room_id` column plus re-scoping the "one active occupant
+  per seat" uniqueness from `(event_id, seat_number)` to
+  `(room_id, seat_number)`, flagged in the migration's own comment.
+  "Currently active speaker," "how long they've spoken," and "is this
+  occupancy active" are all derived at query time (`left_at is null`,
+  `left_at - joined_at`) — no redundant stored flags to drift out of sync,
+  same discipline `events`' own computed phase already uses.
 
 Not yet implemented (planned — see ROADMAP.md for sequencing). Guest
 eligibility is called out explicitly per table since it's a schema-level
 decision, not just a UI one:
 
-- `event_speakers` — who is occupying which seat, join/leave timestamps.
-  Account-only: a row here always references a `profiles.id`, never a guest.
 - `speaker_queue` — ordered per-event queue of account holders requesting a
   seat, ordered by a function of wait time and reputation. Account-only —
   no `guest_session_id` column; the insert path itself requires auth.

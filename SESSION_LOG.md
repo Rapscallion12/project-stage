@@ -4,6 +4,83 @@ Newest entry first.
 
 ---
 
+## 2026-08-09 — Session 9: Issue #1 — `event_speakers` table
+
+**Goal**: Design and ship the `event_speakers` schema — the Phase 2
+foundation everything else (LiveKit integration, the live room, audience
+viewing) depends on — starting from a product-philosophy review rather
+than jumping straight to columns.
+
+**Completed work**:
+
+- Moved issue #1 to **In Progress**, branched `feature/event-speakers-table`.
+- **Design review before writing any schema**, per the user's request:
+  walked through what an event speaker represents (an append-only
+  occupancy episode, not a scheduled assignment or a mutable "current
+  speaker" pointer), how it relates to Events/Profiles/future Live Rooms
+  (account-only, deliberately room-agnostic like `events` itself), how
+  replacement preserves history (end one row, insert another, never
+  overwrite), how it supports reputation/reliability/moderation/analytics
+  (the `[joined_at, left_at)` interval and a constrained `left_reason`
+  give Phase 4 what it needs without extra columns), and which fields are
+  derived vs. persisted (active/duration/current-speakers are all query-
+  time computations, matching `events`' own computed-phase discipline).
+  Presented for approval before implementing — see DECISIONS.md for the
+  full reasoning, including why the other two framings were rejected.
+- **Checked for a genuine prerequisite before treating it as one**: the
+  obvious next question — "who's allowed to write to this table, and does
+  that logic exist yet?" — turned out to already be scoped into issue #2
+  (its own body already says the token-minting flow checks
+  occupancy/entitlement). Confirmed this by re-reading the existing issue
+  rather than assuming, so no new issue was needed and scope wasn't
+  expanded.
+- User approved the design with one change: `left_reason` as a
+  constrained vocabulary, not free text.
+- Migration `00000000000005_event_speakers.sql`: append-only occupancy
+  episodes, `CHECK`-constrained `left_reason` (`voluntary` / `replaced` /
+  `moderator_removed` / `event_ended` / `disconnected` — each traceable to
+  already-scoped work, not guessed), a partial unique index enforcing one
+  active occupant per seat per event (historical rows unrestricted), RLS
+  with a public `SELECT` policy and **no write grant** (matching `events`'
+  own first-migration precedent), applied via `supabase db push --linked`
+  and verified (RLS/policies/grants all confirmed via `db query --linked`).
+- `src/types/database.ts` regenerated. `lib/repositories/event-speakers.ts`
+  ships `listActiveSpeakers()` only — no write functions, since there's no
+  RLS policy or design to support them yet (that's issue #2).
+- **New test infrastructure**: Vitest now loads `.env.local` (via Vite's
+  `loadEnv`) so tests can use real credentials. `event-speakers.test.ts`
+  is the project's first integration-style test — hits the real linked
+  Supabase project (not a mock), confirms reads work and, more
+  importantly, that a raw insert attempt is actually rejected with
+  `42501` — proving the "read-only for now" design decision is enforced,
+  not just documented. Skips gracefully if credentials aren't configured.
+- Documented the design in ARCHITECTURE.md's Data model section and a new
+  DECISIONS.md ADR; checked off the item in ROADMAP.md's Phase 2.
+
+**Files changed**: `supabase/migrations/00000000000005_event_speakers.sql`,
+`src/types/database.ts`, `src/lib/repositories/event-speakers.ts`,
+`src/lib/repositories/event-speakers.test.ts`, `vitest.config.mts`,
+`ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`, `CHANGELOG.md`,
+`SESSION_LOG.md` (this entry).
+
+**Known issues**: None. The table is intentionally inert from the app's
+perspective until issue #2 adds a write path — `listActiveSpeakers()`'s
+only caller so far will be issue #4's audience viewing.
+
+**Tests run**: `npm run lint`, `npx tsc --noEmit`, `npm run build`,
+`npx vitest run` (3 tests: the existing update-depth regression test plus
+two new `event_speakers` RLS tests, all against the real linked project) —
+all clean.
+
+**Current build status**: Lint clean, typecheck clean, build clean, test
+suite passing (3/3). Migration applied and verified live.
+
+**Recommended next task**: Issue #2 (LiveKit SDK integration and token
+endpoint) — the first consumer of `event_speakers`, and where its write
+path (who's allowed to occupy a seat) actually gets designed.
+
+---
+
 ## 2026-08-09 — Session 8: Issue #12 — Supabase CLI migration workflow
 
 **Goal**: Replace the manual SQL-Editor-copy-paste workflow with a proper

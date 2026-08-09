@@ -112,9 +112,13 @@ precedent for the *other* half of that rule — see
 for why the lobby itself doesn't branch by orientation, and don't let that
 precedent bleed into the live room, which genuinely does need to.
 
-- [ ] LiveKit integration (install SDK, token endpoint, room component)
-- [ ] `event_speakers` table **(account-only** — speakers must have an
-      account; see PRODUCT.md)
+- [ ] LiveKit integration (install SDK, token endpoint, room component) —
+      including the write path for `event_speakers` (who's allowed to
+      occupy a seat), deferred here by design; see issue #1/DECISIONS.md.
+- [x] `event_speakers` table (issue #1) **(account-only** — speakers must
+      have an account; see PRODUCT.md). Append-only occupancy episodes,
+      room-agnostic, read-only from the app until this issue's write path
+      lands. See ARCHITECTURE.md's Data model section and DECISIONS.md.
 - [ ] Two-speaker live audio/video room, with adaptive video quality and
       reconnect handling on flaky networks, and explicit handling of both
       camera/microphone permission granted and denied

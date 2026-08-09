@@ -3,6 +3,81 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-09 — `event_speakers` models occupancy episodes, not a schedule or a pointer
+
+**Problem**: Issue #1 needed a data model for "who's speaking in an
+event." Three framings were plausible on the surface — a scheduled
+speaker assignment, a single "current speaker" pointer per seat, or a
+historical occupancy record — and the wrong choice would either
+contradict the product's own principles or make Phase 3/4 (replace
+voting, reputation, reliability) expensive to retrofit.
+
+**Alternatives considered**:
+1. A "scheduled speaker" table — pre-assign who will occupy each seat.
+2. A single mutable pointer per seat (e.g. `events.current_speaker_1_id`),
+   updated in place whenever a speaker changes.
+3. Append-only occupancy episodes — one row per (seat, occupant) stretch
+   of time, with `joined_at`/`left_at`, never overwritten; replacing a
+   speaker ends one row and inserts another.
+
+**Decision**: Option 3.
+
+**Reason**: Option 1 doesn't match how this product actually works —
+PRODUCT.md's Principle 1 ("the audience controls the stage") and
+Principle 3 ("anyone can eventually earn the microphone," via a live
+queue) both describe who's on stage as something the audience/queue
+decide in the moment, not something scheduled in advance. Building a
+"scheduled speaker" concept would invent a feature that contradicts those
+principles rather than support them. Option 2 would destroy exactly the
+history Phase 3's replace-speaker voting exists to create — the moment
+someone gets replaced, there'd be no record they ever spoke, cutting off
+Phase 4's reputation/reliability work ("votes received while speaking,"
+"removals for cause") at the schema level, not just leaving it unbuilt.
+Option 3 is simultaneously the simplest of the three to reason about,
+matches how speakers actually change hands in this product (replacement,
+not reassignment), and gives Phase 4 what it needs for free — no
+retrofit required, since the full history already exists as a natural
+consequence of the design rather than a feature added on top of it.
+
+Also decided in the same pass, each following the same "match already-
+established project conventions" logic:
+
+- **`left_reason` is a `CHECK`-constrained `text` column, not a native
+  Postgres enum** — easier to extend later (a migration adding a value to
+  a `CHECK` is simpler than altering a Postgres enum type, which has real
+  restrictions on removing/reordering values), and no other table in this
+  project uses a native enum, so this doesn't introduce a second
+  convention. The vocabulary (`voluntary`, `replaced`, `moderator_removed`,
+  `event_ended`, `disconnected`) was deliberately kept to values that
+  trace to already-scoped work (issues #2, #3, #6, and Phase 3's replace
+  voting/moderator controls) rather than guessing at hypothetical future
+  reasons.
+- **Room-agnostic, matching `events`' own precedent exactly**: no `room_id`
+  column, because no `event_rooms` table exists and Phase 2 has exactly
+  one room per event. The migration comment documents the specific future
+  change (nullable `room_id`, re-scoping the active-seat uniqueness from
+  `(event_id, seat_number)` to `(room_id, seat_number)`) so it's an
+  expected additive follow-up, not a surprise redesign.
+- **No write grant in this migration.** `events` itself shipped
+  SELECT-only in its first migration, before event creation was a
+  feature; `event_speakers` follows the same pattern. The authorization
+  logic for "who's allowed to occupy a seat" doesn't exist yet — it's
+  already scoped into issue #2 (LiveKit token minting checks
+  occupancy/entitlement, per that issue's own body) — so granting INSERT
+  here would mean guessing at rules that haven't been designed, or
+  worse, an open door. Verified this is actually enforced, not just
+  documented, with a committed regression test
+  (`event-speakers.test.ts`) that attempts a real insert against the
+  linked project and asserts it's rejected with `42501`.
+
+**Tradeoffs**: The table is inert from the app's perspective until issue
+#2 adds a write path — by design, but it does mean this issue ships
+schema and a read-only repository function with no UI yet consuming
+either. `listActiveSpeakers()`'s only current caller will be issue #4's
+audience-viewing work.
+
+---
+
 ## 2026-08-09 — Adopt the Supabase CLI mid-project via `migration repair`, not a reset
 
 **Problem**: Three migrations' worth of schema had already been applied by

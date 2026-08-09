@@ -141,6 +141,51 @@ export type Database = {
           },
         ]
       }
+      event_speakers: {
+        Row: {
+          event_id: string
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          profile_id: string
+          seat_number: number
+        }
+        Insert: {
+          event_id: string
+          id?: string
+          joined_at?: string
+          left_at?: string | null
+          left_reason?: string | null
+          profile_id: string
+          seat_number: number
+        }
+        Update: {
+          event_id?: string
+          id?: string
+          joined_at?: string
+          left_at?: string | null
+          left_reason?: string | null
+          profile_id?: string
+          seat_number?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "event_speakers_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "event_speakers_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       events: {
         Row: {
           created_at: string
