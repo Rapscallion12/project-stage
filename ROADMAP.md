@@ -7,6 +7,13 @@ is a suggestion, not a requirement.
 Check off items as they're completed and update this file in the same
 commit as the feature. See SESSION_LOG.md for session-by-session detail.
 
+This file is the phase-level narrative plan. Day-to-day, granular tracking
+happens on the [GitHub Project board](https://github.com/users/Rapscallion12/projects/1)
+via Issues — see README.md's "Project management" section and AGENTS.md
+for that workflow. Phase 2's items below correspond to issues #1–#6;
+Phase 1 fast-follows and other outstanding items correspond to issues
+#7–#12.
+
 Every item below is subject to the [responsive design principle](./PRODUCT.md#responsive-design-principle)
 and its [testing checklist](./ARCHITECTURE.md#testing--definition-of-done) —
 not repeated per line item to avoid clutter, but not optional either.

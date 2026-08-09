@@ -4,6 +4,65 @@ Newest entry first.
 
 ---
 
+## 2026-08-09 — Session 7: GitHub Projects + Issues workflow
+
+**Goal**: Add GitHub Issues + a Project (Kanban) board as the visible
+planning/task-management layer for the repo, before starting Phase 2.
+
+**Completed work**:
+
+- Installed and authenticated the GitHub CLI (`gh`), including the
+  `project` scope (not part of `gh`'s default auth scopes — needed
+  `--scopes "repo,project"`, done interactively by the user since it's a
+  browser-based login).
+- Created a private GitHub Project ("Virtual Stage",
+  [github.com/users/Rapscallion12/projects/1](https://github.com/users/Rapscallion12/projects/1))
+  and linked it to the repo.
+- Replaced the board's default Status options (Todo/In Progress/Done —
+  not deletable as a field, since it's a built-in one, but its options are
+  editable via the GraphQL API) with the requested five: Backlog, Ready,
+  In Progress, Testing / Review, Done.
+- Created 12 issues and added all of them to the board:
+  - **Phase 2 (the live room), broken into a dependency-ordered chain**:
+    #1 `event_speakers` table, #2 LiveKit SDK + token endpoint, #3
+    two-speaker live room UI, #4 audience viewing, #5 audience count, #6
+    emergency leave. Each issue states its dependencies and links back to
+    the relevant ARCHITECTURE.md/PRODUCT.md sections rather than
+    restating them.
+  - **Outstanding backlog items**: #7 moderator flag, #8 GIF support, #9
+    image uploads, #10 un-reacting, #11 the `/events` list's 2-hour
+    cutoff hiding still-open lobbies (bug), #12 Supabase CLI setup.
+  - #1 and #12 set to **Ready** (unblocked, next up); the rest to
+    **Backlog**.
+- Documented the full workflow (issue → board → branch → commits →
+  checks → review → merge → close) in AGENTS.md and README.md's new
+  "Project management" section, plus a light cross-reference from
+  ROADMAP.md tying its phase-level items to the corresponding issue
+  numbers.
+- **Adopted `feature/` as the branch-naming prefix going forward**
+  (previously `feat/`), per the user's explicit new convention — existing
+  `feat/*` branches aren't being renamed retroactively.
+
+**Files changed**: `AGENTS.md`, `README.md`, `ROADMAP.md`,
+`SESSION_LOG.md` (this entry). No application code changed this session.
+
+**Known issues**: None. The board and issues are net-new and haven't yet
+been exercised by a real feature branch under the new workflow — the
+first real test of it is whichever issue gets picked up next (#1 or #12).
+
+**Tests run**: `npm run lint` (docs-only session; no build/typecheck/test
+changes expected or needed).
+
+**Current build status**: Unchanged from Session 6 — lint clean, build
+clean, test suite passing.
+
+**Recommended next task**: Pick up issue #1 (`event_speakers` table) or
+#12 (Supabase CLI setup) from the board — both are in **Ready**. Move the
+chosen one to **In Progress**, branch as `feature/<description>`, and
+follow the documented flow through to **Done**.
+
+---
+
 ## 2026-08-09 — Session 6: Scheduled events + pre-show lobby, repository refactor, update-depth bug fix
 
 **Goal**: Deliver the "Public Scheduled Events + Pre-Show Lobby Foundation"

@@ -82,3 +82,42 @@ A few rules that are easy to violate by defaulting to generic habits:
   why (see ARCHITECTURE.md).
 - **Never work on `main` directly** — branch, commit, and keep
   ROADMAP.md/CHANGELOG.md/SESSION_LOG.md in sync with what actually shipped.
+- **All work is tracked through GitHub Issues + the Project board, not
+  just branches.** Board:
+  [github.com/users/Rapscallion12/projects/1](https://github.com/users/Rapscallion12/projects/1)
+  (private). Columns: **Backlog → Ready → In Progress → Testing / Review →
+  Done**. For each meaningful feature, bug fix, or independently
+  reviewable component:
+  1. Find or create a GitHub Issue describing the work (`gh issue create`
+     or `gh issue list --repo Rapscallion12/project-stage`).
+  2. Confirm it's on the board (`gh project item-add 1 --owner
+     Rapscallion12 --url <issue-url>` if it isn't yet).
+  3. Move it to **In Progress** when you actually start implementing —
+     not before, and not left there after you stop.
+  4. Create a feature branch (see naming below) — never implement new
+     feature work directly on `main`.
+  5. Small, descriptive commits on that branch.
+  6. Run the required checks before considering it done: `npm run lint`,
+     `npx tsc --noEmit`, `npm run build`, `npm test`, plus
+     ARCHITECTURE.md's Testing & Definition of Done checklist.
+  7. Move the issue to **Testing / Review** once implementation is
+     finished but before merging.
+  8. Merge only after it passes the Definition of Done, then push the
+     verified `main`.
+  9. Close the issue and move its card to **Done** — a merged PR linked
+     via "Closes #N" does this automatically; otherwise do it explicitly
+     (`gh issue close`, `gh project item-edit`).
+  - **Branch naming**: `feature/<short-description>` or
+    `fix/<short-description>` (e.g. `feature/event-state-machine`,
+    `fix/lobby-reconnect`) — matches this repo's existing `feat/`/`fix/`
+    convention (see the git log). Don't create a branch for a trivial edit
+    that's naturally part of an already-open feature branch.
+  - **Before starting a large milestone**, break it into smaller issues
+    where doing so improves clarity, testing, parallel work, or review —
+    see the Phase 2 issues (#1-#6) for the granularity to aim for: each
+    one is independently reviewable and has an explicit dependency chain
+    noted in its body, rather than one giant "build the live room" issue.
+  - **Keep the board honest.** A stale board (cards left in the wrong
+    column, issues closed without a card, work started without an issue)
+    is worse than no board — update it as part of doing the work, not as
+    an afterthought.

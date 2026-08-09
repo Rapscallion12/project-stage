@@ -119,6 +119,44 @@ supabase/
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the reasoning behind this
 structure and the full data model.
 
+## Project management: GitHub Issues + Projects
+
+Work is tracked through GitHub Issues and a Project (Kanban) board, not
+just ad hoc branches. Board (private):
+[github.com/users/Rapscallion12/projects/1](https://github.com/users/Rapscallion12/projects/1).
+
+**Columns**: Backlog → Ready → In Progress → Testing / Review → Done.
+
+**Flow for any meaningful feature, bug fix, or independently reviewable
+component**:
+
+1. Find or create a GitHub Issue describing the work.
+2. Make sure it's added to the Project board (new issues aren't added
+   automatically — see AGENTS.md for the `gh` commands).
+3. Move the card to **In Progress** when implementation actually starts.
+4. Create a feature branch (see naming below) — never implement new
+   feature work directly on `main`.
+5. Small, descriptive commits on that branch.
+6. Run the required checks (`npm run lint`, `npx tsc --noEmit`,
+   `npm run build`, `npm test`) and satisfy
+   [ARCHITECTURE.md's Testing & Definition of Done](./ARCHITECTURE.md#testing--definition-of-done)
+   before considering the work finished.
+7. Move the card to **Testing / Review** once implementation is done but
+   before merging.
+8. Merge only after it passes the Definition of Done, then push the
+   verified `main`.
+9. Close the issue and move its card to **Done**.
+
+Before starting a large milestone, break it into smaller issues where that
+improves clarity, testing, parallel work, or review — see issues #1–#6
+(Phase 2, the live room) for the granularity to aim for: each is
+independently reviewable with its dependency chain stated in the issue
+body, rather than one large "build the live room" issue.
+
+A stale board (cards in the wrong column, issues closed without a card,
+work started without an issue) is worse than no board — keep it current as
+part of doing the work.
+
 ## Git workflow
 
 **Remote**: `origin` is `https://github.com/Rapscallion12/project-stage.git`
@@ -132,8 +170,13 @@ browser window to log into GitHub; after that, credentials are cached and
 - `main` is always kept in a working, buildable state. **Never commit
   directly to `main`.**
 - Every unit of work happens on a branch created from `main`, named
-  `feat/<short-description>` for new functionality or `fix/<short-description>`
-  for corrections (e.g. `feat/scheduled-events`, `fix/progressive-authentication`).
+  `feature/<short-description>` for new functionality or
+  `fix/<short-description>` for corrections (e.g.
+  `feature/event-state-machine`, `fix/lobby-reconnect`). Don't create a
+  branch for a trivial edit that's naturally part of an already-open
+  feature branch. (Branches created before this convention was adopted
+  used a shorter `feat/` prefix — not worth renaming retroactively; use
+  `feature/` going forward.)
 - When the work is complete, lint/build/tests pass, and docs are updated,
   merge the branch back into `main`. This repo has no CI or PR review gate
   yet (solo prototype, single contributor), so merges so far have been done
