@@ -175,10 +175,14 @@ instruction that overrides PRODUCT.md.
   connected and verified (Phase 0/1 — see SESSION_LOG.md).
 - **No CI pipeline yet.** `npm run lint` / `npm run build` are run manually
   each session — see SESSION_LOG.md for the last known-good status.
-- **The Supabase CLI still isn't set up** — every migration so far
-  (including Phase 1's `events`/lobby tables) has been applied by hand via
-  the SQL Editor. Worth setting up before Phase 2 adds more schema — see
-  DECISIONS.md.
+- ~~The Supabase CLI still isn't set up~~ **Resolved** (issue #12): the CLI
+  is installed, linked to the live project, and Phase 1's three migrations
+  were reconciled via `migration repair` (verified against the live schema
+  first — see DECISIONS.md). All future migrations go through
+  `supabase db push --linked`, not the SQL Editor — see ARCHITECTURE.md's
+  Migration workflow. Docker/local dev (`supabase start`, `db reset --local`)
+  still isn't set up in this environment — a real, separate gap, not
+  blocking normal migration work against the linked project.
 - **Live reactions during the live room (Phase 3) must not reuse the
   pre-show lobby's message-reactions table pattern** — that table persists
   one row per reaction on purpose (needs per-person dedup, bounded

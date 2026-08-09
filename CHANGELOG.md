@@ -7,6 +7,21 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
 
 ### Added
 
+- **GitHub Issues + a Project (Kanban) board** as the visible planning
+  layer: Backlog → Ready → In Progress → Testing / Review → Done. 12
+  initial issues covering Phase 2 (the live room, broken into a
+  dependency-ordered chain) and outstanding backlog items. Documented in
+  AGENTS.md and a new "Project management" section in README.md.
+- **Supabase CLI migration workflow**, replacing hand-pasting SQL into the
+  dashboard: installed as a project-local dev dependency, linked to the
+  live project. `src/types/database.ts` is now generated
+  (`supabase gen types typescript --linked`) instead of hand-maintained.
+  New migration (`00000000000004_table_comments.sql`, schema-level
+  documentation) applied end-to-end via `supabase db push --linked` as
+  proof the forward workflow works. Full setup and day-to-day commands
+  documented in README.md and ARCHITECTURE.md's new Migration workflow
+  section.
+
 - Project bootstrap: Next.js 16 (App Router) + TypeScript + Tailwind CSS v4,
   scaffolded via `create-next-app`.
 - Full documentation suite: README, PRODUCT, ARCHITECTURE, ROADMAP,
@@ -131,5 +146,7 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   `scheduled_start`, even though their lobby remains enterable directly by
   URL indefinitely (no "ended" state exists yet) — a minor UX rough edge,
   not a bug in the lobby itself.
-- The Supabase CLI still isn't set up; every migration so far has been
-  applied by hand via the SQL Editor.
+- No Docker in this environment, so `supabase start` / local Postgres /
+  `db reset --local` remain unavailable — all CLI operations go against
+  the linked (live) project directly, which works for migrations/queries
+  but means there's no local sandbox to test destructive changes against.

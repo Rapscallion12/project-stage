@@ -75,11 +75,21 @@ A few rules that are easy to violate by defaulting to generic habits:
   explicit `GRANT`** — no exceptions, no "add it later," and don't assume
   the SQL Editor grants privileges the way the Table Editor UI does (it
   doesn't — see DECISIONS.md for the bug this caused once already).
-- **`src/types/database.ts` is hand-maintained** until the Supabase CLI is
-  set up — any migration you add must update it in the same commit, and
-  every table needs `Relationships: []` plus top-level `Views`/`Functions`
-  keys or every query silently types as `never` with no error explaining
-  why (see ARCHITECTURE.md).
+- **Schema changes go through the Supabase CLI, never the dashboard SQL
+  Editor.** `npx supabase migration new <name>` to create, `npx supabase
+  db push --linked` to apply, `npx supabase gen types typescript --linked
+  > src/types/database.ts` to regenerate types — same commit as the
+  migration. `database.ts` is generated, not hand-edited. See
+  ARCHITECTURE.md's Migration workflow section for the full sequence
+  (including the one-time `login`/`link` setup, which must be run
+  interactively by a human — never attempt it through a non-interactive
+  tool call, and never ask for the database password to be pasted into
+  chat).
+- **Never run `supabase db reset --linked`.** It wipes the actual shared
+  project — every table dropped, all data destroyed, no staging copy
+  exists for this prototype. `--local` (against a Docker-based local
+  Postgres) is the safe one, and isn't set up yet in this environment
+  (no Docker) — see ARCHITECTURE.md.
 - **Never work on `main` directly** — branch, commit, and keep
   ROADMAP.md/CHANGELOG.md/SESSION_LOG.md in sync with what actually shipped.
 - **All work is tracked through GitHub Issues + the Project board, not

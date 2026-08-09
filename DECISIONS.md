@@ -3,6 +3,74 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-09 — Adopt the Supabase CLI mid-project via `migration repair`, not a reset
+
+**Problem**: Three migrations' worth of schema had already been applied by
+hand through the SQL Editor, across three separate sessions, with real
+data sitting on top of it (seeded events, chat history, a real account).
+Adopting the CLI (issue #12) meant getting `supabase/migrations/` and the
+live project's own bookkeeping of "what's been applied" into agreement,
+without touching the schema or data that already matched.
+
+**Alternatives considered**:
+1. Run `supabase db push` naively and let it try to reapply all three
+   migrations for real.
+2. Wipe the project (`supabase db reset --linked` or manually dropping
+   everything) and let the CLI rebuild it from a clean slate.
+3. Verify the remote schema matches the local migration files exactly via
+   read-only introspection, then use `supabase migration repair` to mark
+   the three existing migrations as applied — bookkeeping only, no SQL
+   executed.
+
+**Decision**: Option 3.
+
+**Reason**: Option 1 would have failed partway through each file —
+`CREATE TABLE ... IF NOT EXISTS` might no-op, but `CREATE POLICY`,
+`CREATE TRIGGER`, and `CREATE FUNCTION` are not idempotent in Postgres and
+error on "already exists," risking a half-applied, confusing state. Option
+2 is explicitly what the user's own requirements ruled out ("preserve all
+existing data and avoid destructive operations") — real accounts and chat
+history live on this database; there is no staging copy to test against.
+`migration repair` exists specifically for "adopt the CLI on top of an
+already-manually-managed database" — it only writes rows into
+`supabase_migrations.schema_migrations`, the tracking table, and cannot
+touch application tables, policies, grants, or data.
+
+Verification came first, deliberately, before repairing anything — no
+Docker is available in this environment, so `supabase db diff`'s
+local-shadow-database comparison wasn't an option, but `supabase db query
+--linked` (executes SQL directly against the linked project via the
+Management API, no Docker required) was enough to directly compare, one
+by one: table/column shapes (`information_schema.columns`), RLS enabled
+per table (`pg_tables.rowsecurity`), every policy
+(`pg_policies`), every meaningful grant
+(`information_schema.role_table_grants`), the profile-provisioning trigger
+(`pg_trigger`), and Realtime publication membership (`pg_publication_tables`).
+All of it matched the three migration files exactly. Only then were the
+three versions marked applied.
+
+The forward workflow was proven end-to-end with a real (if low-risk)
+migration — `00000000000004_table_comments.sql`, adding `COMMENT ON TABLE`
+documentation — applied via `supabase db push --linked` and confirmed live,
+rather than trusting the setup without exercising it.
+
+`database.ts` was switched from hand-written to
+`supabase gen types typescript --linked`-generated in the same pass — see
+the superseded note on "Hand-write `src/types/database.ts`" above.
+
+**Tradeoffs**: `migration repair` is a footgun if used carelessly — it
+will happily mark a migration "applied" whether or not the remote schema
+actually matches, since it never checks. The verification step above is
+what makes this safe; skipping it would have converted "the CLI's
+bookkeeping is wrong" into "the CLI's bookkeeping is wrong *and* nobody
+checked," silently papering over any real drift instead of catching it.
+Local dev (`supabase start`, `supabase db reset --local`) still isn't set
+up — no Docker in this environment — so `db diff` and a true local
+Postgres remain unavailable; documented as a gap in ARCHITECTURE.md's
+Migration workflow section rather than worked around.
+
+---
+
 ## 2026-08-08 — Data access goes through a repository layer, not scattered Supabase calls
 
 **Problem**: The scheduled-events + pre-show-lobby milestone was the first
@@ -280,6 +348,13 @@ available — it's a placeholder for the mechanism, not a different design.
 **Tradeoffs**: Manual sync risk — a migration and `database.ts` can drift.
 Mitigated by calling this out explicitly in ARCHITECTURE.md and requiring
 both to change in the same commit.
+
+**Superseded 2026-08-09**: the Supabase CLI is now set up and linked (see
+"Adopt the Supabase CLI mid-project" below) — `database.ts` is generated,
+not hand-written. The manual-sync risk this entry accepted as a tradeoff
+materialized exactly once (the missing `Relationships`/`Views`/`Functions`
+bug), which is part of why generation was worth doing as soon as it became
+possible rather than continuing to accept the risk indefinitely.
 
 ---
 

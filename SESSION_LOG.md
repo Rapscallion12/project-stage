@@ -4,6 +4,89 @@ Newest entry first.
 
 ---
 
+## 2026-08-09 — Session 8: Issue #12 — Supabase CLI migration workflow
+
+**Goal**: Replace the manual SQL-Editor-copy-paste workflow with a proper
+Supabase CLI migration workflow, so the repository becomes the actual
+source of truth for schema changes — without touching or risking the live
+project's existing schema and data.
+
+**Completed work**:
+
+- Moved issue #12 to **In Progress**, branched
+  `feature/supabase-cli-migration-workflow` from `main`.
+- Installed the Supabase CLI as a project-local dev dependency
+  (`npm install -D supabase` — global installs are blocked by the CLI
+  itself) and ran `supabase init` (scaffolds `supabase/config.toml`;
+  confirmed it didn't touch the existing `migrations/`/`seed.sql`).
+- User ran `supabase login` and `supabase link --project-ref
+  xuzlgcfuwlcpejhctofv` themselves, interactively, in their own terminal —
+  deliberately not attempted through a non-interactive tool call, so the
+  database password/CLI auth token never passed through anything that gets
+  logged.
+- **Verified before changing anything irreversible**: no Docker in this
+  environment, so `supabase db diff`'s local-shadow-database comparison
+  wasn't available, but `supabase db query --linked` (direct SQL via the
+  Management API, no Docker needed) was enough to compare the live schema
+  against the three existing migration files directly — table/column
+  shapes, RLS-enabled flags, every policy, every meaningful grant, the
+  profile-provisioning trigger, and Realtime publication membership. All
+  matched exactly.
+- Only after that verification: `supabase migration repair --status
+  applied 00000000000001 00000000000002 00000000000003` — bookkeeping
+  only (writes to `supabase_migrations.schema_migrations`), no SQL
+  executed, confirmed via `supabase migration list` showing `local`/
+  `remote` in sync, and confirmed no data moved (`events`/messages/
+  `profiles` row counts unchanged before and after).
+- **Proved the forward workflow end-to-end** with a real (low-risk)
+  migration: `00000000000004_table_comments.sql` (adds `COMMENT ON TABLE`
+  documentation to all four tables, mirroring ARCHITECTURE.md), applied
+  via `supabase db push --linked`, confirmed live via `db query --linked`.
+- **Switched `src/types/database.ts` from hand-written to generated**
+  (`supabase gen types typescript --linked`) — removes the exact bug class
+  hit earlier (missing `Relationships`/`Views`/`Functions` fields) instead
+  of relying on remembering the shape by hand. Verified against real
+  Postgres foreign keys, which are more accurate than the hand-written
+  version's placeholder `Relationships: []` ever was.
+- Documented the full workflow — one-time setup, creating/applying
+  migrations, regenerating types, verifying status, seeding, and the
+  local-vs-linked distinction for `db reset` (with an explicit warning
+  never to run `--linked` against the shared project, which has no staging
+  copy) — in ARCHITECTURE.md (new Migration workflow section), README.md
+  (new Database migrations section + updated Getting Started), and
+  AGENTS.md (standing rules). DECISIONS.md records the reconciliation
+  strategy and why it was safe.
+
+**Files changed**: `supabase/config.toml`, `supabase/.gitignore`,
+`supabase/migrations/00000000000004_table_comments.sql`,
+`src/types/database.ts` (generated, not hand-edited going forward),
+`package.json`, `package-lock.json`, `ARCHITECTURE.md`, `README.md`,
+`AGENTS.md`, `DECISIONS.md`, `ROADMAP.md`, `CHANGELOG.md`,
+`SESSION_LOG.md` (this entry).
+
+**Known issues**: Docker isn't installed in this environment, so local dev
+(`supabase start`, `supabase db reset --local`, `supabase db diff`'s
+shadow-database comparison) remains unavailable — all CLI operations
+target the linked project directly. Not blocking normal migration work,
+but means there's no local sandbox to rehearse a risky migration against
+before it hits the real database. Flagged in ARCHITECTURE.md and
+ROADMAP.md, not silently worked around.
+
+**Tests run**: `npm run lint`, `npx tsc --noEmit`, `npm run build`,
+`npx vitest run` — all clean after switching to generated types. Migration
+workflow itself verified end-to-end against the live project (see above),
+not just documented.
+
+**Current build status**: Lint clean, typecheck clean, build clean, test
+suite passing. Live schema, migration tracking, and `database.ts` all
+confirmed in sync.
+
+**Recommended next task**: Pick up issue #1 (`event_speakers` table) —
+it's the first migration to go through the newly-verified CLI workflow for
+real feature work, not just a documentation-only proof.
+
+---
+
 ## 2026-08-09 — Session 7: GitHub Projects + Issues workflow
 
 **Goal**: Add GitHub Issues + a Project (Kanban) board as the visible
