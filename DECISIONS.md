@@ -3,6 +3,92 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-11 — A standalone dev-harness script, not an application route, for manual test-session tooling
+
+**Problem**: there was no efficient way to manually test the live room.
+Creating an event required hand-writing SQL against the live project (the
+same one `supabase/seed.sql` populates — there's no separate dev/staging
+database for this prototype); becoming a speaker was, by design,
+impossible through the app at all (`claim_speaker_seat` deliberately has
+no `anon`/`authenticated` grant and no Server Action wrapper — issue
+#13's explicit constraint, reaffirmed for issue #3). Every verification
+of the two-speaker room so far had been a service-role test script, never
+an actual person clicking into a browser tab.
+
+**Alternatives considered**:
+1. A dev-only page/Server Actions inside the Next.js app (e.g.
+   `/dev/test-events`), guarded by a runtime `NODE_ENV`/similar check
+   that 404s in production.
+2. A standalone CLI script, outside `src/`, never imported by
+   application code, using the same `service_role` credential and the
+   same already-authorized `claim_speaker_seat`/`leave_speaker_seat`/
+   `end_speaker_seat` RPCs issue #13 built — i.e., becoming one more
+   trusted server-side caller of primitives that already exist, not a
+   new capability.
+
+**Decision**: Option 2, at the user's direction —
+`scripts/dev-harness.mts`, run via `node --experimental-strip-types
+--env-file=.env.local scripts/dev-harness.mts <command>` (wrapped as
+`npm run dev:harness --`). Four commands: `create [--phase=...]`, `seat
+<email-or-label> <seat>`, `list`, `reset`.
+
+**Reason**: A runtime-guarded route (option 1) is still application code
+— it ships in the bundle, it's still a route the server has to handle,
+and "guarded by an env check" is a weaker guarantee than "does not exist
+in the deployed surface at all," which is what the user's "do not expose
+the harness through the production application" constraint actually
+calls for. A standalone script under `scripts/` (not `src/`) is
+structurally never reachable via HTTP and never bundled — confirmed by
+`npm run build`'s route table having no entry for it, not just asserted.
+It also needed zero new backend capability: `claim_speaker_seat`'s
+service-role-only tier already exists specifically for "a trusted
+server-side caller decides who's seated," and this script is exactly
+that, the same way the LiveKit webhook route already is.
+
+**Safety design — how `reset` can never touch real content**: every
+resource the harness creates is tagged, and `reset` only ever acts on
+tagged resources:
+- Events: title prefixed `[dev-harness] `.
+- Auto-created test accounts: email on the reserved, non-routable
+  `@dev-harness.invalid` domain (RFC 2606) — real signups can never
+  collide with it.
+
+Critically, `seat` **refuses to auto-create an account for an email that
+isn't already a real profile and isn't a harness-tagged address** —
+rather than silently creating an untagged throwaway account `reset`
+could never find and clean up (a leak `reset`'s own tag-based logic can't
+detect by construction). This is also what makes seating your own real
+dev account safe: pass your real email, and since it already exists, the
+harness reuses it and never creates or deletes it — verified directly
+(`scripts/dev-harness.test.ts`'s end-to-end suite creates an untagged
+"real" event and account alongside harness-tagged ones, runs the actual
+`resetHarness`, and asserts the untagged fixtures survive byte-for-byte
+while the tagged ones are gone — not just asserting the tag-matching
+predicates in isolation).
+
+**A real, if minor, finding while implementing**: `tsc --noEmit` rejects
+an explicit `.ts`/`.mts` extension in an import specifier by default
+(`TS5097`) — required here because `scripts/dev-harness.test.ts` imports
+value exports (not just types) from `scripts/dev-harness.mts`, and
+Node's own ESM resolution (used when the script runs directly) requires
+that same explicit extension. Fixed by adding
+`allowImportingTsExtensions: true` to the project's single `tsconfig.json`
+— safe project-wide because it requires (and this project already has)
+`noEmit: true`; the flag only changes what the type-checker accepts in
+import specifiers, never what gets emitted, and Next.js's own bundling
+doesn't go through `tsc` at all.
+
+**Tradeoffs**: requires Node 22.6+ (native `--env-file` and
+`--experimental-strip-types`) — a real constraint, documented in
+README.md rather than worked around with a new dependency
+(ts-node/tsx) that would add ongoing maintenance for a tool used
+occasionally. Testing an actual two-person conversation still requires
+two browser sessions (one per seated speaker) — the harness prepares the
+data, it doesn't automate the browser; that's out of scope for "smallest
+tooling."
+
+---
+
 ## 2026-08-11 — The live room renders speakers from `event_speakers`, never from LiveKit's own state; `display_name` is denormalized to make that possible for guests
 
 **Problem**: Issue #3's initial design proposal (before the user's

@@ -152,6 +152,10 @@ away** — gating happens at the specific action, not the page.
 - `npm run build` — production build (also type-checks)
 - `npm run start` — run a production build locally
 - `npm run lint` — ESLint
+- `npm run test` — Vitest
+- `npm run dev:harness -- <command>` — development-only test data CLI
+  (create/seat/list/reset a live test event) — see
+  [Development test harness](#development-test-harness) below
 
 ## Project structure
 
@@ -175,10 +179,66 @@ supabase/
   config.toml     Supabase CLI project config (committed, no secrets)
   migrations/     Numbered SQL migrations (schema source of truth)
   seed.sql        Dev/demo data — see "Database migrations" below
+scripts/
+  dev-harness.mts Development-only test data CLI — see "Development test
+                   harness" below. Not part of the app: not under src/,
+                   never imported by application code, never bundled.
 ```
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the reasoning behind this
 structure and the full data model.
+
+## Development test harness
+
+`scripts/dev-harness.mts` creates, seats, lists, and resets live test
+events without touching real content — for when you want to actually
+open the live room and see yourself as a speaker, not just read code.
+It's a standalone script, not an application feature: nothing under
+`src/` imports it, it adds no route and no schema/RLS/grant change, and
+it never ships in the Next.js build (confirm this yourself any time by
+checking `npm run build`'s printed route table has no harness-related
+entry). It authenticates with the same `SUPABASE_SERVICE_ROLE_KEY` the
+app already uses and drives the same trusted speaker-transition
+functions issue #13 built (`claim_speaker_seat` et al.) — see
+DECISIONS.md for the full design reasoning.
+
+**Requires Node 22.6+** (uses `--env-file` and `--experimental-strip-types`,
+both built in — no ts-node/tsx dependency added just for this). Check
+with `node --version`; upgrade if you're below 22.6.
+
+```bash
+# Create a test event that's immediately live ("ready" phase)
+npm run dev:harness -- create
+
+# ...or immediately in the pre-show lobby, or not yet open at all
+npm run dev:harness -- create --phase=lobby_open
+npm run dev:harness -- create --phase=upcoming
+
+# Seat a speaker. A bare label ("alice") auto-creates a throwaway test
+# account (alice@dev-harness.invalid, obviously-fake password printed to
+# your terminal) if one doesn't exist yet — log into a second
+# browser/incognito window with those credentials to test as that
+# speaker. Pass your own real email instead to see yourself go live in
+# your own already-logged-in browser tab.
+npm run dev:harness -- seat alice 1
+npm run dev:harness -- seat bob 2
+npm run dev:harness -- seat you@your-real-email.com 1
+
+# See what test events/speakers currently exist
+npm run dev:harness -- list
+
+# Delete every test event and every auto-created test account this tool
+# has ever made — never touches anything else. Safe to run any time; if
+# you seated your own real account above, reset leaves it completely
+# alone (it only recognizes what it tagged itself: event titles prefixed
+# `[dev-harness] `, and the reserved `@dev-harness.invalid` test domain).
+npm run dev:harness -- reset
+```
+
+If you ever pass an email `seat` doesn't recognize and no account exists
+for it yet, it refuses to create one rather than silently making an
+untracked account `reset` could never find — you'll get a clear error
+telling you to use a harness label or sign up for that email first.
 
 ## Database migrations (Supabase CLI)
 

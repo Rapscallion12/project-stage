@@ -4,6 +4,110 @@ Newest entry first.
 
 ---
 
+## 2026-08-11 — Session 13: Development test harness
+
+**Goal**: Before starting the next product milestone, build the smallest
+development-only tooling needed to create, seat, list, and reset live
+test events — closing the gap where becoming a speaker (by design) has
+never been possible through the app itself, and every prior verification
+of the room required a one-off service-role test script.
+
+**Completed work**:
+
+- **Design review before implementation**: reviewed `lib/supabase/service.ts`,
+  the issue #13 speaker-transition primitives, `supabase/seed.sql`, and
+  how the app's own integration tests already drive real fixtures via the
+  service client + Auth admin API. Proposed a single standalone
+  `scripts/dev-harness.mts`, run via Node's native `--env-file`/
+  `--experimental-strip-types` (confirmed working against this project's
+  installed Node 22.23.1 before proposing it, rather than assuming) —
+  zero new dependency, zero new application code. User approved with
+  explicit safety requirements: tag every harness-created resource,
+  `reset` must never touch anything else, seating a real account must
+  leave it untouched by `reset`, and tests for the safety boundary where
+  practical.
+- **`scripts/dev-harness.mts`**: four commands (`create
+  [--phase=ready|lobby_open|upcoming]`, `seat <email-or-label> <1|2>
+  [eventId]`, `list`, `reset`), built entirely from already-existing,
+  already-authorized primitives — a plain `events` insert via the service
+  client, and the `claim_speaker_seat` RPC from issue #13 (no new backend
+  capability, this script is simply one more trusted server-side caller
+  of it). Deliberately does **not** import `lib/supabase/service.ts`
+  directly, despite the near-identical client construction — that module
+  documents an exact, short list of legitimate callers, and this script
+  isn't part of the application, so it gets its own copy of the same few
+  lines rather than becoming an undocumented fourth caller.
+- **Safety design**: every harness-created resource is tagged (`[dev-harness] `
+  event title prefix; the reserved, non-routable `@dev-harness.invalid`
+  email domain for auto-created throwaway accounts) and `reset` only
+  ever acts on tagged resources. `seat` **refuses to auto-create an
+  account for an email that isn't already a real profile and isn't
+  harness-tagged**, rather than silently creating an untagged account
+  `reset` could never find — this is what makes seating your own real
+  dev account safe: pass a real email, it gets reused (never created or
+  deleted), pass a bare label and it expands to a throwaway
+  `@dev-harness.invalid` account that `reset` will clean up.
+- **A real, minor implementation finding**: `tsc --noEmit` rejects an
+  explicit `.mts` extension in an import specifier by default (`TS5097`),
+  which the test file needs (Node's own ESM resolution requires that same
+  extension when the script runs directly, so both need to agree). Fixed
+  with `allowImportingTsExtensions: true` in `tsconfig.json` — confirmed
+  safe project-wide given `noEmit: true` was already set, and that
+  Next.js's own build doesn't type-check through this exact path either
+  way.
+- **Manually verified end-to-end against the real linked project** before
+  writing the automated test: `create` (all three phases), `seat`
+  (auto-creating a throwaway account, and reusing an existing one),
+  `list`, and `reset` — including deliberately creating an untagged
+  "simulated real" event and account first, confirming `reset` left both
+  completely untouched while removing every harness-tagged resource, then
+  cleaning up the simulated fixtures by hand afterward (since `reset`
+  correctly wouldn't touch them). Also verified `seat` refuses to
+  auto-create an account for an unrecognized non-harness email, with a
+  clear error.
+- **`scripts/dev-harness.test.ts`**: unit tests for the tagging predicates,
+  `timingForPhase`'s phase boundaries, and `parseArgs`, plus an
+  end-to-end integration suite (skips gracefully without
+  `SUPABASE_SERVICE_ROLE_KEY`) that automates the exact manual
+  verification above — creates untagged "real" fixtures alongside
+  harness-tagged ones, runs the actual `resetHarness`, and asserts the
+  untagged fixtures survive while the tagged ones are gone. This is the
+  test that actually proves the safety boundary, not just the
+  tag-matching predicates in isolation.
+- Documented in README.md (new "Development test harness" section: Node
+  version requirement, full command usage, safety model), ARCHITECTURE.md
+  (folder structure), DECISIONS.md (full design reasoning, the
+  `tsc`/`allowImportingTsExtensions` finding), CHANGELOG.md.
+
+**Files changed**: `scripts/dev-harness.mts`, `scripts/dev-harness.test.ts`,
+`package.json` (added `dev:harness` script — no new dependency),
+`tsconfig.json` (`allowImportingTsExtensions: true`), `README.md`,
+`ARCHITECTURE.md`, `DECISIONS.md`, `CHANGELOG.md`, `SESSION_LOG.md` (this
+entry).
+
+**Known issues**: none — every manual and automated verification passed,
+including the safety-boundary proof against the real project. Testing an
+actual two-person conversation still needs two separate browser sessions
+(one per seated speaker); the harness prepares the data, it doesn't
+automate the browser.
+
+**Tests run**: `npm run lint` (clean), `npx tsc --noEmit` (clean),
+`npm run build` (clean — route table confirms no harness-related route
+exists), `npx vitest run` — **69/69 passing, zero skipped** (13 new,
+including the live end-to-end safety-boundary test against the real
+project).
+
+**Current build status**: Lint clean, typecheck clean, build clean, full
+test suite passing (69/69, no skips).
+
+**Recommended next task**: the next product milestone — Phase 3's
+queue/voting design remains the standing prerequisite for
+`claim_speaker_seat` to get a real *production* caller; this harness is
+what makes manually testing that milestone's work practical once it
+lands.
+
+---
+
 ## 2026-08-11 — Session 12: Issue #3 — two-speaker live room UI
 
 **Goal**: Build the browser-based live room (LiveKit client, two-speaker

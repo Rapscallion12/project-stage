@@ -7,6 +7,29 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
 
 ### Added
 
+- **Development test harness** (`scripts/dev-harness.mts`,
+  `npm run dev:harness --`) — create/seat/list/reset live test events
+  from the command line, without hand-writing SQL or waiting on a
+  scheduled start time. Standalone: outside `src/`, never imported by
+  application code, no new route/schema/RLS/grant, confirmed absent from
+  `npm run build`'s route table. Authenticates with the existing
+  `SUPABASE_SERVICE_ROLE_KEY` and drives the same trusted
+  `claim_speaker_seat`/`leave_speaker_seat`/`end_speaker_seat`
+  primitives issue #13 already built and authorized — not a new
+  capability, one more legitimate caller of an existing one. Every
+  resource it creates is tagged (`[dev-harness] ` title prefix for
+  events, the reserved `@dev-harness.invalid` domain for auto-created
+  throwaway accounts) so `reset` can only ever delete what the harness
+  itself made; seating your own real account is safe by construction,
+  since `seat` refuses to auto-create an account for any email that
+  isn't already a real profile and isn't harness-tagged. Requires Node
+  22.6+ (native `--env-file`/`--experimental-strip-types`, no new
+  dependency) — documented in README.md along with full usage.
+  `tsconfig.json` gained `allowImportingTsExtensions: true` (safe given
+  `noEmit: true` was already set) so the harness's own test file can
+  import it. See DECISIONS.md for the full design and the end-to-end
+  safety-boundary test (`scripts/dev-harness.test.ts`) that proves
+  `reset` leaves untagged events/accounts completely untouched.
 - **Two-speaker live room UI** (issue #3) — `livekit-client` installed,
   `src/app/events/[id]/room/page.tsx` + `components/room/` (`live-room.tsx`,
   `portrait-room.tsx`/`landscape-room.tsx`, `speaker-stage.tsx`/

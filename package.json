@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:harness": "node --experimental-strip-types --env-file=.env.local scripts/dev-harness.mts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

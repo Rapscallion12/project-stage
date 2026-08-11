@@ -132,6 +132,12 @@ supabase/
                    into the dashboard. See Migration workflow below.
   seed.sql        Dev/demo data (events), not a migration — re-runnable,
                    not schema-defining.
+scripts/
+  dev-harness.mts Development-only test-event CLI (create/seat/list/
+                   reset) — deliberately outside src/, so it's never
+                   imported by application code or bundled into the
+                   Next.js build. See its own header comment, README.md's
+                   "Development test harness" section, and DECISIONS.md.
 ```
 
 This mirrors a standard UI / business-logic / data-access separation:
