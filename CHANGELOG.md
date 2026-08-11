@@ -7,6 +7,48 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
 
 ### Added
 
+- **Two-speaker live room UI** (issue #3) — `livekit-client` installed,
+  `src/app/events/[id]/room/page.tsx` + `components/room/` (`live-room.tsx`,
+  `portrait-room.tsx`/`landscape-room.tsx`, `speaker-stage.tsx`/
+  `speaker-tile.tsx`, `room-header.tsx`, `room-controls.tsx`,
+  `room-chat-panel.tsx`). Current speakers render entirely from
+  `event_speakers` (via a new `hooks/use-active-speakers.ts`, Realtime-
+  subscribed — migration `00000000000010` adds the table to the
+  `supabase_realtime` publication), never from LiveKit's own
+  participant/track state — an explicit correction made mid-design; see
+  DECISIONS.md. `event_speakers` also gained a `display_name` column
+  (same migration), a denormalized snapshot of `profiles.display_name`
+  written by `claim_speaker_seat` itself, so guests (who can't read
+  `profiles` under RLS) can still see who's speaking. An occupied seat
+  with no available video renders a named "camera off" placeholder; an
+  empty seat renders an intentional "Seat open" placeholder — never
+  blank either way. Explicit room status ("Waiting for speakers" /
+  "Selecting next speaker" / "Live", `lib/room-status.ts`) derived purely
+  from active-speaker count. `hooks/use-live-room-connection.ts` owns the
+  LiveKit `Room` connection and auto-publishes camera/mic whenever the
+  server-issued token's `canPublish` is true — on connect, and again live
+  on every permission change pushed by issue #13's `syncPublishPermission`
+  — so a participant with `canPublish: false` never has a code path that
+  attempts to publish, and a participant who loses `canPublish` while
+  connected stops immediately. `hooks/use-orientation.ts` (portrait/
+  landscape via `matchMedia`, `useSyncExternalStore`) selects between the
+  two layouts in a component that renders unconditionally above them, so
+  rotation never remounts the LiveKit connection, chat subscription, or
+  speaker roster. The lobby's "ready" phase banner now links into the
+  room instead of showing a "not open yet" placeholder. `RoomChatPanel`
+  reserves a `featuredSlot` prop (always `undefined` today) so a future
+  pinned/expandable Featured Comments section is an addition, not a
+  layout restructure. `RoomControls` ships exactly one control — "Leave
+  the stage," issue #13's `leaveSpeakerSeat` action getting its first
+  caller; manual mic/camera mute toggles were deliberately left out of
+  scope.
+- Building this surfaced and fixed two shared test-infrastructure gaps,
+  not product bugs: React Testing Library's DOM wasn't being cleaned up
+  between tests (`vitest.setup.ts` now calls `cleanup()` in `afterEach`
+  — this project's first component-rendering tests are what surfaced
+  it), and a first draft of `useOrientation` set state synchronously
+  inside `useEffect` (rewritten to `useSyncExternalStore`, the same
+  pattern `useNow` already established). See DECISIONS.md.
 - **GitHub Issues + a Project (Kanban) board** as the visible planning
   layer: Backlog → Ready → In Progress → Testing / Review → Done. 12
   initial issues covering Phase 2 (the live room, broken into a

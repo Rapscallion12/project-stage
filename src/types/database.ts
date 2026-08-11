@@ -128,6 +128,7 @@ export type Database = {
       }
       event_speakers: {
         Row: {
+          display_name: string
           event_id: string
           id: string
           joined_at: string
@@ -137,6 +138,7 @@ export type Database = {
           seat_number: number
         }
         Insert: {
+          display_name: string
           event_id: string
           id?: string
           joined_at?: string
@@ -146,6 +148,7 @@ export type Database = {
           seat_number: number
         }
         Update: {
+          display_name?: string
           event_id?: string
           id?: string
           joined_at?: string
@@ -234,6 +237,7 @@ export type Database = {
           p_seat_number: number
         }
         Returns: {
+          display_name: string
           event_id: string
           id: string
           joined_at: string
@@ -252,6 +256,7 @@ export type Database = {
       end_speaker_seat: {
         Args: { p_event_id: string; p_profile_id: string; p_reason: string }
         Returns: {
+          display_name: string
           event_id: string
           id: string
           joined_at: string
@@ -270,6 +275,7 @@ export type Database = {
       leave_speaker_seat: {
         Args: { p_event_id: string }
         Returns: {
+          display_name: string
           event_id: string
           id: string
           joined_at: string

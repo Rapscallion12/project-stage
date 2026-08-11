@@ -16,6 +16,17 @@ export type EventSpeaker = {
   event_id: string;
   profile_id: string;
   seat_number: 1 | 2;
+  /**
+   * A denormalized snapshot of profiles.display_name at the moment
+   * claim_speaker_seat assigned this seat (migration 00000000000010) —
+   * not a live join. Guests can't read `profiles` (RLS grants select to
+   * authenticated only), so the room's speaker display renders entirely
+   * from event_speakers; this is what makes that possible without
+   * exposing profiles to anon. profile_id remains the durable identity
+   * reference for everything else (auth checks, uniqueness, joins) —
+   * display_name is presentation-only.
+   */
+  display_name: string;
   joined_at: string;
   left_at: string | null;
   left_reason: LeftReason | null;

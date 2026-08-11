@@ -114,17 +114,27 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
     }
   }, 30_000);
 
-  it("seats a profile into an empty seat", async () => {
+  it("seats a profile into an empty seat, snapshotting display_name from profiles (issue #3)", async () => {
     const row = await claimSpeakerSeat(eventId, profiles.a.id, 1);
     expect(row.profile_id).toBe(profiles.a.id);
     expect(row.seat_number).toBe(1);
     expect(row.left_at).toBeNull();
+    // claim_speaker_seat reads this from profiles.display_name itself —
+    // never accepted as a caller-supplied parameter — so guests (who
+    // can't read profiles under RLS) can still see who's speaking. See
+    // migration 00000000000010 and DECISIONS.md.
+    expect(row.display_name).toBe("Test Speaker A");
+  });
+
+  it("rejects claiming a seat for a profile that doesn't exist, with a clear error rather than a bare FK violation", async () => {
+    await expect(claimSpeakerSeat(eventId, "00000000-0000-0000-0000-000000000000", 2)).rejects.toThrow(/does not exist/);
   });
 
   it("replacing the occupant ends their row as 'replaced' (preserved, not deleted) and leaves exactly one active row for the seat", async () => {
     const newRow = await claimSpeakerSeat(eventId, profiles.b.id, 1);
     expect(newRow.profile_id).toBe(profiles.b.id);
     expect(newRow.left_at).toBeNull();
+    expect(newRow.display_name).toBe("Test Speaker B");
 
     const { data: previous } = await service
       .from("event_speakers")

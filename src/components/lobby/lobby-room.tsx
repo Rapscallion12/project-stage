@@ -2,6 +2,7 @@
 
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
+import { ButtonLink } from "@/components/ui/button";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { formatCountdown, formatEventDateTime, getEventPhase, type EventTiming } from "@/lib/events";
@@ -51,10 +52,14 @@ export function LobbyRoom({
 
         <div className="rounded-lg border border-accent/40 bg-accent/5 p-3">
           {phase === "ready" ? (
-            <p className="text-sm font-medium text-accent">
-              This event is starting now — the live conversation isn&apos;t open in
-              this prototype yet.
-            </p>
+            <div>
+              <p className="mb-3 text-sm font-medium text-accent">
+                This event is starting now — the live conversation is open.
+              </p>
+              <ButtonLink href={`/events/${event.id}/room`} className="w-full sm:w-auto">
+                Enter the room
+              </ButtonLink>
+            </div>
           ) : (
             <p className="text-sm text-muted">
               Pre-show lobby — the live conversation hasn&apos;t started yet.

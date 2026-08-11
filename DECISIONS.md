@@ -3,6 +3,128 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-11 — The live room renders speakers from `event_speakers`, never from LiveKit's own state; `display_name` is denormalized to make that possible for guests
+
+**Problem**: Issue #3's initial design proposal (before the user's
+correction) derived the room's "who is speaking" display from LiveKit's
+own participant/track state — a speaker's tile would show whoever
+currently had a published, subscribed audio track. That's a reasonable
+reading of "the room should show who's talking," but it makes `event_speakers`
+*not* actually authoritative in the UI: a speaker who mutes, loses camera
+permission, or has a transient connection hiccup would visually vanish
+from the room, even though the database still correctly says they hold
+the seat — the exact kind of drift PRODUCT.md's "the audience controls
+the stage" principle (and every design decision since issue #1) has been
+built to avoid.
+
+**Alternatives considered**:
+1. Derive current speakers from LiveKit's participant/track state
+   directly (the original proposal).
+2. Derive current speakers entirely from `event_speakers` (already
+   fetched server-side, kept live via Realtime); use LiveKit's
+   participant list *only* to decide whether a video frame is currently
+   available to render for an already-known speaker.
+
+**Decision**: Option 2, at the user's explicit direction.
+`hooks/use-active-speakers.ts` subscribes to `event_speakers`'s Realtime
+feed (migration `00000000000010` adds it to the `supabase_realtime`
+publication) and is the *only* source `SpeakerStage`/`SpeakerTile` use to
+decide whether a seat is occupied and by whom.
+`hooks/use-live-room-connection.ts`'s LiveKit `Room` is consulted only to
+look up a *matching, already-known* speaker's participant object for
+media attachment — a `SpeakerTile` can have a `speaker` (DB) with no
+`participant` (LiveKit) at all, and renders a named "camera off"
+placeholder, not an empty seat. The reverse (a `participant` implying
+occupancy) never happens; nothing in the room ever asks LiveKit "who's
+speaking."
+
+**Reason**: This is a direct extension of the same principle
+`event_speakers` itself was designed around (issue #1) and that issue
+#13's whole authorization model reinforces: the database is the single
+source of truth for stage occupancy, and every other system (LiveKit
+included) is downstream of it, never a peer source. A speaker's media
+having trouble is a *presentation* concern, not an *occupancy* one.
+
+**A real problem this decision surfaced**: `profiles` RLS grants `select`
+to `authenticated` only (migration `00000000000001`) — guests can't read
+it. Showing a speaker's name (sourced from `event_speakers.profile_id`)
+to a guest viewer therefore needed *some* way to resolve a name without
+a `profiles` join. Considered using LiveKit's own participant `.name`
+metadata (already embedded in tokens by `mintLiveKitToken`, and readable
+by any connected participant, guests included) — rejected, because that
+re-couples the *name* to LiveKit connection state, exactly what this
+whole decision exists to avoid: a speaker's name would disappear right
+when their connection is the thing having trouble.
+
+**Fix**: `display_name` (migration `00000000000010`) — a denormalized
+snapshot of `profiles.display_name`, written by `claim_speaker_seat`
+itself (a plain `select` at assignment time; the function already runs
+`security definer` with full table access, so this needed no new grant),
+never accepted as a caller-supplied parameter. Exactly the pattern
+`event_chat_messages.author_display_name` already established for the
+identical guest-visibility problem — not a new idea, a second application
+of one. `profile_id` remains the durable identity reference for every
+authorization check and future join; `display_name` is presentation-only
+and never trusted for anything else.
+
+**Tradeoffs**: A speaker's on-screen name is a snapshot, not live — if
+they rename their account mid-show, the room keeps showing the name they
+had when seated (same accepted tradeoff `event_chat_messages` already
+made, for the same reason: consistency of what's currently displayed
+matters more here than reflecting a rename that happens to land
+mid-conversation). The table's zero rows in the live project at the time
+of this migration meant no backfill was needed for the new `not null`
+column — confirmed by query before writing the migration, not assumed.
+
+---
+
+## 2026-08-11 — Two testing-infrastructure gaps issue #3 surfaced (not product bugs)
+
+**Problem**: Issue #3 was this project's first component-rendering test
+(`speaker-tile.test.tsx`) and first hook that mirrors genuinely external
+browser state via a subscription (`useOrientation`, matching
+`window.matchMedia`). Both surfaced gaps in shared test/lint
+infrastructure rather than in the feature code itself.
+
+1. **React Testing Library's DOM wasn't being cleaned up between tests.**
+   Multiple `render()` calls in `speaker-tile.test.tsx` left prior tests'
+   DOM trees mounted, so `getByTestId`/`getByRole` started matching
+   multiple elements once more than one test in the file called `render`.
+   Testing Library's auto-cleanup relies on a global `afterEach` being
+   available, which requires `test.globals: true` in `vitest.config.mts`
+   — not set in this project (every test file explicitly imports
+   `describe`/`it`/`expect` from `"vitest"` instead, a deliberate style
+   choice worth keeping). **Fix**: `vitest.setup.ts` — already loaded for
+   every test file — now explicitly calls `cleanup()` in its own
+   `afterEach`, rather than turning on `globals: true` project-wide for
+   one feature's sake. This benefits every future component test, not
+   just this issue's.
+2. **A first draft of `useOrientation` and part of `useLiveRoomConnection`
+   set state synchronously inside `useEffect`**, which
+   `react-hooks/set-state-in-effect` flags as an error — the same
+   underlying issue `useNow`'s own comment already documents (see
+   `hooks/use-now.ts`): setting state synchronously on every effect run
+   is the wrong tool for mirroring genuinely external state.
+   `useOrientation` was rewritten to use `useSyncExternalStore`, the same
+   fix `useNow` already established as this project's pattern for exactly
+   this case. `useLiveRoomConnection`'s violation was different in kind —
+   an async connection-lifecycle effect, not a snapshot of synchronous
+   external state — so `useSyncExternalStore` doesn't fit there; instead,
+   the redundant `setStatus`/`setMediaError` calls that only restated
+   what the `useState` initializer already knew were removed, leaving
+   every `setState` call in that hook inside a genuine LiveKit event
+   callback or promise resolution — which is what the lint rule is
+   actually asking for.
+
+**Reason recorded here**: both are exactly the kind of gap that's easy to
+introduce once and then have silently affect every test/hook written
+after, if not caught and fixed at the shared-infrastructure level. Same
+reasoning as documenting issue #13's `PUBLIC`-execute-by-default finding
+in ARCHITECTURE.md as a standing rule rather than just fixing the one
+instance.
+
+---
+
 ## 2026-08-11 — Three real bugs the issue #13 integration tests caught, fixed as forward migrations
 
 **Problem**: Running issue #13's integration tests for real (once

@@ -4,6 +4,170 @@ Newest entry first.
 
 ---
 
+## 2026-08-11 — Session 12: Issue #3 — two-speaker live room UI
+
+**Goal**: Build the browser-based live room (LiveKit client, two-speaker
+stage, unlimited audience, orientation-aware layout) — the first complete
+live conversation experience — starting from an architecture review and
+an explicit design proposal before implementing, per the user's now-
+standing practice.
+
+**Completed work**:
+
+- **Design review before implementation**: confirmed the issue is scoped
+  to the browser client/presentation layer only, with no changes to the
+  server-side authorization model. Proposed a component hierarchy
+  (`LiveRoom` owning every live hook, `PortraitRoom`/`LandscapeRoom` as
+  pure presentation below it), deriving current speakers from LiveKit's
+  own published tracks, and deriving audience count from LiveKit's
+  participant list.
+- **The user corrected the speaker-source design mid-review**: current
+  speakers must come from `event_speakers`, never from LiveKit's
+  participant/track state, so the database stays authoritative even if a
+  speaker mutes, loses camera permission, or has a connection hiccup.
+  Audience-count-from-LiveKit was approved as proposed.
+- **Implementing that correction surfaced a real gap, flagged before
+  writing code**: `profiles` RLS never grants `anon` a read, so a guest
+  viewer would have no way to resolve a seat's `profile_id` into a
+  display name. Proposed denormalizing `display_name` onto
+  `event_speakers` (same pattern `event_chat_messages.author_display_name`
+  already established for the identical problem), populated by
+  `claim_speaker_seat` itself from `profiles.display_name` — approved,
+  with the explicit ask to document that `display_name` is intentionally
+  denormalized for public/guest rendering while `profile_id` stays the
+  durable identity reference. See DECISIONS.md.
+- **Migration `00000000000010`**: added `event_speakers.display_name`
+  (not null, no backfill needed — confirmed zero rows in the live project
+  first), updated `claim_speaker_seat` to populate it via a `profiles`
+  lookup (guarding against a nonexistent profile with a clear error
+  instead of a bare FK-violation), and added `event_speakers` to the
+  `supabase_realtime` publication.
+- **`lib/room-status.ts`**: pure `getRoomStatus(activeSpeakerCount)` →
+  `"waiting"` / `"selecting"` / `"live"`, with human-readable labels — the
+  explicit room-state communication the user asked for, derived the same
+  way `event_speakers` decides everything else in the room.
+- **Three new hooks**, each following an existing precedent rather than
+  inventing a new shape:
+  - `use-active-speakers.ts` — Postgres Changes on `event_speakers`,
+    same shape as `use-lobby-realtime.ts`. The merge logic
+    (`applySpeakerChange`) is a pure, exported, unit-tested function —
+    same reasoning as `determineCanPublish`.
+  - `use-live-room-connection.ts` — owns the `livekit-client` `Room`
+    connection lifecycle, auto-publishes camera/mic based on
+    `shouldPublish(permissions)` (a pure, tested decision function) on
+    connect and again on every `RoomEvent.ParticipantPermissionsChanged`
+    targeting the local participant — the client-side half of issue
+    #13's `syncPublishPermission` push, so requirement 6 ("react to a
+    live permission change") was mostly free once that issue's design
+    paid off. Read the installed SDK's actual type definitions
+    (`RoomEvent`, `Track.Source`, `Participant`/`LocalParticipant`
+    methods) rather than relying on training data, given how often this
+    project's other newer dependencies have diverged from it.
+  - `use-orientation.ts` — `matchMedia('(orientation: portrait)')`.
+- **Every room component built presentation-only below `LiveRoom`**
+  (the one place all four live hooks are called, per ARCHITECTURE.md's
+  mobile-orientation rule): `SpeakerTile` (an occupied seat with no
+  available video renders a named "camera off" placeholder; an empty
+  seat renders a distinct "Seat open" placeholder — never blank either
+  way), `SpeakerStage`, `RoomHeader` (event title, room status, audience
+  count, and — only when degraded — this viewer's own connection
+  status), `RoomControls` (exactly one control: "Leave the stage," giving
+  issue #13's `leaveSpeakerSeat` action its first real caller — manual
+  mic/camera mute toggles were deliberately left out, matching
+  requirement 5's "automatic" framing rather than expanding scope),
+  `RoomChatPanel` (reuses the lobby's `ChatPanel` as-is — `event_chat_messages`
+  was already event-scoped, not lobby-phase-scoped, so the same
+  conversation continues into the room; reserves a `featuredSlot` prop,
+  always `undefined` today, for a future pinned Featured Comments section
+  per the user's ask to prepare the layout without building it).
+- `src/app/events/[id]/room/page.tsx`: redirects to the lobby before the
+  event is `"ready"` (same precedent as the lobby's own early-visitor
+  redirect), otherwise awaits the event, identity, chat history, active
+  speakers, and an initial LiveKit token server-side and hands them to
+  `LiveRoom`. The lobby's "ready" phase banner now links into the room
+  instead of showing a "not open yet" placeholder.
+- **Two real testing-infrastructure gaps found and fixed, not product
+  bugs** — this was the project's first component-rendering test file
+  and first `matchMedia`-subscribing hook:
+  - React Testing Library wasn't being cleaned up between tests
+    (`vitest.setup.ts` now calls `cleanup()` in `afterEach` — this
+    project doesn't set `test.globals: true`, which is what Testing
+    Library's own auto-cleanup normally relies on).
+  - A first draft of `useOrientation` (and part of
+    `useLiveRoomConnection`) set state synchronously inside `useEffect`,
+    which `react-hooks/set-state-in-effect` correctly flags — the exact
+    issue `useNow`'s own comment already documents. Fixed
+    `useOrientation` with `useSyncExternalStore` (matching `useNow`'s
+    established pattern) and removed the redundant `setState` calls from
+    `useLiveRoomConnection`'s effect, leaving every state update there
+    inside a genuine LiveKit event callback.
+- Tests: `room-status.test.ts`, `use-orientation.test.ts` (a hand-rolled
+  `matchMedia` fake per test, since jsdom doesn't implement it at all),
+  `use-active-speakers.test.ts` (the pure reducer), `use-live-room-connection.test.ts`
+  (the pure `shouldPublish` decision function), `speaker-tile.test.tsx`
+  and `room-header.test.tsx` (this project's first component-render
+  tests, using React Testing Library) — covering the "never blank"
+  placeholder requirement and the DB-stays-authoritative-even-with-media-
+  issues requirement concretely, not just by code review. Extended
+  `event-speakers-transitions.test.ts` for `display_name` snapshotting
+  and the new "profile doesn't exist" guard.
+- Manually smoke-tested against the user's already-running dev server
+  (localhost:3001) rather than fighting over the port: confirmed the room
+  page renders the event title, two distinct "Seat open" placeholders,
+  "Waiting for speakers" status, and an audience-count element for a real
+  past event with no seated speakers, with no server error; confirmed a
+  nonexistent event 404s. Full browser/WebRTC verification (camera/mic
+  permission prompts, an actual two-person connection, live rotation)
+  isn't possible in this environment — same accepted limitation as every
+  other LiveKit-touching issue so far.
+- Documented in ARCHITECTURE.md (Data model, Realtime plan, Video plan, a
+  new "Live room UI" section, folder structure, Testing & Definition of
+  Done), DECISIONS.md (the speaker-source-of-truth correction and
+  `display_name` denormalization; the two testing-infrastructure
+  findings), ROADMAP.md, CHANGELOG.md.
+
+**Files changed**: `supabase/migrations/00000000000010_event_speakers_display_name_and_realtime.sql`,
+`src/types/database.ts`, `package.json`, `package-lock.json` (added
+`livekit-client`), `src/lib/room-status.ts` (+test),
+`src/hooks/use-orientation.ts` (+test), `src/hooks/use-active-speakers.ts`
+(+test), `src/hooks/use-live-room-connection.ts` (+test),
+`src/components/room/` (`live-room.tsx`, `portrait-room.tsx`,
+`landscape-room.tsx`, `speaker-stage.tsx`, `speaker-tile.tsx` (+test),
+`room-header.tsx` (+test), `room-controls.tsx`, `room-chat-panel.tsx`,
+`types.ts`), `src/app/events/[id]/room/page.tsx`,
+`src/components/lobby/lobby-room.tsx`,
+`src/lib/repositories/event-speakers.ts`,
+`src/lib/repositories/event-speakers-transitions.test.ts`,
+`src/lib/repositories/event-speakers.test.ts`, `src/lib/livekit/token.test.ts`,
+`vitest.setup.ts`, `ARCHITECTURE.md`, `DECISIONS.md`, `ROADMAP.md`,
+`CHANGELOG.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: `claim_speaker_seat` still has no production caller —
+by design (Phase 3's queue/voting owns that gate) — so the room correctly
+shows two open seats until one is manually seeded; nothing in this issue
+changes that. The room's audience count and reconnect handling
+(`livekit-client`'s built-in `RoomEvent.Reconnecting`/`Reconnected`)
+haven't been exercised against a real multi-participant LiveKit session,
+only unit-tested at the decision-logic level and smoke-tested for
+server-render correctness — the same class of limitation issue #2/#13
+already accepted for anything requiring a live LiveKit connection this
+environment can't establish.
+
+**Tests run**: `npm run lint` (clean), `npx tsc --noEmit` (clean),
+`npm run build` (clean — `/events/[id]/room` appears correctly in the
+route table), `npx vitest run` — **56/56 passing, zero skipped**.
+
+**Current build status**: Lint clean, typecheck clean, build clean, full
+test suite passing (56/56, no skips).
+
+**Recommended next task**: Phase 3's queue/voting design — the remaining
+prerequisite for `claim_speaker_seat` to get a real caller and for this
+room to ever show an actual seated speaker outside of manual testing.
+Emergency leave (a broader "get out of the room" affordance, distinct
+from "Leave the stage") is still an open, unchecked ROADMAP item.
+
+---
+
 ## 2026-08-09 — Session 11: Issue #13 — speaker seat state transitions
 
 **Goal**: Ship the write path `event_speakers` didn't have — atomic seat

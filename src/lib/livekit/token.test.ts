@@ -21,6 +21,7 @@ const fakeActiveSeat: EventSpeaker = {
   event_id: "00000000-0000-0000-0000-0000000000bb",
   profile_id: "00000000-0000-0000-0000-0000000000cc",
   seat_number: 1,
+  display_name: "Jamie",
   joined_at: new Date().toISOString(),
   left_at: null,
   left_reason: null,

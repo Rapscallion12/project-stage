@@ -135,15 +135,37 @@ precedent bleed into the live room, which genuinely does need to.
       queue/voting to decide *who* gets to call `claim_speaker_seat`;
       #3/#4 below can be built and manually tested against hand-seeded
       `event_speakers` rows without that.
-- [ ] Two-speaker live audio/video room (`livekit-client`, room UI —
-      issue #3), with adaptive video quality and
-      reconnect handling on flaky networks, and explicit handling of both
-      camera/microphone permission granted and denied
-- [ ] Audience viewing (join a live room as a non-speaker) — guest-viewable,
-      no account required
-- [ ] Audience count (Supabase Realtime presence) — counts guests and
-      account holders alike
+- [x] Two-speaker live audio/video room (`livekit-client`, room UI —
+      issue #3): `app/events/[id]/room/page.tsx` +
+      `components/room/`, portrait (chat-maximized) and landscape
+      (discussion-maximized) layouts that never remount on rotation (see
+      ARCHITECTURE.md's Live room UI and Mobile orientation
+      implementation sections), automatic publish/unpublish driven
+      entirely by the server-issued token and live permission pushes,
+      explicit room status ("Waiting for speakers" / "Selecting next
+      speaker" / "Live"), and an intentional "Seat open" placeholder for
+      an empty seat rather than blank space. Current speakers are
+      rendered from `event_speakers` (Realtime-subscribed), never from
+      LiveKit's own participant/track state — see DECISIONS.md for why
+      that was a correction to the initial design. Adaptive video
+      quality (`adaptiveStream`/`dynacast`) enabled at the LiveKit
+      client level; explicit camera/microphone permission-denied
+      handling via `mediaError` state. `livekit-client`'s own
+      reconnect handling covers flaky networks (`RoomEvent.Reconnecting`/
+      `Reconnected`, surfaced in `RoomHeader`).
+- [x] Audience viewing (join a live room as a non-speaker) — guest-viewable,
+      no account required (part of issue #3 above)
+- [x] Audience count — part of issue #3 above, but **not** a dedicated
+      Supabase Realtime presence channel as originally scoped here:
+      everyone (speakers and audience alike) already connects to LiveKit
+      to subscribe to the speakers' tracks, so the room's own LiveKit
+      participant count *is* the audience count — see ARCHITECTURE.md's
+      Realtime plan for why a second, duplicate presence mechanism would
+      have been redundant infrastructure for data LiveKit already has.
 - [ ] Emergency leave — available to guests and account holders alike
+      (distinct from issue #13/#3's "Leave the stage," which only ends a
+      seated speaker's occupancy — this is a still-unbuilt, broader
+      "get out of the room" affordance)
 
 ## Phase 3 — Audience power features
 

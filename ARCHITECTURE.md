@@ -10,7 +10,7 @@
 | Backend | Supabase (Postgres, Auth, Realtime) | One project covers DB, auth, and realtime — no separate backend service in the MVP. See [Vendor portability](#vendor-portability) for how this choice is kept reversible. |
 | Schema management | Supabase CLI | Linked to the one live project (`xuzlgcfuwlcpejhctofv`). Migrations applied via `supabase db push --linked`, never hand-pasted into the dashboard. See [Migration workflow](#migration-workflow). |
 | Realtime | Supabase Realtime | Implemented for the pre-show lobby: chat messages (Postgres Changes), reactions (Postgres Changes), attendee presence. Not yet used for the future live room's votes/live-reactions. |
-| Video | LiveKit | Used for the two-speaker live audio/video. `livekit-server-sdk` installed; token minting (issue #2) and the server-authoritative seat-transition/disconnect-webhook write path (issue #13) are implemented. `livekit-client` (browser SDK) not yet installed — deferred to issue #3, which is the first thing that actually connects to a room. See [Video plan](#video-plan). |
+| Video | LiveKit | Used for the two-speaker live audio/video. `livekit-server-sdk` and `livekit-client` both installed; token minting (issue #2), the server-authoritative seat-transition/disconnect-webhook write path (issue #13), and the browser room UI that actually connects (issue #3) are all implemented. See [Video plan](#video-plan) and [Live room UI](#live-room-ui). |
 | Deployment | Vercel | Not yet deployed. Local dev only so far. |
 
 ### Next.js 16: read this before writing app code
@@ -48,11 +48,32 @@ src/
     lobby/         Pre-show lobby presentational components (chat panel,
                    message item, guest name editor). Consume state from
                    useLobbyRealtime; don't touch Supabase themselves.
+    room/          Live room (issue #3): live-room.tsx (the one place
+                   useActiveSpeakers/useLiveRoomConnection/
+                   useLobbyRealtime/useOrientation are called),
+                   portrait-room.tsx/landscape-room.tsx (presentation
+                   only — see Mobile orientation implementation),
+                   speaker-stage.tsx/speaker-tile.tsx (render from
+                   event_speakers, never from LiveKit's participant
+                   list — see Live room UI), room-header.tsx,
+                   room-controls.tsx, room-chat-panel.tsx (reuses
+                   components/lobby/'s ChatPanel), types.ts
+                   (RoomLayoutProps, shared by the two layouts).
   hooks/
     use-lobby-realtime.ts  Owns the lobby's live state (messages,
                    reactions, presence). The one place a Client Component
                    calls Supabase Realtime directly — see Vendor
                    portability for why this isn't behind a repository.
+                   Reused as-is by the live room (issue #3).
+    use-active-speakers.ts  Owns the room's speaker roster + status
+                   (issue #3) — Postgres Changes on event_speakers, same
+                   pattern as use-lobby-realtime.ts. See Live room UI.
+    use-live-room-connection.ts  Owns the LiveKit Room connection
+                   lifecycle and auto-publish behavior (issue #3). Direct
+                   SDK use — see Vendor portability's LiveKit exception.
+    use-orientation.ts  window.matchMedia('(orientation: portrait)')
+                   via useSyncExternalStore (issue #3) — see Mobile
+                   orientation implementation.
     use-now.ts     Ticking clock via useSyncExternalStore, for countdowns.
   lib/
     supabase/
@@ -90,6 +111,9 @@ src/
                    generation.
     events.ts      Pure functions: event phase/countdown/date formatting.
                    No Supabase, no I/O — fully portable, always was.
+    room-status.ts Pure function: room status ("waiting"/"selecting"/
+                   "live") from an active-speaker count (issue #3). Same
+                   "no Supabase, no I/O" discipline as events.ts.
     config.ts      PROTOTYPE_CONFIG — the single toggle point for
                    loosening/tightening guest access later.
     utils.ts       Small framework-agnostic helpers (e.g. cn()).
@@ -496,6 +520,20 @@ Implemented:
   occupancy active" are all derived at query time (`left_at is null`,
   `left_at - joined_at`) — no redundant stored flags to drift out of sync,
   same discipline `events`' own computed phase already uses.
+  **`display_name`** (migration `00000000000010`, issue #3) is a
+  denormalized snapshot of `profiles.display_name` at the moment
+  `claim_speaker_seat` assigns the seat — populated by the function
+  itself (a read, not a grant, since it already runs `security definer`),
+  never accepted as a caller-supplied parameter. This exists because
+  `profiles` RLS grants `select` to `authenticated` only (migration
+  `00000000000001`) — a guest viewing the room has no way to resolve
+  `profile_id` into a name via a join. Same pattern
+  `event_chat_messages.author_display_name` already established for the
+  identical problem. `profile_id` remains the durable identity reference
+  for every authorization check and join; `display_name` is
+  presentation-only. Also in the `supabase_realtime` publication as of
+  the same migration, so the room can subscribe to seat changes live —
+  see [Realtime plan](#realtime-plan).
 
 Not yet implemented (planned — see ROADMAP.md for sequencing). Guest
 eligibility is called out explicitly per table since it's a schema-level
@@ -548,9 +586,23 @@ with an error), plus a Presence channel per event for attendee count.
 Presence includes guests, not just account holders — a guest in the room
 is still part of "the audience should feel like a live crowd" (PRODUCT.md
 Principle 7); the presence key is the guest session id, no auth required.
+`useLobbyRealtime` is reused as-is in the live room (issue #3) — the same
+chat thread continues, since `event_chat_messages` was already
+event-scoped, not lobby-phase-scoped.
+
+**`event_speakers`** joined the `supabase_realtime` publication in
+migration `00000000000010` (issue #3), Postgres Changes on INSERT/UPDATE,
+consumed by `hooks/use-active-speakers.ts`. This is *not* the room's
+audience-count mechanism, deliberately: the room's participant count
+comes from LiveKit's own room roster (`useLiveRoomConnection`, everyone —
+speakers and audience alike — connects to LiveKit to subscribe), so
+there's no second Presence channel duplicating data LiveKit already has.
+`event_speakers`' realtime feed is only for *who occupies which seat* —
+see [Video plan](#video-plan) for why that's a different data source from
+the room's audience count on purpose.
 
 Not yet implemented: live reactions and vote tallies for the future live
-room (Phase 2/3) — see Vendor portability's note that those should be pure
+room (Phase 3) — see Vendor portability's note that those should be pure
 ephemeral broadcast, not Postgres Changes, unlike the lobby chat/reactions
 above.
 
@@ -564,12 +616,15 @@ LiveKit will host the two-speaker audio/video room.
 `lib/repositories/event-speakers.ts`'s `leaveSpeakerSeat`/
 `claimSpeakerSeat`/`endSpeakerSeat`, `lib/livekit/permissions.ts`'s live
 permission push, and the disconnect webhook at
-`src/app/api/livekit/webhook/route.ts`) are both implemented. The room UI
-itself (issue #3, which installs `livekit-client` and actually connects)
-is not — no `room/page.tsx` exists yet, only action/repository/route
-files, so there's nothing to render into yet and no production caller for
-`claimSpeakerSeat` (Phase 3's queue/voting decides who gets to call it —
-see [LiveKit authorization model](#livekit-authorization-model) below).
+`src/app/api/livekit/webhook/route.ts`), **and the room UI itself**
+(issue #3: `livekit-client` installed, `src/app/events/[id]/room/page.tsx`
++ `components/room/`) are all implemented. See [Live room UI](#live-room-ui)
+below for its structure. There is still no production caller for
+`claimSpeakerSeat` — Phase 3's queue/voting decides who gets to call it,
+and building that gate is explicitly out of issue #3's scope too (see
+[LiveKit authorization model](#livekit-authorization-model) below) — so
+the room correctly, faithfully displays two open seats until one is
+manually seeded for testing.
 
 ## LiveKit authorization model
 
@@ -719,6 +774,88 @@ introduce distributed infrastructure" [Vendor portability](#vendor-portability)
 warns against, for a prototype where this failure mode is rare and
 self-healing.
 
+## Live room UI
+
+Issue #3: `src/app/events/[id]/room/page.tsx` (Server Component — fetches
+the event, resolves identity, awaits `listActiveSpeakers`,
+`listRecentMessages`/`listReactionsForMessages`, and `getLiveKitToken`
+directly, same pattern the lobby page already uses) renders
+`components/room/live-room.tsx`, the one Client Component that calls
+`useActiveSpeakers`, `useLiveRoomConnection`, `useLobbyRealtime`, and
+`useOrientation` — every other room component is presentation, reading
+props from `LiveRoom`. Not enterable before the event's `getEventPhase`
+is `"ready"`; an early visitor is redirected to the lobby, same precedent
+as the lobby redirecting an early visitor back to the event page.
+
+**`event_speakers` decides who's speaking; LiveKit only decides whether a
+video frame is available.** This is the central design constraint of the
+room UI, not an implementation detail: `useActiveSpeakers` (subscribed to
+`event_speakers`'s Realtime feed, see Realtime plan above) is the only
+source for seat occupancy and the speaker's name. `useLiveRoomConnection`
+(the `livekit-client` `Room`) is consulted *only* to look up whether a
+given seat's identity currently has a subscribable track, purely for
+rendering — never for deciding whether a seat is occupied. Concretely:
+`SpeakerTile` takes a `speaker: EventSpeaker | null` (always authoritative)
+and a `participant: Participant | undefined` (media only); a seat with a
+`speaker` but no video-capable `participant` renders a named
+"camera off" placeholder, not an empty seat — the two placeholder states
+(`data-testid="empty-seat"` vs `"no-video-placeholder"`) are deliberately
+distinct. This is what keeps the database authoritative even when a
+speaker mutes, loses camera permission, or has a connection hiccup — none
+of that changes who the room says is speaking. See DECISIONS.md for the
+design reasoning (this was a correction to an earlier draft that would
+have derived the speaker list from LiveKit's own track state).
+
+**Room status** (`lib/room-status.ts`) is likewise derived purely from
+`event_speakers`' active-speaker count — `0` → "Waiting for speakers",
+`1` → "Selecting next speaker", `2` → "Live" — not from anyone's
+connection state. A viewer's own degraded LiveKit connection is shown
+separately, alongside it, in `RoomHeader`.
+
+**Automatic publish, reacting live to permission changes**:
+`useLiveRoomConnection` calls `setMicrophoneEnabled`/`setCameraEnabled`
+based on `shouldPublish(localParticipant.permissions)` on connect, and
+again on every `RoomEvent.ParticipantPermissionsChanged` targeting the
+local participant — the client-side half of issue #13's
+`syncPublishPermission` push. A participant whose token/permissions say
+`canPublish: false` never has an opportunity to publish: `shouldPublish`
+gates the only code path that calls `setCameraEnabled(true)`/
+`setMicrophoneEnabled(true)` at all, and LiveKit's SFU independently
+enforces the grant server-side regardless.
+
+**Orientation**: `hooks/use-orientation.ts` implements the
+`window.matchMedia('(orientation: portrait)')` pattern
+[Mobile orientation implementation](#mobile-orientation-implementation)
+already specified, via `useSyncExternalStore` (not `useEffect`+`useState`
+— see the hook's own comment on why: setting state synchronously in an
+effect body trips `react-hooks/set-state-in-effect`, and this is exactly
+the "subscribe to external state" case that hook is for). `LiveRoom`
+reads it to choose `PortraitRoom` vs `LandscapeRoom`, but every live
+hook is called in `LiveRoom` itself, above that branch — rotating only
+changes which presentation component receives the same props.
+
+**Layout**: portrait maximizes chat, with a compact speaker strip staying
+visible above it (discussion secondary but never hidden); landscape
+maximizes the speaker stage, with chat as a narrower side panel — used
+for both landscape phones and desktop, since neither needs a genuinely
+different structure at that aspect ratio (see Responsive implementation
+notes below for the general "where structure doesn't differ" judgment).
+Both share `RoomHeader`, `SpeakerStage`, `RoomChatPanel`, and
+(conditionally, for the seat's own occupant) `RoomControls` — see
+`components/room/types.ts`'s `RoomLayoutProps` for the shared contract.
+
+**`RoomChatPanel` reserves a slot for Featured Comments** (`featuredSlot`
+prop, always `undefined` today) above the chat feed, deliberately not
+built in this issue — see DECISIONS.md. Adding that feature later is
+passing a node into an existing slot, not a layout restructure.
+
+**`RoomControls` ships exactly one control**: "Leave the stage"
+(`leaveSpeakerSeat`, issue #13's self-service action, with no caller
+until now). Mic/camera mute toggles were deliberately not built —
+requirement was automatic publish from the server-issued token, not
+manual controls — left as a natural follow-up rather than expanding this
+issue's scope.
+
 ## Responsive implementation notes
 
 See [PRODUCT.md's responsive design principle](./PRODUCT.md#responsive-design-principle)
@@ -867,6 +1004,16 @@ until:
   in `.env.local` still gets a passing `npm test`, just with fewer tests
   actually exercised. See `lib/repositories/event-speakers-transitions.test.ts`
   and `src/app/api/livekit/webhook/route.test.ts`.
+- **Any test that renders a component with React Testing Library relies
+  on `vitest.setup.ts`'s `afterEach(cleanup)`** — without it, one test's
+  `render()` leaves its DOM tree mounted for the next test in the same
+  file, and single-element queries (`getByTestId`, etc.) start matching
+  multiple elements. This project doesn't set `test.globals: true`, which
+  is what Testing Library's own auto-cleanup normally relies on, so it
+  has to be wired explicitly. Found by `speaker-tile.test.tsx` (issue
+  #3) — the first component-rendering test in the project; hook-only
+  tests like `use-now.test.tsx` never rendered a tree, so this gap didn't
+  surface until now.
 - `npm run lint`, `npm run build` (which type-checks), and any relevant
   tests pass.
 - Relevant docs (this file, PRODUCT.md, ROADMAP.md, CHANGELOG.md,

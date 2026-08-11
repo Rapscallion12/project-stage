@@ -34,17 +34,19 @@ describe.skipIf(!hasCredentials)("event_speakers RLS", () => {
     expect(data).toEqual([]);
   });
 
-  it("blocks inserting a speaker — the write path isn't designed yet (see migration 00000000000005)", async () => {
+  it("blocks inserting a speaker directly — every write goes through claim_speaker_seat/leave_speaker_seat/end_speaker_seat instead (see migration 00000000000006)", async () => {
     const supabase = createClient();
     const { error } = await supabase.from("event_speakers").insert({
       event_id: "00000000-0000-0000-0000-000000000000",
       profile_id: "00000000-0000-0000-0000-000000000000",
       seat_number: 1,
+      display_name: "test",
     });
 
     // 42501 = permission denied (no INSERT grant) — proves this table is
-    // genuinely read-only from the app's perspective right now, not just
-    // documented as such.
+    // genuinely read-only from the app's perspective, not just documented
+    // as such; the RPC functions write to it via security definer, not
+    // via a grant an ordinary client request would ever have.
     expect(error).not.toBeNull();
     expect(error?.code).toBe("42501");
   });
