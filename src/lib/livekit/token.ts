@@ -19,6 +19,36 @@ export function getParticipantIdentity(identity: { type: "profile" | "guest"; id
 }
 
 /**
+ * Inverse of `getParticipantIdentity` — used by the LiveKit webhook
+ * handler (issue #13) to recover who a `participant_left` event is about.
+ * Returns `null` for anything that isn't a well-formed `profile:<id>` or
+ * `guest:<id>` identity, rather than throwing, since webhook payloads are
+ * untrusted input even after signature verification (the signature proves
+ * *LiveKit* sent it, not that the identity string matches this app's
+ * naming scheme, e.g. LiveKit's own server-side test tools can connect
+ * with arbitrary identities).
+ */
+export function parseParticipantIdentity(identity: string): { type: "profile" | "guest"; id: string } | null {
+  const separatorIndex = identity.indexOf(":");
+  if (separatorIndex === -1) return null;
+  const type = identity.slice(0, separatorIndex);
+  const id = identity.slice(separatorIndex + 1);
+  if ((type === "profile" || type === "guest") && id.length > 0) {
+    return { type, id };
+  }
+  return null;
+}
+
+/**
+ * Inverse of `getRoomName`. Same "return null, don't throw" discipline as
+ * `parseParticipantIdentity`, for the same reason.
+ */
+export function parseRoomName(roomName: string): string | null {
+  const match = /^event:(.+):main$/.exec(roomName);
+  return match ? match[1] : null;
+}
+
+/**
  * Pure decision function, deliberately separated from the DB lookup that
  * feeds it — this is what issue #2's tests exercise directly, without
  * needing a live `event_speakers` fixture (which can't be seeded through

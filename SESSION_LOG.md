@@ -4,6 +4,193 @@ Newest entry first.
 
 ---
 
+## 2026-08-09 — Session 11: Issue #13 — speaker seat state transitions
+
+**Goal**: Ship the write path `event_speakers` didn't have — atomic seat
+assignment/replacement, self-service voluntary leave, live LiveKit
+permission sync, and disconnect-webhook cleanup — starting from an
+architecture review and explicit assumptions before implementing, per the
+user's now-standing practice.
+
+**Completed work**:
+
+- **Design review before implementation**, surfacing a real authorization
+  question rather than picking an approach unilaterally: every write to
+  `event_speakers` needs *some* PostgREST-facing authorization, and this
+  app has no role between `anon`/`authenticated` and `service_role`.
+  Proposed self-service claiming (`auth.uid()` alone authorizes claiming
+  *any* contested seat) as the initial design; the user approved it but
+  added an explicit constraint after further review: the seat-claim
+  function must not become a generally exposed production action any
+  authenticated user can invoke — Phase 3's queue/voting (not built) is
+  what should gate who's allowed to claim a seat. Revised the design
+  accordingly before writing any code — see DECISIONS.md for the full
+  three-function authorization split this produced.
+- **Migration `00000000000006`**: a second partial unique index
+  (`event_speakers_active_profile_uniq`) closing a real gap in issue #1's
+  schema (nothing stopped one profile holding two seats in the same event
+  at once), plus three `security definer` functions —
+  `leave_speaker_seat` (self-service, `auth.uid()`-gated, granted to
+  `authenticated`), `claim_speaker_seat` and `end_speaker_seat` (atomic
+  assignment/replacement and reason-coded ending of someone else's
+  occupancy — deliberately **not** granted to `anon`/`authenticated`,
+  service-client-only). Applied via `supabase db push --linked` and
+  verified with `supabase migration list` (local/remote match); types
+  regenerated.
+- **`lib/supabase/service.ts`**: this project's first use of the
+  `service_role` key — a deliberate, narrowly-scoped exception to the
+  prior "never use it" stance (see DECISIONS.md for why), imported by
+  exactly three call sites, each independently gated before touching it.
+- **`lib/livekit/permissions.ts`**: `syncPublishPermission()`, pushing
+  `canPublish` live to an already-connected participant via
+  `RoomServiceClient.updateParticipant()`. Best-effort by design — logs
+  and swallows failures rather than throwing or retrying, since
+  `mintLiveKitToken` (issue #2) is the eventual-consistency fallback and
+  building a retry queue would be exactly the "prematurely introduce
+  distributed infrastructure" ARCHITECTURE.md's Vendor portability section
+  warns against for a prototype.
+- **`lib/repositories/event-speakers.ts`** gained `leaveSpeakerSeat`,
+  `claimSpeakerSeat`, `endSpeakerSeat` — thin wrappers over the three RPC
+  functions, each using the client tier its underlying function's grant
+  actually requires (session-bound client for `leaveSpeakerSeat`, service
+  client for the other two). `src/app/events/[id]/room/actions.ts` gained
+  a `leaveSpeakerSeat` Server Action composing the repository write with a
+  live permission push — no UI calls it yet (issue #3/#6), a tested
+  primitive like issue #1/#2's unwired functions before it.
+  `claimSpeakerSeat` deliberately has **no** Server Action wrapper at all
+  — creating one would itself be "generally exposing" it, contradicting
+  the user's constraint; only tests call it, via the same service-client
+  tier a real future caller would need.
+- **LiveKit webhook route** (`src/app/api/livekit/webhook/route.ts`):
+  verifies LiveKit's webhook signature (`WebhookReceiver`, the `Authorize`
+  header — confirmed by reading the installed SDK's source rather than
+  assuming the header name), parses `participant_left` events back into
+  `event_id`/`profile_id` via new inverse functions
+  (`parseParticipantIdentity`/`parseRoomName` in `lib/livekit/token.ts`,
+  returning `null` rather than throwing on malformed input — a webhook
+  payload is untrusted even after signature verification), and calls
+  `end_speaker_seat` with `reason: 'disconnected'`. No live permission
+  push follows the disconnect — the participant's already gone, so
+  there's nothing connected left to push to.
+- Tests: `event-speakers-transitions.test.ts` (real fixture rows — test
+  accounts created via the Auth admin API, not fake UUIDs, since these
+  functions write through real foreign keys) covering atomic
+  assignment, replacement history preservation, the second-seat rejection,
+  race safety (two concurrent claims for one open seat — exactly one
+  wins), disconnect/no-op safety, and — directly proving the user's
+  exposure constraint holds, not just documenting it — that
+  `claim_speaker_seat`/`end_speaker_seat` return `42501` for an ordinary
+  authenticated user while `leave_speaker_seat` succeeds for one's own
+  seat. `route.test.ts` signs real webhook payloads with `jose` (mirroring
+  `livekit-server-sdk`'s own `WebhookReceiver`/`TokenVerifier` scheme,
+  read from its source) to exercise the actual signature-verification
+  path, not a bypassed one. `permissions.test.ts` proves the best-effort
+  contract holds under every failure mode reproducible without a live
+  connected participant. All of the above `describe.skipIf` gracefully
+  without `SUPABASE_SERVICE_ROLE_KEY` configured. `token.test.ts` gained
+  round-trip/malformed-input cases for the new parse functions.
+- Documented in ARCHITECTURE.md (Data model, folder structure, Video plan,
+  a new "Who may transition a seat, and how" subsection under LiveKit
+  authorization model, Testing & Definition of Done), DECISIONS.md (a full
+  ADR on the authorization-model split and the `service_role` exception),
+  ROADMAP.md, README.md (service_role setup, webhook configuration note),
+  `.env.local.example`, CHANGELOG.md.
+
+- **`SUPABASE_SERVICE_ROLE_KEY` was added to `.env.local` partway through
+  this session** (the user added it themselves, per this project's
+  standing rule that credential-entering steps are never done through an
+  agent), which unblocked running the integration tests for real instead
+  of relying on their skip path. Doing so caught **three genuine bugs**
+  that reasoning about migration `00000000000006`'s SQL alone hadn't —
+  each fixed as its own forward migration rather than editing an already-
+  applied one, per this project's migration discipline:
+  - `service_role` had no table grants at all (this project's setup
+    doesn't inherit Supabase's usual default-privilege bootstrap for it) —
+    `service.from("events").insert(...)` failed with "permission denied
+    for table events." Fixed in `00000000000007` with an explicit grant
+    plus a matching `alter default privileges` for future tables.
+  - **`claim_speaker_seat`/`end_speaker_seat` were actually callable by
+    any authenticated (or anon) request**, despite never being granted to
+    `anon`/`authenticated` — PostgreSQL grants `EXECUTE` on a new function
+    to `PUBLIC` by default, and migration `00000000000006` added the
+    intended explicit grants but never revoked that default. This is
+    exactly the exposure the user's constraint on this issue was written
+    to prevent, happening silently — caught by the test written
+    specifically to prove that constraint held (it expected `42501` and
+    got a successful call instead). Fixed in `00000000000008`.
+  - `end_speaker_seat`'s no-op case (no active seat to end) returned a
+    JSON object with every field `null`, not `null` itself — a PL/pgSQL
+    unassigned-composite-variable subtlety compounded by how PostgREST
+    serializes a non-`SETOF` composite function's result. Fixed in
+    `00000000000009` (PL/pgSQL `FOUND` check) plus a matching guard in
+    `endSpeakerSeat()` (checking the row's `id` field, since even a
+    function that genuinely returns SQL `NULL` still arrives over
+    PostgREST as one row of null fields).
+  - Also caught and fixed: the race-safety test's own first draft asserted
+    the wrong invariant (that exactly one of two concurrent claims must be
+    rejected) — not a product bug, a test bug. `claim_speaker_seat`'s
+    "replace whoever's there" semantics mean both calls can legitimately
+    fulfill if they land closely enough together (the second cleanly
+    replaces the first's brand-new row); a true collision is the other
+    valid outcome, where the unique index rejects the loser. Rewrote the
+    assertion to check what's actually invariant regardless of
+    interleaving — never more than one active row for the seat, and every
+    non-active row cleanly closed out as `'replaced'`.
+  - Full writeup of all three (plus the test-assertion fix) in
+    DECISIONS.md; the `PUBLIC`-execute-by-default gotcha is now a standing
+    warning in ARCHITECTURE.md's Data model section for any future
+    `security definer` function.
+  - Also fixed along the way: the transitions test file's own first draft
+    called `listActiveSpeakers()` (the Next-request-bound repository
+    function) directly from a plain Vitest process, which fails on
+    `cookies()` outside a request scope — same limitation
+    `event-speakers.test.ts`'s existing comment already documented, just
+    missed when writing the new file. Replaced with a direct service-
+    client read. And the webhook route test originally required *real*
+    LiveKit project credentials to run at all, even though signature
+    signing/verification is a local HMAC/JWT check with no LiveKit API
+    call involved — switched to `vi.stubEnv`-ed fake credentials (same
+    pattern `token.test.ts` already uses for token minting), so it runs in
+    any environment, not just one with a live LiveKit project configured.
+
+**Files changed**: `supabase/migrations/00000000000006_speaker_seat_transitions.sql`
+through `00000000000009_fix_end_speaker_seat_null_return.sql` (four
+migrations total for this issue), `src/types/database.ts`,
+`src/lib/supabase/service.ts`, `src/lib/livekit/permissions.ts`,
+`src/lib/livekit/permissions.test.ts`, `src/lib/livekit/token.ts`,
+`src/lib/livekit/token.test.ts`, `src/lib/repositories/event-speakers.ts`,
+`src/lib/repositories/event-speakers-transitions.test.ts`,
+`src/app/events/[id]/room/actions.ts`,
+`src/app/api/livekit/webhook/route.ts`,
+`src/app/api/livekit/webhook/route.test.ts`, `ARCHITECTURE.md`,
+`DECISIONS.md`, `ROADMAP.md`, `README.md`, `.env.local.example`,
+`CHANGELOG.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: `claim_speaker_seat` has no production caller — by
+design, not an oversight (see above) — so, same shape of limitation issue
+#2 accepted for its `canPublish: true` branch, it's only exercised by
+tests, not walked through the real app end-to-end. The webhook route
+isn't reachable from local dev without a public tunnel (no LiveKit project
+can call `localhost`); verified instead by constructing real signed
+payloads (with fake-but-consistent credentials — see above).
+
+**Tests run**: `npm run lint` (clean), `npx tsc --noEmit` (clean),
+`npm run build` (clean — `/api/livekit/webhook` appears correctly in the
+route table), `npx vitest run` — **28/28 passing, zero skipped**, once
+`SUPABASE_SERVICE_ROLE_KEY` was configured and the three bugs above were
+fixed (was 16/28 passing with 12 skipped before the key was added).
+
+**Current build status**: Lint clean, typecheck clean, build clean, full
+test suite passing (28/28, no skips).
+
+**Recommended next task**: Issue #3 (room UI, `livekit-client`) — the
+first thing with an actual page to build against `getLiveKitToken` and,
+once a queue/authorization gate exists, `claimSpeakerSeat`. Phase 3's
+queue/voting design is the remaining prerequisite for `claim_speaker_seat`
+ever getting a real caller.
+
+---
+
 ## 2026-08-09 — Session 10: Issue #2 — LiveKit token endpoint (split from #13)
 
 **Goal**: Design and ship the LiveKit token endpoint — the enforcement

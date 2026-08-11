@@ -6,7 +6,14 @@
 // pure server-side logic anyway, no DOM needed, so node is also just the
 // correct environment on its own merits.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { determineCanPublish, getParticipantIdentity, getRoomName, mintLiveKitToken } from "./token";
+import {
+  determineCanPublish,
+  getParticipantIdentity,
+  getRoomName,
+  mintLiveKitToken,
+  parseParticipantIdentity,
+  parseRoomName,
+} from "./token";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 const fakeActiveSeat: EventSpeaker = {
@@ -37,6 +44,33 @@ describe("room and identity naming", () => {
   it("namespaces guest and account identities so they can never collide", () => {
     expect(getParticipantIdentity({ type: "guest", id: "g1" })).toBe("guest:g1");
     expect(getParticipantIdentity({ type: "profile", id: "p1" })).toBe("profile:p1");
+  });
+});
+
+describe("parseParticipantIdentity and parseRoomName (issue #13's webhook handler)", () => {
+  it("round-trips whatever getParticipantIdentity/getRoomName produce", () => {
+    expect(parseParticipantIdentity(getParticipantIdentity({ type: "profile", id: "p1" }))).toEqual({
+      type: "profile",
+      id: "p1",
+    });
+    expect(parseParticipantIdentity(getParticipantIdentity({ type: "guest", id: "g1" }))).toEqual({
+      type: "guest",
+      id: "g1",
+    });
+    expect(parseRoomName(getRoomName("abc-123"))).toBe("abc-123");
+  });
+
+  it("returns null for malformed input instead of throwing — webhook payloads are untrusted", () => {
+    expect(parseParticipantIdentity("not-namespaced")).toBeNull();
+    expect(parseParticipantIdentity("moderator:x")).toBeNull();
+    expect(parseParticipantIdentity("profile:")).toBeNull();
+    expect(parseRoomName("some-other-room")).toBeNull();
+    expect(parseRoomName("event:abc-123")).toBeNull();
+  });
+
+  it("handles a UUID with no special characters cleanly", () => {
+    const id = "00000000-0000-0000-0000-000000000001";
+    expect(parseParticipantIdentity(`profile:${id}`)).toEqual({ type: "profile", id });
   });
 });
 

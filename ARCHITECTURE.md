@@ -10,7 +10,7 @@
 | Backend | Supabase (Postgres, Auth, Realtime) | One project covers DB, auth, and realtime — no separate backend service in the MVP. See [Vendor portability](#vendor-portability) for how this choice is kept reversible. |
 | Schema management | Supabase CLI | Linked to the one live project (`xuzlgcfuwlcpejhctofv`). Migrations applied via `supabase db push --linked`, never hand-pasted into the dashboard. See [Migration workflow](#migration-workflow). |
 | Realtime | Supabase Realtime | Implemented for the pre-show lobby: chat messages (Postgres Changes), reactions (Postgres Changes), attendee presence. Not yet used for the future live room's votes/live-reactions. |
-| Video | LiveKit | Used for the two-speaker live audio/video. `livekit-server-sdk` installed and token minting implemented (issue #2); `livekit-client` (browser SDK) not yet installed — deferred to issue #3, which is the first thing that actually connects to a room. See [Video plan](#video-plan). |
+| Video | LiveKit | Used for the two-speaker live audio/video. `livekit-server-sdk` installed; token minting (issue #2) and the server-authoritative seat-transition/disconnect-webhook write path (issue #13) are implemented. `livekit-client` (browser SDK) not yet installed — deferred to issue #3, which is the first thing that actually connects to a room. See [Video plan](#video-plan). |
 | Deployment | Vercel | Not yet deployed. Local dev only so far. |
 
 ### Next.js 16: read this before writing app code
@@ -59,19 +59,29 @@ src/
       client.ts   Browser Supabase client (Client Components).
       server.ts   Server Supabase client (Server Components/Actions/Route
                    Handlers) — reads/writes the session via cookies.
+      service.ts  service_role client (issue #13) — bypasses RLS/grants
+                   entirely. Only imported by the LiveKit webhook route and
+                   the two trusted-server-only event-speakers write
+                   functions; see its own doc comment before adding a
+                   fourth caller.
     repositories/  All durable-data reads/writes go through here — see
                    Vendor portability. events.ts, chat.ts, profiles.ts,
-                   event-speakers.ts (read-only until issue #13's write
-                   path lands). Each exports plain domain types (not
+                   event-speakers.ts (read functions plus issue #13's three
+                   write functions — leaveSpeakerSeat, claimSpeakerSeat,
+                   endSpeakerSeat). Each exports plain domain types (not
                    aliased from database.ts) and plain async functions;
                    nothing outside this folder (and lib/supabase/, and the
                    documented Auth/Realtime/LiveKit exceptions) imports
-                   `createClient` from lib/supabase/.
+                   `createClient`/`createServiceClient` from lib/supabase/.
     livekit/
       token.ts      LiveKit token minting — see the Auth flow's sibling,
                    LiveKit authorization model, for the full design.
                    Direct SDK use, like Auth/Realtime — see Vendor
                    portability.
+      permissions.ts LiveKit `RoomServiceClient`-based live permission
+                   push (issue #13) — best-effort sync of `canPublish` to
+                   an already-connected participant. See LiveKit
+                   authorization model below.
     identity.ts    resolveIdentity() — "who is making this request,"
                    account or guest. Calls Supabase Auth directly (see
                    Vendor portability's Auth exception) and the profiles
@@ -462,9 +472,18 @@ Implemented:
   `disconnected`) and inserting a new one, never updating in place.
   **Account-only**, like `speaker_queue` below: `profile_id` is `not null`,
   no guest column. Publicly readable (guests watching need to see who's
-  speaking); **no write grant yet** — the authorization logic for "who's
-  allowed to occupy a seat" is issue #2's concern (LiveKit token minting),
-  not this migration's. `left_reason` is a `CHECK`-constrained `text`
+  speaking); still no direct table-level write grant — every write goes
+  through one of three `security definer` functions added in migration
+  `00000000000006` (issue #13): `leave_speaker_seat` (self-service,
+  `auth.uid()`-gated, granted to `authenticated`), and
+  `claim_speaker_seat`/`end_speaker_seat` (trusted-server-only, no
+  anon/authenticated grant at all — callable only via the `service_role`
+  client). See [LiveKit authorization model](#livekit-authorization-model)
+  below for why that split exists and DECISIONS.md for the full reasoning.
+  A second partial unique index, `event_speakers_active_profile_uniq` on
+  `(event_id, profile_id) where left_at is null`, was added alongside —
+  nothing before issue #13 stopped one profile from holding two seats in
+  the same event at once. `left_reason` is a `CHECK`-constrained `text`
   column, not a native Postgres enum (easier to extend later — see
   `lib/repositories/event-speakers.ts` for the corresponding hand-typed
   TypeScript union, since the generator can't express a `CHECK`
@@ -507,6 +526,17 @@ auto-apply the privileges the Table Editor UI would, which caused a real
 bug in migration `00000000000002` (see DECISIONS.md); every migration
 since has granted explicitly and should keep doing so.
 
+**A new `security definer` function needs the opposite discipline**:
+PostgreSQL grants `EXECUTE` on a new function to `PUBLIC` by default,
+unlike tables — issue #13's `claim_speaker_seat`/`end_speaker_seat` were
+actually callable by any request, real bug, until migration
+`00000000000008` explicitly `REVOKE EXECUTE ... FROM PUBLIC` on all three
+of that issue's functions (see DECISIONS.md). **Any future
+trusted-server-only or self-service-scoped function must revoke `PUBLIC`
+execute in the same migration that creates it** — don't rely on simply
+omitting a `GRANT` to `anon`/`authenticated` the way omitting a table
+`GRANT` works.
+
 ## Realtime plan
 
 Implemented for the pre-show lobby (`hooks/use-lobby-realtime.ts`):
@@ -528,14 +558,18 @@ above.
 
 LiveKit will host the two-speaker audio/video room.
 
-**Token minting is implemented** (issue #2, `lib/livekit/token.ts` +
-`src/app/events/[id]/room/actions.ts`'s `getLiveKitToken` Server Action).
-The room UI itself (issue #3, which installs `livekit-client` and
-actually connects) is not — no `room/page.tsx` exists yet, only the
-action file, so there's nothing to render into yet. See
-[Authorization model](#livekit-authorization-model) below for the full
-design and why the write path (issue #13) is a deliberately separate
-piece of work.
+**Token minting** (issue #2, `lib/livekit/token.ts` +
+`src/app/events/[id]/room/actions.ts`'s `getLiveKitToken` Server Action)
+**and the server-authoritative seat-transition write path** (issue #13:
+`lib/repositories/event-speakers.ts`'s `leaveSpeakerSeat`/
+`claimSpeakerSeat`/`endSpeakerSeat`, `lib/livekit/permissions.ts`'s live
+permission push, and the disconnect webhook at
+`src/app/api/livekit/webhook/route.ts`) are both implemented. The room UI
+itself (issue #3, which installs `livekit-client` and actually connects)
+is not — no `room/page.tsx` exists yet, only action/repository/route
+files, so there's nothing to render into yet and no production caller for
+`claimSpeakerSeat` (Phase 3's queue/voting decides who gets to call it —
+see [LiveKit authorization model](#livekit-authorization-model) below).
 
 ## LiveKit authorization model
 
@@ -578,17 +612,112 @@ publishing until their token happened to expire or they happened to
 reconnect — a real, visible contradiction of "the audience controls the
 stage." So token expiry is set generously (avoiding pointless
 reconnection churn) and revocation instead happens **live**, via
-LiveKit's Server SDK `updateParticipantPermissions()` call against an
-already-connected participant — no reconnect required, permission change
-takes effect immediately. That call, the atomic DB write that must
-accompany it, and cleanup for hard disconnects (a participant who closes
-their laptop instead of leaving, whose seat would otherwise stay
-permanently occupied — the partial unique index from
-[Data model](#data-model) prevents a *double*-booked seat, not a *stuck*
-one) are issue #13's scope, not this one's. Issue #2 only answers "what
-does the token say *right now*, given current `event_speakers` state" —
-it never mutates that state. See DECISIONS.md for the full reasoning
-behind that split.
+`lib/livekit/permissions.ts`'s `syncPublishPermission()` — LiveKit's
+Server SDK `RoomServiceClient.updateParticipant()` call against an
+already-connected participant, no reconnect required. Issue #2 only
+answers "what does the token say *right now*, given current
+`event_speakers` state"; issue #13 is what actually mutates that state and
+keeps LiveKit in sync when it does. See DECISIONS.md for the full
+reasoning behind that split.
+
+### Who may transition a seat, and how (issue #13)
+
+`event_speakers` has no direct table-level write grant (same as before);
+every write goes through one of three `security definer` Postgres
+functions (migration `00000000000006`, corrected by three follow-up
+migrations the integration tests below caught real bugs for —
+`00000000000007` grants `service_role` the table access it turned out not
+to have by default in this project, `00000000000008` revokes the `PUBLIC`
+execute grant Postgres adds to new functions by default (see the Data
+model section above), and `00000000000009` fixes `end_speaker_seat`
+returning an all-null composite instead of genuine `NULL` for its no-op
+case), each with a deliberately different authorization model rather than
+one generic "update a seat" function:
+
+- **`leave_speaker_seat(event_id)`** — self-service voluntary leave.
+  Ends the *caller's own* active row, found via `auth.uid()` — never a
+  `profile_id` parameter, so this can only ever remove the caller's own
+  seat. Granted to `authenticated`; safe to expose broadly for exactly
+  that reason. `lib/repositories/event-speakers.ts`'s `leaveSpeakerSeat()`
+  wraps it, and `src/app/events/[id]/room/actions.ts`'s `leaveSpeakerSeat`
+  Server Action composes that with a live permission push. No UI calls it
+  yet (issue #3/#6 build the room's "leave the stage" control).
+- **`claim_speaker_seat(event_id, profile_id, seat_number)`** — atomic
+  assignment/replacement: ends whoever currently holds the seat
+  (`left_reason = 'replaced'`) and inserts the new occupant, in one
+  transaction. **Not granted to `anon`/`authenticated` at all** — callable
+  only via the `service_role` client
+  (`lib/supabase/service.ts`/`createServiceClient()`). This was a
+  deliberate late change from an earlier self-service design: letting any
+  authenticated user claim/replace a seat directly would let anyone seize
+  the microphone from the current speaker at will, which is exactly what
+  PRODUCT.md's "the audience controls the stage" principle exists to
+  prevent — the audience decides collectively (Phase 3's queue/voting,
+  not built yet), not any individual by calling an RPC. This issue ships
+  the atomic, race-safe *mechanism*; deciding *who* is allowed to call it
+  is explicitly out of scope, left for whatever authorization gate Phase 3
+  builds. There is no production caller today — only tests exercise it
+  directly via the service client, the same access tier a real caller
+  would eventually need.
+- **`end_speaker_seat(event_id, profile_id, reason)`** — ends a specific
+  profile's occupancy without a replacement (`moderator_removed`,
+  `event_ended`, or `disconnected`). Same trusted-server-only tier as
+  `claim_speaker_seat`, for the same root reason — there's no
+  `auth.uid()`-shaped authorization for "end someone else's seat." Its one
+  real caller is the LiveKit webhook route
+  (`src/app/api/livekit/webhook/route.ts`), which independently verifies
+  LiveKit's webhook signature (`WebhookReceiver`, same
+  `LIVEKIT_API_KEY`/`SECRET` pair token minting already uses — not a
+  separate credential) before calling it with `reason: 'disconnected'` —
+  that signature check *is* the authorization; the function just trusts
+  already-verified server code. `moderator_removed` and `event_ended` are
+  accepted values with no caller yet: issue #7 (the `profiles.moderator`
+  flag doesn't exist) and a future event-lifecycle feature are what will
+  authorize those.
+
+**Why `service_role` here, when this project otherwise never uses it**:
+every Postgres function still needs *some* PostgREST-facing grant to be
+callable at all, and this app has no third role between `anon`/
+`authenticated` and `service_role` — there's no way to express "trusted
+server code, but not literally bypass-everything" without inventing a
+custom mechanism. Given every write reachable through `service_role` here
+is already independently gated (a verified webhook signature, or simply
+"no caller exists yet"), and the alternative (a hand-rolled shared-secret
+check inside each function) is meaningfully more complexity for no real
+security improvement, `service_role` — scoped to exactly
+`lib/supabase/service.ts`, imported only by the webhook route and these
+two repository functions — was judged the right tradeoff. See
+DECISIONS.md for the fuller reasoning and the self-service design this
+replaced.
+
+**Disconnect cleanup, concretely**: LiveKit's `participant_left` webhook
+fires after LiveKit's own reconnect grace period elapses (a platform
+default this project doesn't override), not on a transient network blip.
+The handler verifies the signature, parses the room/participant identity
+back into `event_id`/`profile_id` (`parseRoomName`/
+`parseParticipantIdentity` — the inverse of `getRoomName`/
+`getParticipantIdentity`, returning `null` rather than throwing on
+anything malformed, since a webhook payload is untrusted input even after
+signature verification proves *LiveKit* sent it), and calls
+`end_speaker_seat` with `reason: 'disconnected'` — a safe no-op if that
+identity never held a seat. No live permission push follows: the
+participant is already gone, so there's no connected participant to push
+a change to. The DB write alone fixes the "stuck seat" problem; the next
+token request correctly sees the seat as open.
+
+**Live permission push is best-effort, never authoritative.** By the time
+`syncPublishPermission()` runs, the DB write has already durably
+succeeded — the push is purely about making an *already-connected*
+participant's experience update immediately instead of waiting for their
+next token request. If it fails (participant not connected, LiveKit
+unreachable), the failure is logged and swallowed, never thrown or
+retried: `mintLiveKitToken` (issue #2) re-derives the correct
+`canPublish` from `event_speakers` on every token request regardless, so
+the participant self-corrects the next time they connect or reconnect.
+Building an actual retry queue for this would be exactly the "prematurely
+introduce distributed infrastructure" [Vendor portability](#vendor-portability)
+warns against, for a prototype where this failure mode is rare and
+self-healing.
 
 ## Responsive implementation notes
 
@@ -731,6 +860,13 @@ until:
   crypto in a way that breaks `jose`-based signing (`livekit-server-sdk`'s
   dependency) with an opaque "payload must be an instance of Uint8Array"
   error that doesn't point at the actual cause. See `lib/livekit/token.test.ts`.
+- **A test that needs `SUPABASE_SERVICE_ROLE_KEY` (the trusted-server-only
+  `event_speakers` functions, the LiveKit webhook route) must
+  `describe.skipIf` when it's unset, not fail** — same discipline as the
+  existing anon-key integration tests, so a fresh clone without that key
+  in `.env.local` still gets a passing `npm test`, just with fewer tests
+  actually exercised. See `lib/repositories/event-speakers-transitions.test.ts`
+  and `src/app/api/livekit/webhook/route.test.ts`.
 - `npm run lint`, `npm run build` (which type-checks), and any relevant
   tests pass.
 - Relevant docs (this file, PRODUCT.md, ROADMAP.md, CHANGELOG.md,

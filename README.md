@@ -53,9 +53,11 @@ away** — gating happens at the specific action, not the page.
 - **Schema management**: Supabase CLI, linked to the one live project —
   see "Database migrations" below
 - **Realtime**: Supabase Realtime
-- **Video**: LiveKit — server-side token minting implemented (issue #2);
-  the room UI that actually connects is not yet built (issue #3) — see
-  ROADMAP.md and ARCHITECTURE.md's LiveKit authorization model
+- **Video**: LiveKit — server-side token minting (issue #2) and the
+  server-authoritative seat-transition/disconnect-cleanup write path
+  (issue #13) are implemented; the room UI that actually connects is not
+  yet built (issue #3) — see ROADMAP.md and ARCHITECTURE.md's LiveKit
+  authorization model
 - **Deployment**: Vercel (not yet deployed — local development only so far)
 
 > **Note on Next.js version**: this project uses Next.js 16, which renamed
@@ -111,7 +113,27 @@ away** — gating happens at the specific action, not the page.
    without these set — they're only needed to actually connect to a room,
    which nothing in the app does yet.
 
-6. Run the dev server:
+6. **Optional, for the issue #13 write-path integration tests and the
+   LiveKit webhook route to work**: the Supabase service_role key
+   (Project Settings → API → service_role, *not* the anon key). Bypasses
+   RLS entirely — see `.env.local.example`'s comment and
+   `lib/supabase/service.ts` before using it anywhere else.
+
+   ```
+   SUPABASE_SERVICE_ROLE_KEY=
+   ```
+
+   Without it, `npm test` still passes — the tests that need it
+   (`*-transitions.test.ts`, `app/api/livekit/webhook/route.test.ts`) skip
+   gracefully rather than failing. To actually receive disconnect webhooks
+   from a real LiveKit room, configure a webhook pointing at
+   `/api/livekit/webhook` in the LiveKit project dashboard (Settings →
+   Webhooks) — it uses the same `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`
+   above, not a separate credential. This isn't reachable from local dev
+   without a public tunnel (e.g. ngrok); see the route handler's own
+   comment for why that's not a blocker for testing its logic.
+
+7. Run the dev server:
 
    ```bash
    npm run dev
@@ -141,7 +163,9 @@ src/
     landing/      Landing-page-specific components
     auth/         Auth form components
   lib/
-    supabase/     Supabase client factories (browser + server)
+    supabase/     Supabase client factories (browser, server, and a
+                   service_role client used only by trusted server-only
+                   code — see its own doc comment before using it)
     repositories/ Durable data access — see ARCHITECTURE.md's Vendor
                    portability section
     utils.ts      Small shared helpers (e.g. cn())

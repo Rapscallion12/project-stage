@@ -48,6 +48,47 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
   is). The atomic seat-assignment write path, live permission sync, and
   disconnect cleanup are split into a new issue (#13) rather than bundled
   here — see DECISIONS.md for why.
+- **Speaker seat state transitions** (issue #13, migration
+  `00000000000006`) — the write path `event_speakers` didn't have until
+  now, as three `security definer` Postgres functions with three
+  different authorization models rather than one generic "update a seat":
+  `leave_speaker_seat` (self-service voluntary leave, `auth.uid()`-gated,
+  granted to `authenticated`), and `claim_speaker_seat`/`end_speaker_seat`
+  (atomic assignment/replacement and reason-coded ending of someone else's
+  occupancy — deliberately **not** granted to `anon`/`authenticated`,
+  callable only via a new `service_role` client, `lib/supabase/service.ts`
+  — the first use of `service_role` in this project; see DECISIONS.md for
+  why granting these broadly would let any authenticated user seize the
+  microphone at will, and why `service_role` was judged the right
+  trusted-server mechanism over a hand-rolled alternative). A second
+  partial unique index (`event_speakers_active_profile_uniq`) now stops
+  one profile from holding two seats in the same event at once — a real
+  gap issue #1's schema had. `lib/livekit/permissions.ts`'s
+  `syncPublishPermission()` pushes `canPublish` changes live to an
+  already-connected participant via `RoomServiceClient.updateParticipant()`
+  (best-effort — `mintLiveKitToken` is the eventual-consistency fallback
+  if it fails). A new LiveKit webhook route
+  (`src/app/api/livekit/webhook/route.ts`) verifies LiveKit's webhook
+  signature and ends a disconnected participant's occupancy
+  (`left_reason: 'disconnected'`), fixing the "stuck seat" problem — no
+  live permission push follows since there's no connected participant
+  left to push to. `claim_speaker_seat` has no production caller yet by
+  design (Phase 3's queue/voting is what will decide who's allowed to call
+  it); integration tests exercise it directly, and skip gracefully
+  (`describe.skipIf`) without `SUPABASE_SERVICE_ROLE_KEY` configured.
+  Running those tests for real caught three genuine bugs, each fixed as
+  its own forward migration rather than editing `00000000000006` in
+  place: `service_role` had no table grants at all in this project
+  (`00000000000007`); `claim_speaker_seat`/`end_speaker_seat` were
+  actually callable by anyone, because PostgreSQL grants `EXECUTE` to
+  `PUBLIC` by default and migration `00000000000006` never revoked it
+  (`00000000000008` — the exact exposure the user's constraint on this
+  issue set out to prevent, caught by the test written to prove that
+  constraint held); and `end_speaker_seat`'s no-op case returned a
+  garbage all-null object instead of `NULL` (`00000000000009`, plus a
+  matching fix in `endSpeakerSeat()` for how PostgREST serializes a
+  composite-returning function's `NULL`). See DECISIONS.md for the full
+  writeup of all three.
 - `livekit-server-sdk` installed (server-side only; `livekit-client`
   deferred to issue #3, the first thing that actually connects to a
   room). New Vitest environment-override pattern documented

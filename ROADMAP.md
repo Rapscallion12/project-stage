@@ -114,19 +114,27 @@ precedent bleed into the live room, which genuinely does need to.
 
 - [x] `event_speakers` table (issue #1) **(account-only** — speakers must
       have an account; see PRODUCT.md). Append-only occupancy episodes,
-      room-agnostic, read-only from the app until issue #13's write path
-      lands. See ARCHITECTURE.md's Data model section and DECISIONS.md.
+      room-agnostic. See ARCHITECTURE.md's Data model section and
+      DECISIONS.md.
 - [x] LiveKit SDK (server) + token endpoint (issue #2) — mints tokens from
       *current* `event_speakers` occupancy; server-authoritative
       `canPublish`, generous TTL (expiry isn't the revocation mechanism).
       See ARCHITECTURE.md's LiveKit authorization model.
-- [ ] Speaker state transitions (issue #13 — split out of #2 after
+- [x] Speaker state transitions (issue #13 — split out of #2 after
       designing the full authorization model surfaced it needed its own
-      issue; see DECISIONS.md): atomic seat assignment, live
-      `updateParticipantPermissions()` sync, disconnect-webhook cleanup.
-      Blocks real dynamic speaker promotion; #3/#4 below can still be
-      built and manually tested against hand-seeded `event_speakers` rows
-      without it.
+      issue; see DECISIONS.md): atomic seat assignment/replacement
+      (`claim_speaker_seat`), self-service voluntary leave
+      (`leave_speaker_seat`), live permission sync
+      (`syncPublishPermission`/`RoomServiceClient.updateParticipant()`),
+      and disconnect-webhook cleanup (`end_speaker_seat` +
+      `/api/livekit/webhook`). `claim_speaker_seat`/`end_speaker_seat` are
+      deliberately trusted-server-only (`service_role`, no
+      anon/authenticated grant) with no production caller yet — see
+      ARCHITECTURE.md's LiveKit authorization model and DECISIONS.md for
+      why. Real dynamic speaker promotion still needs Phase 3's
+      queue/voting to decide *who* gets to call `claim_speaker_seat`;
+      #3/#4 below can be built and manually tested against hand-seeded
+      `event_speakers` rows without that.
 - [ ] Two-speaker live audio/video room (`livekit-client`, room UI —
       issue #3), with adaptive video quality and
       reconnect handling on flaky networks, and explicit handling of both

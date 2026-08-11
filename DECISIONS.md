@@ -3,6 +3,200 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-11 — Three real bugs the issue #13 integration tests caught, fixed as forward migrations
+
+**Problem**: Running issue #13's integration tests for real (once
+`SUPABASE_SERVICE_ROLE_KEY` was configured) surfaced three genuine bugs
+that unit-level reasoning about the migration's SQL hadn't caught. Each
+is recorded here because each is a *pattern*, not a one-off typo — the
+next migration that introduces a new `security definer` function or a new
+`service_role` caller can hit the same thing.
+
+1. **`service_role` had no table grants at all.** The service client's
+   very first real call (`events.insert(...)` in a test fixture) failed
+   with "permission denied for table events." `service_role` bypasses
+   RLS, but RLS bypass and the underlying Postgres table `GRANT` are
+   separate privilege layers — this project's tables were never granted
+   to `service_role` (only `anon`/`authenticated`, deliberately, per
+   table), and this project's setup turned out not to inherit the
+   standard Supabase default-privilege bootstrap that normally makes that
+   unnecessary. **Fix** (migration `00000000000007`): explicit
+   `grant ... on all tables in schema public to service_role`, plus a
+   matching `alter default privileges` so future tables inherit it
+   automatically — the one place a blanket grant is correct instead of
+   per-table, since `service_role` having full table access isn't an
+   access-control decision the way `anon`/`authenticated` grants are, it's
+   what the role is documented to mean.
+2. **`claim_speaker_seat`/`end_speaker_seat` were callable by anyone,
+   despite never being granted to `anon`/`authenticated`.** This is the
+   one that mattered most: it's exactly the exposure the user's
+   constraint on this issue was written to prevent, and it was happening
+   silently. Cause: PostgreSQL grants `EXECUTE` on a new function to
+   `PUBLIC` by default, unlike tables (which start with no privileges for
+   anyone). Migration `00000000000006` added the *intended* explicit
+   grants but never revoked the default `PUBLIC` one those were supposed
+   to replace — confirmed via `select proacl from pg_proc where proname =
+   'claim_speaker_seat'`, which showed an empty-role (`PUBLIC`) entry
+   granting execute. The test written specifically to prove the exposure
+   constraint held (signing in as an ordinary user and asserting `42501`
+   on both functions) is what caught this — it failed with "expected null
+   not to be null" instead, i.e. the call had simply succeeded. **Fix**
+   (migration `00000000000008`): explicit `revoke execute ... from
+   public` on all three functions. Documented in ARCHITECTURE.md's Data
+   model section as a standing rule: a new `security definer` function
+   must revoke `PUBLIC` execute in the same migration that creates it,
+   never rely on omission the way a table grant works.
+3. **`end_speaker_seat`'s no-op case returned a garbage object, not
+   `NULL`.** When its `UPDATE ... RETURNING` matched zero rows (the
+   intended safe no-op), the PL/pgSQL `v_row` variable was never assigned
+   — but an unassigned composite variable is a row of all-NULL *fields*,
+   not SQL `NULL` itself. `RETURN v_row` returned that, which PostgREST
+   (calling a non-`SETOF` composite-returning function via `FROM
+   fn(...)`, which always contributes exactly one row) serialized as
+   `{"id": null, "event_id": null, ...}` — a real JSON object, not `null`.
+   `endSpeakerSeat()`'s `data ?? null` check only catches genuine JSON
+   `null`, so callers (the LiveKit webhook handler included) were getting
+   a truthy garbage object where they expected — and the doc comment
+   promised — `null`. **Fix**: migration `00000000000009` replaces the
+   function body to check PL/pgSQL's `FOUND` variable (set by the
+   preceding `UPDATE` to whether it matched a row) and `return null`
+   explicitly when it didn't — the correct SQL-level fix. That alone
+   wasn't sufficient, though: PostgREST's FROM-clause-call behavior means
+   even a function that *genuinely* returns SQL `NULL` still serializes as
+   one row of null fields once composite-typed. `endSpeakerSeat()` in
+   `lib/repositories/event-speakers.ts` was also updated to check the
+   row's `id` field rather than trusting `data` itself to be `null` —
+   belt-and-suspenders, but the JS-side check is what's actually load-
+   bearing given the PostgREST behavior.
+
+Also worth recording: the first attempt at the race-safety integration
+test asserted the wrong invariant (`exactly one of two concurrent claims
+must reject`), and failed on a run where both fulfilled. That's not a
+bug — `claim_speaker_seat`'s own semantics are "replace whoever's there,"
+so if the two calls happen to land closely enough that the first fully
+commits before the second's `UPDATE` step runs, the second legitimately
+replaces the first's brand-new row, and *both* promises correctly
+fulfill. A true concurrent collision (both transactions' `UPDATE` running
+before either `INSERT` commits) is the other legitimate outcome, and
+*that's* the one where the partial unique index causes a rejection. The
+test now asserts the property that's actually invariant regardless of
+interleaving — never more than one active row for the seat afterward, and
+every non-active row for that seat properly closed out as `'replaced'` —
+rather than asserting a specific fulfilled/rejected split that timing
+doesn't guarantee either way.
+
+**Reason this is recorded here rather than just fixed silently**: all
+three are the kind of gotcha that reads as obvious in hindsight but isn't
+something migration-writing or code review alone would have caught —
+verifying against the real linked project, not just reasoning about the
+SQL, is what surfaced each one. Consistent with why this project's
+integration tests hit the real database instead of mocking it.
+
+**Tradeoffs**: None beyond the three extra migrations
+(`00000000000007`–`00000000000009`) needed to land on top of
+`00000000000006` rather than editing it in place — consistent with this
+project's "never edit an applied migration, write a new forward one"
+rule, same as the `--linked` reset guidance in the Migration workflow
+section.
+
+---
+
+## 2026-08-09 — Issue #13's write path: three functions with three different authorization models, and where `service_role` enters this project
+
+**Problem**: `event_speakers` (issue #1) was read-only from the app's
+perspective; issue #13 had to add the actual write path — atomic seat
+assignment/replacement, voluntary leave, disconnect cleanup — without a
+table-level grant that would let any authenticated client write directly.
+Every write needs *some* PostgREST-facing authorization, and this
+project's Postgres functions are `security definer` (they run with the
+function owner's table access, elevated above the caller's own grants),
+so the real question was: what authorizes the *call*, per operation?
+
+**Alternatives considered, per operation**:
+1. One generic `assign_speaker(event_id, profile_id, seat_number)`
+   function, granted to `authenticated`, callable by anyone.
+2. Self-service: a claiming user calls a function that ends whoever
+   currently holds the seat and inserts themselves, authorized by
+   `auth.uid()` alone (no special permission needed beyond being logged
+   in) — the design this session initially proposed and the user
+   approved, reasoning that "claiming" a contested resource doesn't need
+   permission *over* its previous holder.
+3. Split by who the operation acts on: functions that only ever act on
+   the *caller's own* row are `auth.uid()`-gated and safe to expose
+   broadly; functions that act on *someone else's* row require a
+   different, trusted-server-only authorization tier.
+4. For that trusted-server tier specifically: a hand-rolled shared-secret
+   parameter checked inside the function (via a Postgres `current_setting`
+   or similar), avoiding `service_role` entirely.
+
+**Decision**: Option 3, with `service_role` (not option 4) as the
+trusted-server tier's actual mechanism.
+
+- `leave_speaker_seat(event_id)` — self-service, `auth.uid()`-gated,
+  granted to `authenticated`. Ends only the caller's own row.
+- `claim_speaker_seat(event_id, profile_id, seat_number)` and
+  `end_speaker_seat(event_id, profile_id, reason)` — **not** granted to
+  `anon`/`authenticated` at all. Callable only via the `service_role`
+  client (`lib/supabase/service.ts`, introduced by this issue).
+
+**Reason this isn't option 2, despite it being approved first**: revisiting
+it, self-service claiming has a real flaw — without Phase 3's queue/voting
+system built yet (and it deliberately isn't, this issue), granting
+`claim_speaker_seat` to any authenticated user means *any* logged-in
+account could seize the microphone from the current speaker at will,
+repeatedly, adversarially. That's not an edge case to accept for a
+prototype, it's the direct opposite of PRODUCT.md's "the audience controls
+the stage" — the audience (collectively, via a mechanism that doesn't
+exist yet) should decide, not any individual by calling an RPC. The user
+caught this and set the constraint explicitly: ship the atomic,
+race-safe *mechanism* in this issue, but it must not become a generally
+exposed production action — Phase 3's queue/voting is what will own
+deciding *who* is allowed to call it. `end_speaker_seat` has the same
+shape of problem (ending *someone else's* occupancy) for the same reason.
+
+**Reason this is `service_role` and not option 4**: every write reachable
+through `service_role` here is already independently authorized before it
+ever reaches Postgres — the LiveKit webhook route verifies LiveKit's
+webhook signature before calling `end_speaker_seat`, and
+`claim_speaker_seat` has no caller at all yet. A hand-rolled shared secret
+stored in a Postgres GUC would add real complexity (a value that can't
+simply live in a migration file, since migrations are committed to git —
+it would need Postgres Vault or an out-of-band `ALTER DATABASE ... SET`
+step) for no actual security improvement over a mechanism (`service_role`)
+Supabase already provides and documents for exactly this scenario:
+trusted, non-client-reachable backend code. This is a deliberate,
+narrowly-scoped exception to this project's prior stance of never using
+`service_role` — see ARCHITECTURE.md's Vendor portability section, which
+that stance predates. It is not a general reversal: `service_role` is
+used in exactly one file (`lib/supabase/service.ts`), imported by exactly
+three call sites (the webhook route, `claimSpeakerSeat`, `endSpeakerSeat`),
+each of which has its own independent gate before touching it.
+
+**A second partial unique index** (`event_speakers_active_profile_uniq`
+on `(event_id, profile_id) where left_at is null`) was added in the same
+migration — a genuine gap in issue #1's schema surfaced while designing
+`claim_speaker_seat`: nothing stopped the same profile from holding two
+seats in one event at once. `claim_speaker_seat` relies on it as the real
+race-safety backstop (an application-level existence check is only a
+friendlier early error; concurrent callers are resolved by the unique
+indexes, not by app logic), same pattern as the existing per-seat index.
+
+**Tradeoffs**: `claim_speaker_seat` ships with no production caller and no
+way to exercise it from the app UI — only tests call it, via the same
+`service_role` access tier a real future caller (Phase 3) would need. This
+is the same "ship the primitive, no UI trigger yet" shape issues #1 and #2
+already established, just one level further (no Server Action stub
+either, since creating one would itself be "generally exposing" it). The
+integration tests that prove this all works (race safety, replacement
+history, the authorization boundary itself) require
+`SUPABASE_SERVICE_ROLE_KEY` in `.env.local` and real fixture rows (test
+accounts created via the Auth admin API, not fake UUIDs, since these
+functions write through real foreign keys) — they `describe.skipIf` when
+that key is absent, same discipline as the existing anon-key integration
+tests.
+
+---
+
 ## 2026-08-09 — LiveKit token minting (issue #2) is split from seat-state writes (issue #13)
 
 **Problem**: Issue #2 was originally scoped as "LiveKit SDK integration
