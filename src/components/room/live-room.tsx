@@ -30,6 +30,7 @@ export function LiveRoom({
   initialSpeakers,
   initialMessages,
   initialReactions,
+  initialHasPendingRequest,
 }: {
   event: Event;
   identity: Identity;
@@ -37,6 +38,8 @@ export function LiveRoom({
   initialSpeakers: EventSpeaker[];
   initialMessages: LobbyMessage[];
   initialReactions: Record<string, ReactionState>;
+  /** Issue #14: whether the caller already has a pending speaker request, fetched server-side. */
+  initialHasPendingRequest: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
   const { speakers, roomStatus } = useActiveSpeakers(event.id, initialSpeakers);
@@ -56,7 +59,9 @@ export function LiveRoom({
     roomStatus,
     speakers,
     myIdentity,
+    identity,
     isSpeaker,
+    hasPendingRequest: initialHasPendingRequest,
     getParticipant: connection.getParticipant,
     participantCount: connection.participantCount,
     connectionStatus: connection.status,

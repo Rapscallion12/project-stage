@@ -18,6 +18,8 @@ export type LobbyMessage = {
   author_guest_id: string | null;
   body: string;
   created_at: string;
+  /** See ChatMessage's doc comment in lib/repositories/chat.ts — a permanent "was this a mic request" marker, issue #14. */
+  is_speaker_request: boolean;
 };
 
 export type ReactionState = { count: number; reactedByMe: boolean };

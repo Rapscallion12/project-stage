@@ -89,9 +89,12 @@ src/
                    Vendor portability. events.ts, chat.ts, profiles.ts,
                    event-speakers.ts (read functions plus issue #13's three
                    write functions — leaveSpeakerSeat, claimSpeakerSeat,
-                   endSpeakerSeat). Each exports plain domain types (not
-                   aliased from database.ts) and plain async functions;
-                   nothing outside this folder (and lib/supabase/, and the
+                   endSpeakerSeat), speaker-requests.ts (issue #14 —
+                   requestToSpeak, withdrawSpeakerRequest,
+                   rankPendingSpeakerRequests, markSpeakerRequestGranted).
+                   Each exports plain domain types (not aliased from
+                   database.ts) and plain async functions; nothing
+                   outside this folder (and lib/supabase/, and the
                    documented Auth/Realtime/LiveKit exceptions) imports
                    `createClient`/`createServiceClient` from lib/supabase/.
     livekit/
@@ -114,6 +117,12 @@ src/
     room-status.ts Pure function: room status ("waiting"/"selecting"/
                    "live") from an active-speaker count (issue #3). Same
                    "no Supabase, no I/O" discipline as events.ts.
+    speaker-queue.ts Pure functions behind issue #14's claim-eligibility
+                   gate: findOpenSeat, isEligibleToClaim,
+                   decideClaimEligibility (unit-tested directly since the
+                   Server Action that uses it can't be, the same "extract
+                   the decision, keep the I/O thin" pattern as
+                   determineCanPublish/shouldPublish/applySpeakerChange).
     config.ts      PROTOTYPE_CONFIG — the single toggle point for
                    loosening/tightening guest access later.
     utils.ts       Small framework-agnostic helpers (e.g. cn()).
@@ -500,7 +509,7 @@ Implemented:
   ending the current row (`left_at` + a constrained `left_reason`:
   `voluntary` / `replaced` / `moderator_removed` / `event_ended` /
   `disconnected`) and inserting a new one, never updating in place.
-  **Account-only**, like `speaker_queue` below: `profile_id` is `not null`,
+  **Account-only**, like `speaker_requests` below: `profile_id` is `not null`,
   no guest column. Publicly readable (guests watching need to see who's
   speaking); still no direct table-level write grant — every write goes
   through one of three `security definer` functions added in migration
@@ -540,21 +549,29 @@ Implemented:
   presentation-only. Also in the `supabase_realtime` publication as of
   the same migration, so the room can subscribe to seat changes live —
   see [Realtime plan](#realtime-plan).
+- **`event_chat_messages.is_speaker_request`** and **`speaker_requests`**
+  (migration `00000000000011`, issue #14) — the speaker request queue.
+  **Not** a generic ordered waiting-list table, deliberately: a mic
+  request is a chat message with a permanent boolean flag on it, not a
+  separate entity — see [Speaker request queue](#speaker-request-queue)
+  below for the full design, including why this table only stores
+  lifecycle (`pending`/`granted`/`withdrawn`) and never duplicates
+  message content, and how it leaves room for a future pinned/featured
+  comment surface without a schema change.
 
 Not yet implemented (planned — see ROADMAP.md for sequencing). Guest
 eligibility is called out explicitly per table since it's a schema-level
 decision, not just a UI one:
 
-- `speaker_queue` — ordered per-event queue of account holders requesting a
-  seat, ordered by a function of wait time and reputation. Account-only —
-  no `guest_session_id` column; the insert path itself requires auth.
 - Live-room reactions (Phase 3) — **not the same table as
   `event_chat_message_reactions` above.** These are the actually
   high-frequency case (repeated taps during a live conversation) and
   should be ephemeral Realtime broadcast, not a table with a row per tap
   — see Vendor portability's "Realtime traffic vs. durable writes" for why.
-- `comments` — audience comments/prompts/questions per event, with a
-  ranking signal for "top comments." Account-only, per PRODUCT.md.
+- Comment reply threads — one level deep, particularly for
+  pinned/featured comments (issue #14's forward-looking requirement).
+  Not built; nothing in the current `event_chat_messages` schema blocks
+  adding a nullable, self-referencing `parent_message_id` later.
 - `votes` — continue/replace/extend votes, scoped to event + vote round so
   results can't be double-counted. **Guest-eligible**, same
   `profile_id`-or-guest-session pattern as chat/reactions, plus a
@@ -606,6 +623,14 @@ there's no second Presence channel duplicating data LiveKit already has.
 `event_speakers`' realtime feed is only for *who occupies which seat* —
 see [Video plan](#video-plan) for why that's a different data source from
 the room's audience count on purpose.
+
+**`speaker_requests`** also joined the publication in migration
+`00000000000011` (issue #14), for future use — nothing subscribes to it
+yet. Requests are visible today purely because their message lives in
+`event_chat_messages`, already realtime; a request's own status
+(pending/granted/withdrawn) only changes via a page load or the
+requester's own action result in this issue, not a live push. See
+[Speaker request queue](#speaker-request-queue) below.
 
 Not yet implemented: live reactions and vote tallies for the future live
 room (Phase 3) — see Vendor portability's note that those should be pure
@@ -855,12 +880,117 @@ prop, always `undefined` today) above the chat feed, deliberately not
 built in this issue — see DECISIONS.md. Adding that feature later is
 passing a node into an existing slot, not a layout restructure.
 
-**`RoomControls` ships exactly one control**: "Leave the stage"
-(`leaveSpeakerSeat`, issue #13's self-service action, with no caller
-until now). Mic/camera mute toggles were deliberately not built —
-requirement was automatic publish from the server-issued token, not
-manual controls — left as a natural follow-up rather than expanding this
-issue's scope.
+**`RoomControls` shipped exactly one control at the time**: "Leave the
+stage" (`leaveSpeakerSeat`, issue #13's self-service action, with no
+caller until then). Mic/camera mute toggles were deliberately not built
+— requirement was automatic publish from the server-issued token, not
+manual controls — left as a natural follow-up rather than expanding that
+issue's scope. Issue #14 (below) added the request/withdraw/claim
+controls to the same component.
+
+## Speaker request queue
+
+Issue #14 — the first issue to give `claim_speaker_seat` (issue #13) a
+real production caller. Deliberately **not** a generic ordered
+waiting-list: "request the mic" and "submit a comment" (two separate
+account-holder capabilities in PRODUCT.md) are one action. See
+DECISIONS.md for the full design reasoning, including the mid-design
+correction from an earlier "derive everything from LiveKit" instinct
+that issue #3 already had to unlearn once — this issue applies the same
+"the database is authoritative, the realtime channel is presentation"
+discipline to requests.
+
+**Data model**: `event_chat_messages.is_speaker_request` is a permanent
+marker set once at insert, never flipped back — "was this submitted as a
+request," not "is it still pending." `speaker_requests` is lifecycle
+only (`pending`/`granted`/`withdrawn`) and never duplicates the request's
+text; `message_id` points at the one place that text lives. This split —
+not one denormalized request table — is what makes a future
+pinned/featured-comment surface an *additive* query (`pending
+speaker_requests`, ranked, rendered through `RoomChatPanel`'s existing
+`featuredSlot`, issue #3) rather than a schema change: it would render
+exactly these message rows, nothing new to store.
+
+**Three functions, three authorization tiers** (migration
+`00000000000011`), extending the same split issue #13 established:
+
+- **`request_to_speak(event_id, body)`** — self-service,
+  `auth.uid()`-gated, granted to `authenticated`. Creates the chat
+  message and the `speaker_requests` row **atomically**: one PL/pgSQL
+  function call is one implicit transaction, so a losing concurrent call
+  (the partial unique index on `(event_id, profile_id) where status =
+  'pending'` rejecting a second pending request) rolls back its message
+  insert too — no orphaned request-flagged message ever exists without a
+  matching lifecycle row, and vice versa. This was an explicit
+  requirement, not an implementation nicety: the alternative (two
+  sequential application-level inserts) could partially succeed. Proven
+  by a real race test (`speaker-requests.test.ts`), not just asserted.
+- **`withdraw_speaker_request(event_id)`** — self-service, same shape as
+  `leave_speaker_seat`: ends only the caller's own pending request,
+  stamps `resolved_at` server-side.
+- **`rank_pending_speaker_requests(event_id)`** — trusted-server-only
+  (`service_role`, no anon/authenticated grant), same tier as
+  `claim_speaker_seat`/`end_speaker_seat`. Ranks pending requests by
+  reaction count on their message (descending — audience support is
+  what's supposed to raise a request), `profiles.reputation_score` as a
+  tiebreak (currently always `0` for everyone — nothing mutates it yet,
+  a harmless no-op, not a blocker), then recency. Not exposed as a
+  public "leaderboard" in this issue.
+
+**Every function explicitly `REVOKE`s `PUBLIC` execute in the same
+migration that grants its intended tier** — the lesson from issue #13's
+`claim_speaker_seat`/`end_speaker_seat` bug (Postgres grants `EXECUTE` to
+`PUBLIC` by default; that project shipped with it silently unrevoked
+once already). Verified directly against `pg_proc.proacl` before moving
+on, not just asserted from the migration's SQL — same discipline issue
+#13 used to catch its own bug, applied proactively this time instead of
+as a follow-up fix.
+
+**Claiming an open seat** (`claimOpenSeat`, the room's Server Action) is
+the authorization gate issues #13 and #3 both explicitly deferred to
+"whatever Phase 3 builds." The actual decision —
+`lib/speaker-queue.ts`'s `decideClaimEligibility` — is a pure function
+over already-fetched data (has a pending request, is a seat open, is the
+caller ranked within `TOP_ELIGIBLE_COUNT`), unit-tested directly, since
+the Server Action itself can't be (it depends on `resolveIdentity()` →
+`next/headers`' `cookies()`, only valid inside a real request). Only on
+a favorable decision does the action call `claimSpeakerSeat` (service
+client) and `syncPublishPermission({ canPublish: true })` — the moment
+that finally connects issues #2, #13, #3, and #14 into one live loop: a
+request becomes a claim becomes a seat becomes an immediate live
+publish, with no reconnect.
+
+**`TOP_ELIGIBLE_COUNT = 3` is an explicit MVP selection policy, not a
+permanent product rule** (documented at length in `lib/speaker-queue.ts`
+and DECISIONS.md — read there before changing or removing it). A strict
+"only the single top-ranked request may claim" rule has a real failure
+mode: an absent top-ranked requester would block the seat forever, and
+this serverless setup has no background-job infrastructure to expire or
+skip them. Widening eligibility to the top few, with
+`claim_speaker_seat`'s own existing race-safety as the tiebreak if more
+than one eligible requester claims at once, solves that without adding
+any new infrastructure. This is not meant to make "who becomes the next
+speaker" a click-speed competition by product intent — only by current
+implementation; the durable concepts (audience support raises requests,
+only sufficiently elevated requests become eligible, the promotion
+mechanism among eligible requests may evolve) are what should survive
+if this specific policy changes later.
+
+**UI**: `RoomControls` gained three states beyond "Leave the stage" —
+request (guests see the same button as everyone else; clicking it is
+the "action that genuinely requires an account" moment, surfacing
+PRODUCT.md's scripted prompt inline, never a proactive banner), pending
+(withdraw + always-attempt "Claim your seat," server-verified), and back
+to request after a withdrawal. No dedicated queue screen: a request is
+visible only as a normal, badged message in the existing chat feed
+(`MessageItem`'s `is_speaker_request` badge) — exactly the "same chat
+experience" issue #14 was scoped to preserve.
+
+**Not implemented, deliberately**: reputation/reliability score
+*mutation* (ranking only reads whatever's currently there), moderator
+overrides, automatic/background seat promotion, the actual
+pinned/featured UI treatment, and comment reply threads (kept in mind —
+see the Data model section above — but not needed for this issue).
 
 ## Responsive implementation notes
 

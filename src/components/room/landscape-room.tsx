@@ -17,7 +17,9 @@ export function LandscapeRoom({
   roomStatus,
   speakers,
   myIdentity,
+  identity,
   isSpeaker,
+  hasPendingRequest,
   getParticipant,
   participantCount,
   connectionStatus,
@@ -41,7 +43,12 @@ export function LandscapeRoom({
             className="grid w-full max-w-4xl grid-cols-2 gap-4"
           />
         </div>
-        {isSpeaker && <RoomControls eventId={event.id} />}
+        <RoomControls
+          eventId={event.id}
+          isSpeaker={isSpeaker}
+          identity={identity}
+          hasPendingRequest={hasPendingRequest}
+        />
       </div>
       <RoomChatPanel
         eventId={event.id}

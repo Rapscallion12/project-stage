@@ -169,9 +169,21 @@ precedent bleed into the live room, which genuinely does need to.
 
 ## Phase 3 — Audience power features
 
-- [ ] `speaker_queue` table + request-to-speak flow **(account-only** — this
-      is the product's clearest "create an account to do this" moment; use
-      the account-prompt copy from PRODUCT.md, inline, not a redirect)
+- [x] Speaker request queue + request-to-speak flow (issue #14)
+      **(account-only** — this is the product's clearest "create an
+      account to do this" moment; guests get the account-prompt copy
+      from PRODUCT.md, inline on the same "Request the mic" button
+      everyone sees, not a redirect). Deliberately **not** a
+      `speaker_queue` table as originally scoped here — a mic request is
+      a chat message with a flag on it (`event_chat_messages.is_speaker_request`),
+      with lifecycle tracked separately in `speaker_requests`
+      (pending/granted/withdrawn) — see ARCHITECTURE.md's Speaker
+      request queue section and DECISIONS.md for the full reasoning.
+      `claim_speaker_seat` (issue #13) got its first production caller
+      via a self-service `claimOpenSeat` action, gated by rank (audience
+      reactions on the request's message) among the top 3 eligible
+      requests — an explicit MVP policy, not permanent, see
+      `lib/speaker-queue.ts`.
 - [ ] Continue voting — guest-eligible, rate-limited/deduped per
       ARCHITECTURE.md's guest identity + abuse-prevention design
 - [ ] Replace speaker voting — guest-eligible, same as above
@@ -181,8 +193,13 @@ precedent bleed into the live room, which genuinely does need to.
       table needed unless we decide to persist them for analytics) —
       guest-eligible, rate-limited per identity (guest or account, same
       limit)
-- [ ] Comments + "top comments" ranking **(account-only** — per PRODUCT.md;
-      guests may still *view* the comment feed)
+- [ ] Pinned/featured comments + general "top comments" ranking
+      **(account-only** to post — per PRODUCT.md; guests may still *view*
+      the comment feed). Partially unlocked by issue #14: request
+      messages already carry a ranking signal (reaction count) and a
+      rendering seam (`RoomChatPanel`'s `featuredSlot`) built for exactly
+      this — what's still missing is generalizing beyond mic requests
+      and building the actual pinned/expandable UI treatment.
 - [ ] Report button — guest-eligible; someone shouldn't need an account to
       flag something alarming
 - [ ] Basic moderator controls (mute/remove speaker, end event early)

@@ -4,6 +4,156 @@ Newest entry first.
 
 ---
 
+## 2026-08-12 — Session 14: Issue #14 — speaker request queue
+
+**Goal**: Review whether issue #4 (audience viewing) was still meaningful
+independent scope after issue #3, recommend the next issue, then design
+and ship the speaker request queue — the first issue to give
+`claim_speaker_seat` (issue #13) a real production caller.
+
+**Completed work**:
+
+- **Reviewed #4/#5 against issue #3's actual shipped code** (not just
+  memory): confirmed both are fully subsumed — `room/page.tsx` never
+  gates on a session, guests get a full audience experience, and
+  audience count already comes from LiveKit's own roster. Recommended
+  moving to Phase 3's speaker queue over Phase 2's remaining "Emergency
+  leave" item, since the queue is what the last several sessions have
+  all been building toward and unlocks the first real end-to-end user
+  flow; user agreed.
+- **`gh` CLI became available mid-session** — installed and authenticated
+  by the user after earlier sessions, just not yet on this session's
+  PATH (a fresh shell picks it up; this session kept using the full
+  path, `C:\Program Files\GitHub CLI\gh.exe`). First real board access
+  this project has had. Used it to: close #4 and #5 with comments
+  explaining the supersession (including #5's real deviation from its
+  original Realtime-Presence scope); create issue #14 with the full
+  approved design as its body; and discover + fix a real board-hygiene
+  gap — issues #13 and #3 were closed on GitHub but still showed
+  `Status: Backlog` on the Project board (`closes #N` closes the issue,
+  never the board's custom Status field — two separate systems). Fixed
+  all four stale/missing cards, and moved #14 through
+  In Progress → Testing / Review deliberately this session rather than
+  assuming the commit message would handle it. See DECISIONS.md.
+- **Design review before implementation**: reviewed PRODUCT.md's queue/
+  comment/reputation sections in full. Proposed the core reframe — a mic
+  request is a chat message with a flag, not a generic waiting-list
+  table — plus a `speaker_requests` lifecycle table, three functions at
+  three authorization tiers (mirroring issue #13's split exactly), and a
+  top-3-eligible self-service claim as the answer to "who actually gets
+  promoted." User approved with two adjustments: (1) frame top-3
+  eligibility explicitly as an MVP selection policy, not a permanent
+  rule, documenting the durable concepts (audience support raises
+  requests, only elevated requests become eligible, promotion mechanism
+  may evolve) so a future redesign has something to preserve; (2) make
+  request creation atomic via a DB function/RPC, not two independent
+  application-level writes — no orphaned message-without-request or
+  request-without-message, ever.
+- **Migration `00000000000011`**: `event_chat_messages.is_speaker_request`
+  (permanent marker, set once) + `speaker_requests` table (lifecycle
+  only, FK to the message that carries the actual content) + three
+  `security definer` functions — `request_to_speak` (self-service,
+  atomic — the message and request insert happen in one function call,
+  so a losing concurrent call's message insert rolls back with it),
+  `withdraw_speaker_request` (self-service, same shape as
+  `leave_speaker_seat`), `rank_pending_speaker_requests`
+  (trusted-server-only, reaction-count → reputation → recency).
+  **Every function's `PUBLIC` execute grant was explicitly revoked in
+  this same migration** — applying issue #13's lesson proactively this
+  time instead of needing a follow-up bug-fix migration. Verified
+  directly against `pg_proc.proacl` immediately after pushing, before
+  writing any application code — confirmed clean on the first attempt.
+- **`lib/speaker-queue.ts`**: `findOpenSeat`, `isEligibleToClaim`, and —
+  added during implementation, not part of the original design write-up
+  — `decideClaimEligibility`, a pure extraction of `claimOpenSeat`'s
+  actual authorization decision. Pulled out specifically because the
+  issue's own Definition of Done asked for a test proving the top-3 gate
+  rejects an ineligible claim, and the Server Action itself can't be
+  unit-tested directly (`resolveIdentity()` needs a real Next.js request
+  for `cookies()`) — same reasoning already applied to
+  `determineCanPublish`/`shouldPublish`/`applySpeakerChange`.
+- **`lib/repositories/speaker-requests.ts`** and three new Server Actions
+  in `room/actions.ts` (`requestToSpeak`, `withdrawSpeakerRequest`,
+  `claimOpenSeat`). A successful claim pushes `canPublish: true` live via
+  `syncPublishPermission` — the moment issues #2, #13, #3, and #14
+  finally connect into one real loop: request → rank → claim → seat →
+  immediate publish, no reconnect.
+- **`RoomControls`** redesigned from "speaker-only" to four states
+  (speaker/guest/no-request/pending-request), always rendered now rather
+  than gated behind `isSpeaker`. Guests see the identical "Request the
+  mic" button everyone does; PRODUCT.md's scripted account prompt
+  appears inline only on click, never as a standing banner — matching
+  its explicit "never interrupt speculatively" wording rather than the
+  more literal reading that would've shown guests a permanent "you
+  can't do this" strip. `MessageItem` (shared by lobby and room chat)
+  gained a small 🎤 badge for `is_speaker_request` messages.
+- Tests: `speaker-queue.test.ts` (pure functions, including
+  `decideClaimEligibility`'s every rejection path), `room-controls.test.tsx`
+  (new component test, mocking the Server Actions module — guest prompt
+  only appears after a click, pending/claim/withdraw state transitions),
+  and `speaker-requests.test.ts` — a live integration suite against the
+  real project proving: atomic creation via a genuine race (two
+  concurrent `request_to_speak` calls from the same profile, then
+  asserting the message count exactly equals the request-row count — the
+  actual invariant atomicity guarantees, not just "it returned
+  successfully"), rejection of a second pending request, rejection of a
+  request from an already-active speaker, withdrawal + re-request,
+  ranking order by reaction count, and `rank_pending_speaker_requests`
+  correctly rejecting an ordinary authenticated caller (42501) — proving
+  the trusted-server-only tier holds, not just documenting it. All 9
+  integration tests passed on the first run.
+- **Manually verified end-to-end** using last session's dev harness: `dev:harness
+  create` for a live test event, then a one-off signed-in RPC call to
+  `request_to_speak` (the harness itself doesn't have a "request" command
+  — a direct script call reusing its exported `getServiceClient`), then
+  curled the room page as a guest and confirmed the request message
+  rendered with its badge, author name, and body, alongside "Seat open"
+  placeholders and "Waiting for speakers" status, plus the "Request the
+  mic" button present with no proactive account-prompt text in the raw
+  SSR HTML. Cleaned up via `dev:harness reset` afterward.
+- Documented in ARCHITECTURE.md (Data model, Realtime plan, folder
+  structure, a new "Speaker request queue" section), DECISIONS.md (the
+  comment-driven design + atomicity + MVP-policy framing; the board
+  Status-field finding as its own entry), ROADMAP.md, CHANGELOG.md.
+
+**Files changed**: `supabase/migrations/00000000000011_speaker_requests.sql`,
+`src/types/database.ts`, `src/lib/repositories/speaker-requests.ts`
+(+test), `src/lib/speaker-queue.ts` (+test),
+`src/lib/repositories/chat.ts`, `src/hooks/use-lobby-realtime.ts`,
+`src/components/lobby/message-item.tsx`,
+`src/components/room/room-controls.tsx` (+test),
+`src/components/room/portrait-room.tsx`,
+`src/components/room/landscape-room.tsx`,
+`src/components/room/live-room.tsx`, `src/components/room/types.ts`,
+`src/app/events/[id]/room/actions.ts`,
+`src/app/events/[id]/room/page.tsx`, `ARCHITECTURE.md`, `DECISIONS.md`,
+`ROADMAP.md`, `CHANGELOG.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: Reputation-score mutation still doesn't exist anywhere
+(ranking's tiebreak is currently a no-op for every profile) — accepted,
+not a blocker, same class of gap issue #13 already left for a future
+session. Comment reply threads confirmed non-blocking but not built. The
+pinned/featured comment UI itself (the `featuredSlot` consumer) is still
+unbuilt — this issue only proves the seam works.
+
+**Tests run**: `npm run lint` (clean), `npx tsc --noEmit` (clean),
+`npm run build` (clean — `/events/[id]/room` unchanged in the route
+table, no new routes added by this issue), `npx vitest run` —
+**95/95 passing, zero skipped**.
+
+**Current build status**: Lint clean, typecheck clean, build clean, full
+test suite passing (95/95, no skips). Board: #4, #5, #13, #3 corrected to
+Done; #14 in Testing / Review pending merge.
+
+**Recommended next task**: Emergency leave (ROADMAP's last open Phase 2
+item) or continuing Phase 3 (continue/replace voting, live reactions,
+general comments + the pinned/featured UI this issue's `featuredSlot`
+and `is_speaker_request` ranking were built to support) — a real
+prioritization call for the next session to make with the user, not
+something to default on.
+
+---
+
 ## 2026-08-11 — Session 13: Development test harness
 
 **Goal**: Before starting the next product milestone, build the smallest

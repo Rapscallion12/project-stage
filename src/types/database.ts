@@ -90,6 +90,7 @@ export type Database = {
           created_at: string
           event_id: string
           id: string
+          is_speaker_request: boolean
         }
         Insert: {
           author_display_name: string
@@ -99,6 +100,7 @@ export type Database = {
           created_at?: string
           event_id: string
           id?: string
+          is_speaker_request?: boolean
         }
         Update: {
           author_display_name?: string
@@ -108,6 +110,7 @@ export type Database = {
           created_at?: string
           event_id?: string
           id?: string
+          is_speaker_request?: boolean
         }
         Relationships: [
           {
@@ -225,6 +228,58 @@ export type Database = {
         }
         Relationships: []
       }
+      speaker_requests: {
+        Row: {
+          created_at: string
+          event_id: string
+          id: string
+          message_id: string
+          profile_id: string
+          resolved_at: string | null
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          event_id: string
+          id?: string
+          message_id: string
+          profile_id: string
+          resolved_at?: string | null
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          event_id?: string
+          id?: string
+          message_id?: string
+          profile_id?: string
+          resolved_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "speaker_requests_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_requests_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "event_chat_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_requests_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -287,6 +342,40 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      rank_pending_speaker_requests: {
+        Args: { p_event_id: string }
+        Returns: {
+          message_id: string
+          profile_id: string
+          rank: number
+          request_id: string
+        }[]
+      }
+      request_to_speak: {
+        Args: { p_body: string; p_event_id: string }
+        Returns: {
+          message_id: string
+          request_id: string
+        }[]
+      }
+      withdraw_speaker_request: {
+        Args: { p_event_id: string }
+        Returns: {
+          created_at: string
+          event_id: string
+          id: string
+          message_id: string
+          profile_id: string
+          resolved_at: string | null
+          status: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "speaker_requests"
           isOneToOne: true
           isSetofReturn: false
         }

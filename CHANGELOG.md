@@ -7,6 +7,44 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
 
 ### Added
 
+- **Speaker request queue** (issue #14) — the first issue to give
+  `claim_speaker_seat` (issue #13) a real production caller, closing the
+  loop from request to live seat. Deliberately not a generic waiting-list
+  table: a mic request is a chat message
+  (`event_chat_messages.is_speaker_request`, a permanent marker) with its
+  lifecycle (`pending`/`granted`/`withdrawn`) tracked separately in a new
+  `speaker_requests` table that never duplicates the message content —
+  this is what lets a future pinned/featured comment surface render the
+  same rows through `RoomChatPanel`'s existing `featuredSlot` (issue #3)
+  without a schema change. Three new `security definer` functions
+  (migration `00000000000011`): `request_to_speak` (self-service,
+  **atomic** — the chat message and the request row are created in one
+  function call, so a losing concurrent request can never leave an
+  orphaned message or an orphaned request row, proven by a live race
+  test), `withdraw_speaker_request` (self-service, same shape as issue
+  #13's `leave_speaker_seat`), and `rank_pending_speaker_requests`
+  (trusted-server-only, ranks by reaction count on the request's message,
+  then `profiles.reputation_score` as a tiebreak — currently always `0`
+  for everyone, harmless no-op, not a blocker — then recency). Every new
+  function explicitly revokes `PUBLIC` execute in its own migration this
+  time (the lesson from issue #13's bug), verified directly against
+  `pg_proc.proacl`, not just asserted. `claimOpenSeat` (the room's Server
+  Action) gates self-service seat-claiming on a pure, unit-tested
+  decision (`lib/speaker-queue.ts`'s `decideClaimEligibility`): caller
+  has a pending request, a seat is open, and the caller ranks within the
+  top 3 eligible requests — an **explicit MVP selection policy, not a
+  permanent product rule** (documented at length in `lib/speaker-queue.ts`
+  and DECISIONS.md: it solves the "absent top requester blocks the seat
+  forever" failure mode without new background-job infrastructure, using
+  `claim_speaker_seat`'s existing race-safety as the tiebreak). A
+  successful claim pushes `canPublish: true` live
+  (`syncPublishPermission`), so publishing starts immediately with no
+  reconnect — the first time issues #2, #13, #3, and #14 connect into one
+  real end-to-end flow. `RoomControls` gained request/withdraw/claim
+  states; guests see the same "Request the mic" button as everyone else,
+  with PRODUCT.md's scripted account prompt appearing inline on click,
+  never a proactive banner. No dedicated queue screen — a request is just
+  a badged message in the existing chat feed.
 - **Development test harness** (`scripts/dev-harness.mts`,
   `npm run dev:harness --`) — create/seat/list/reset live test events
   from the command line, without hand-writing SQL or waiting on a
@@ -220,6 +258,17 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
 
 ### Fixed
 
+- **Project board Status field left stale after closing an issue.**
+  Closing a GitHub issue via `closes #N` in a commit message closes the
+  *issue*; it never touched the Project board's custom Status
+  single-select field, a separate piece of state. Issues #13 and #3 had
+  both been merged and closed for a while but still showed
+  `Status: Backlog` on the board. Found while reviewing the board before
+  starting issue #14 (the user asked whether #4/#5 were already
+  satisfied by #3 — checking that surfaced this too). Fixed retroactively
+  for #13, #3, and the newly-closed #4/#5; treating the board Status
+  update as its own explicit step going forward, not something
+  `closes #N` handles. See DECISIONS.md.
 - **"Maximum update depth exceeded" crash entering an event lobby.**
   `src/hooks/use-now.ts`'s `useSyncExternalStore` call returned
   `Date.now()` directly from `getSnapshot()`, which changes on nearly

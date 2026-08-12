@@ -16,7 +16,9 @@ export function PortraitRoom({
   roomStatus,
   speakers,
   myIdentity,
+  identity,
   isSpeaker,
+  hasPendingRequest,
   getParticipant,
   participantCount,
   connectionStatus,
@@ -35,7 +37,12 @@ export function PortraitRoom({
         <SpeakerStage speakers={speakers} getParticipant={getParticipant} myIdentity={myIdentity} />
       </div>
       <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
-      {isSpeaker && <RoomControls eventId={event.id} />}
+      <RoomControls
+        eventId={event.id}
+        isSpeaker={isSpeaker}
+        identity={identity}
+        hasPendingRequest={hasPendingRequest}
+      />
     </div>
   );
 }

@@ -3,6 +3,128 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-12 — The speaker request queue is comment-driven, not a generic waiting list; request creation is atomic by construction
+
+**Problem**: PRODUCT.md's own literal text describes "Speaker request
+queue" as "an ordered list of account holders waiting for a seat" — a
+generic FIFO/priority-queue shape. Building it that way would create a
+second, parallel content system (queue entries) sitting next to chat
+(comments), when the product's actual direction — confirmed by the user
+before implementation — is that these converge: "request the mic" and
+"submit a comment" (two separately-listed account-holder capabilities in
+PRODUCT.md) are meant to be one action, and a future pinned/featured
+comment surface needs to highlight exactly the same content a request
+produces.
+
+**Alternatives considered**:
+1. A dedicated `speaker_queue` table (position, joined-at, status),
+   independent of chat, as PRODUCT.md's literal wording suggests.
+2. A mic request is a chat message with a flag on it. `speaker_requests`
+   stores lifecycle only (pending/granted/withdrawn) and references the
+   message that carries the actual content — never duplicating it.
+
+**Decision**: Option 2, at the user's explicit direction, with two
+refinements added during design review:
+
+- **Request creation must be atomic** — the chat message and the
+  `speaker_requests` row are never two independent application-level
+  writes that could partially succeed. Implemented as a single
+  `security definer` Postgres function (`request_to_speak`, migration
+  `00000000000011`): one function call is one implicit transaction, so a
+  losing concurrent call (the partial unique index rejecting a second
+  pending request from the same profile) rolls back its message insert
+  too. Proven with a real race test in `speaker-requests.test.ts` —
+  two concurrent `request_to_speak` calls from the same profile, then
+  asserting the count of "is_speaker_request" messages exactly equals
+  the count of `speaker_requests` rows for that profile (no orphan
+  either direction) — not just asserted from reading the SQL.
+- **Promotion eligibility is `TOP_ELIGIBLE_COUNT = 3` pending requests,
+  not strictly rank 1**, and this is recorded here explicitly as an
+  **MVP selection policy, not a permanent product rule**. A strict
+  "only rank 1 may claim" design has a real failure mode this prototype
+  has no infrastructure to solve: an absent top-ranked requester would
+  block the seat forever, with no background-job/cron mechanism in this
+  serverless setup to expire or skip them. Widening eligibility to the
+  top few — with `claim_speaker_seat`'s own existing race-safety (issue
+  #13) as the tiebreak if more than one eligible requester claims at
+  once — solves the stuck-seat problem without new infrastructure. The
+  durable concepts this stands in for, which should survive even if this
+  specific policy is replaced later: audience support determines which
+  requests rise (reaction-count-driven ranking), only sufficiently
+  elevated requests become eligible (this constant), and the mechanism
+  that finally promotes one of the eligible requests may evolve into
+  something more deliberately audience-driven than "first successful
+  claim wins." Documented at length in `lib/speaker-queue.ts` itself, not
+  just here, so it's visible at the point anyone would change it.
+
+**Reason**: Same principle issue #3 already established for speaker
+occupancy (the database is authoritative, the realtime channel is
+presentation) applied to requests: `event_chat_messages.is_speaker_request`
+is a permanent marker (set once, never flipped back — "was this
+submitted as a request," not "is it still pending"), so a future
+pinned/featured surface is a read (`pending speaker_requests`, ranked)
+rendered through `RoomChatPanel`'s existing `featuredSlot` (issue #3),
+never a schema change. Ranking itself is trusted-server-only
+(`rank_pending_speaker_requests`, `service_role`-gated — it reads
+`profiles.reputation_score`, which `anon`/`authenticated` can't select
+directly) and is never exposed to the client as a public leaderboard in
+this issue; `claimOpenSeat` (the Server Action) only ever returns
+pass/fail.
+
+**A genuine, if minor, forward-compatibility check performed, not just
+assumed**: the user asked to keep future one-level comment replies in
+mind without building them. Confirmed nothing in this migration blocks
+adding a nullable, self-referencing `parent_message_id` to
+`event_chat_messages` later — a plain additive column, same shape as
+every other "left room for it" decision in this schema.
+
+**Tradeoffs**: `reputation_score` is always `0` for every profile today
+(nothing mutates it yet — same accepted gap issue #13 left for
+`display_name`'s tiebreak-adjacent reasoning), so ranking currently
+reduces to reaction-count-then-recency; harmless, not a blocker, but
+worth remembering when reputation mutation eventually lands elsewhere.
+`claimOpenSeat`'s pure decision (`decideClaimEligibility`, in
+`lib/speaker-queue.ts`) had to be extracted from the Server Action
+specifically because the action itself can't be unit-tested directly —
+it depends on `resolveIdentity()` → `next/headers`' `cookies()`, valid
+only inside a real Next.js request. Same limitation this project has
+hit for every other Server Action; the fix (test the decision, not the
+wrapper) is the same one already used for
+`determineCanPublish`/`shouldPublish`/`applySpeakerChange`.
+
+---
+
+## 2026-08-12 — Closing a GitHub issue does not update the Project board's Status field; treat them as two separate updates
+
+**Problem**: Reviewing the board before starting this issue (per the
+user's request to check whether issues #4/#5 were already satisfied by
+#3) surfaced that issues #13 and #3 — both already merged and closed via
+"closes #N" in their commit messages — still showed **Status: Backlog**
+on the Project board, not Done. The "closes #N" convention this project
+has used since issue #1 closes the GitHub *issue*; it does not touch the
+board's custom Status field, which is a separate piece of state entirely.
+Every prior session assumed closing the issue was sufficient and never
+verified the board reflected it.
+
+**Decision**: Fixed the four stale cards (#13, #3, and the newly-closed
+#4/#5) to Status: Done via `gh project item-edit`, and are treating the
+board Status update as its own explicit step from here forward — moved
+issue #14 through In Progress → Testing / Review → (Done, once merged)
+deliberately, rather than only relying on the commit message's
+"closes #N".
+
+**Reason**: AGENTS.md's own standing rule — "a stale board... is worse
+than no board" — already named this risk category; this is the first
+session with working `gh` access to actually verify state against it,
+and the verification found exactly the drift that rule warns about.
+Worth fixing retroactively rather than leaving stale cards next to
+newly-accurate ones.
+
+**Tradeoffs**: None — this is a correctness fix with no design
+alternative to weigh; it was simply an unchecked assumption until now.
+
+---
+
 ## 2026-08-11 — A standalone dev-harness script, not an application route, for manual test-session tooling
 
 **Problem**: there was no efficient way to manually test the live room.

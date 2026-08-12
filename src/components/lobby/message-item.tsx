@@ -36,6 +36,14 @@ export function MessageItem({
     <div className="flex flex-col gap-0.5 py-1.5">
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-medium">{message.author_display_name}</span>
+        {message.is_speaker_request && (
+          <span
+            className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent"
+            title="Requested the mic"
+          >
+            🎤 requesting to speak
+          </span>
+        )}
         <span className="text-xs text-muted">{time}</span>
       </div>
       <div className="flex items-end gap-2">

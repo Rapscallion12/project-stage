@@ -10,6 +10,15 @@ export type ChatMessage = {
   author_guest_id: string | null;
   body: string;
   created_at: string;
+  /**
+   * Permanent marker set once at insert by `request_to_speak` (migration
+   * 00000000000011, issue #14) — never flipped back, so this reflects
+   * "was this submitted as a mic request," not "is it still pending."
+   * Ordinary messages inserted via `insertMessage` below always get
+   * `false`. See DECISIONS.md for why a request is a chat message with a
+   * flag, not a separate entity.
+   */
+  is_speaker_request: boolean;
 };
 
 export type ReactionSummaryRow = {
@@ -26,7 +35,7 @@ export async function listRecentMessages(eventId: string, limit: number): Promis
   const supabase = await createClient();
   const { data } = await supabase
     .from("event_chat_messages")
-    .select("id, author_display_name, author_profile_id, author_guest_id, body, created_at")
+    .select("id, author_display_name, author_profile_id, author_guest_id, body, created_at, is_speaker_request")
     .eq("event_id", eventId)
     .order("created_at", { ascending: false })
     .limit(limit);
