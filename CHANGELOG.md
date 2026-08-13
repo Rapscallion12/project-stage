@@ -7,6 +7,29 @@ Dates are session dates, not deploy dates — nothing has been deployed yet.
 
 ### Added
 
+- **`/dev` browser-based usability-testing UI** — create a live demo
+  event, open its room, and seat your logged-in account in seat 1 or 2
+  without any CLI commands. Complements (doesn't replace) the CLI dev
+  harness — the CLI is still how you create a synthetic second speaker's
+  account. `notFound()`-gated on `NODE_ENV !== "production"` (reliable
+  since Next.js force-sets that for every build/start), with every
+  Server Action independently re-checking the same guard, since an
+  action's endpoint is reachable regardless of whether its trigger page
+  ever rendered. Verified both ways directly: a production
+  build/start on a spare port confirms `/dev` 404s while real routes
+  stay healthy, and a unit test confirms each action rejects under a
+  stubbed `NODE_ENV=production`. No new schema/RLS/RPC/authorization
+  path — reuses `claimSpeakerSeat` (issue #13) directly, bypassing issue
+  #14's production request-queue gate on purpose, the same bypass the
+  CLI harness's `seat` command already established as acceptable for
+  testing. The CLI's tagging convention moved to a shared
+  `lib/dev-demo.ts` module so the CLI and the UI clean up each other's
+  data. Found and fixed a real (reproducible) test-infrastructure bug
+  along the way: two independent integration test files sharing that
+  tag both ran their own "delete everything tagged" reset, and Vitest's
+  default parallel file execution let one delete the other's in-progress
+  fixtures — fixed with `fileParallelism: false` in `vitest.config.mts`.
+  See DECISIONS.md.
 - **Speaker request queue** (issue #14) — the first issue to give
   `claim_speaker_seat` (issue #13) a real production caller, closing the
   loop from request to live seat. Deliberately not a generic waiting-list

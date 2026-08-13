@@ -4,6 +4,120 @@ Newest entry first.
 
 ---
 
+## 2026-08-12 — Session 15: `/dev` browser-based usability-testing UI
+
+**Goal**: The dev harness CLI (Session 13) still required terminal
+commands to reach the core experience. Build a lightweight, dev-only
+browser UI so usability testing doesn't need CLI commands at all — the
+smallest solution that adds no backend feature and leaves production
+behavior unchanged.
+
+**Completed work**:
+
+- **Design review before implementation**: the CLI harness achieved zero
+  production footprint by living entirely outside `src/`, never HTTP-
+  reachable. A UI-reachable tool can't make that claim by construction —
+  it has to be a real Next.js route. Proposed `src/app/dev/`, gated by
+  `process.env.NODE_ENV !== "production"` → `notFound()` (reliable
+  because Next.js itself force-sets `NODE_ENV=production` for every
+  build/start), with the same guard independently re-checked inside
+  every Server Action (an action's endpoint is reachable regardless of
+  whether the page that renders its trigger ever rendered). User
+  approved with explicit requirements: reuse `claimSpeakerSeat` and the
+  existing service client, no new schema/RLS/RPC, share the CLI
+  harness's tagging convention, reuse existing login/signup rather than
+  a new auth flow, keep synthetic second-speaker creation in the CLI,
+  keep the UI intentionally plain, and test both the production guard
+  and the reset safety boundary.
+- **`src/lib/dev-demo.ts`**: extracted the CLI harness's tagging
+  constants (`[dev-harness] ` prefix, `@dev-harness.invalid` domain),
+  phase-timing helper, and a new `isDevToolsAvailable()` guard predicate
+  into one shared, pure module — no Supabase, no I/O. Refactored
+  `scripts/dev-harness.mts` to import from it instead of keeping its own
+  copies (one source of truth, so the CLI's `reset` and `/dev`'s
+  "Reset all demo events" clean up each other's data), moving the
+  corresponding tests to `src/lib/dev-demo.test.ts`.
+- **`src/lib/repositories/dev-demo.ts`**: the `/dev` page's data layer —
+  `listDevDemoEvents`, `createDevDemoEvent`, `resetDevDemoEvents`, and
+  `seatCurrentUserAsSpeaker` (a thin wrapper directly calling issue #13's
+  `claimSpeakerSeat`, deliberately bypassing issue #14's production
+  request-queue/ranking gate — the same bypass the CLI's `seat` command
+  already established as acceptable for testing). Added as a documented
+  caller of `lib/supabase/service.ts` (which now lists all four current
+  callers, catching that the doc comment had already drifted — issue
+  #14's `speaker-requests.ts` was a caller that was never added).
+- **`src/app/dev/page.tsx` + `actions.ts`**: intentionally plain —
+  create-event form, a list of demo events with room/event links and
+  live seat status, per-event "Seat me in seat 1/2" (profile identities
+  only; guests see the existing `/login`/`/signup` links, never a new
+  prompt), and a reset button. Plain `<form action={...}>` bindings
+  throughout (the same `sendMessage.bind(null, eventId)` pattern the
+  lobby chat panel already uses) — no client components needed anywhere
+  on this page.
+- **A real, reproducible test-infrastructure bug found and fixed, not a
+  flaky network blip**: once `dev-demo.test.ts` existed alongside
+  `dev-harness.test.ts` — two independent integration test files both
+  creating `[dev-harness] `-tagged fixtures and both running their own
+  "delete everything tagged" reset — Vitest's default parallel file
+  execution let one file's reset delete the other's still-in-use
+  fixtures mid-run. Confirmed by reproducing it, then fixed with
+  `fileParallelism: false` in `vitest.config.mts` (documented reasoning
+  in DECISIONS.md), and re-ran the full suite three consecutive times
+  clean to build confidence before moving on.
+- **Verified manually**, working around this session's lack of a
+  browser: seeded a demo event via the CLI, confirmed `/dev`'s read path
+  rendered it correctly (title, room/event links, "Seat 1: open · Seat
+  2: open") for a guest, confirmed the guest view shows no seat buttons
+  (only the login/signup prompt) — and, the safety-critical check, built
+  for production and started it on a spare port, confirmed `/dev`
+  returns a real 404 while `/events` stays healthy. Cleaned up the
+  seeded event afterward.
+- Tests: `dev-demo.test.ts` (tagging predicates + `isDevToolsAvailable`
+  across `production`/`development`/`test`), `actions.test.ts` (each
+  Server Action rejects synchronously under a stubbed
+  `NODE_ENV=production`, proving the guard is actually wired in, not
+  just correct in isolation), and a live integration suite
+  (`repositories/dev-demo.test.ts`) mirroring the CLI harness's own
+  safety-boundary proof — an untagged "real" event fixture survives
+  `resetDevDemoEvents` untouched while every tagged one is gone.
+- Documented in README.md (a restructured "Development test harness"
+  section covering both tools, with the browser walkthrough up front),
+  ARCHITECTURE.md (folder structure, `service.ts`'s caller list),
+  DECISIONS.md (the gating-model reasoning and the test-parallelism
+  finding).
+- **No GitHub issue** — same precedent as the CLI harness: dev tooling,
+  not tracked product scope, a `chore` commit.
+
+**Files changed**: `src/lib/dev-demo.ts` (+test), `src/lib/repositories/dev-demo.ts`
+(+test), `src/app/dev/page.tsx`, `src/app/dev/actions.ts` (+test),
+`scripts/dev-harness.mts`, `scripts/dev-harness.test.ts`,
+`src/lib/supabase/service.ts`, `vitest.config.mts`, `README.md`,
+`ARCHITECTURE.md`, `DECISIONS.md`, `SESSION_LOG.md` (this entry).
+
+**Known issues**: None. Full interactive click-through (submitting the
+create/seat/reset forms via a real browser) wasn't verified in this
+environment — no browser available — but every piece of logic those
+forms invoke is covered by the live integration tests, and the
+page/guard rendering was verified via direct HTTP requests against both
+a dev and a production server.
+
+**Tests run**: `npm run lint` (clean), `npx tsc --noEmit` (clean),
+`npm run build` (clean — `/dev` appears in the route table; confirmed
+separately that it 404s when actually served in production mode),
+`npx vitest run` — **105/105 passing, zero skipped**, run three times
+consecutively clean after the `fileParallelism` fix.
+
+**Current build status**: Lint clean, typecheck clean, build clean, full
+test suite passing (105/105, no skips, verified non-flaky).
+
+**Recommended next task**: an actual usability testing session using
+`/dev` — create a demo event, seat yourself, invite a second tester (or
+use the CLI to create a synthetic second speaker) into the room. Product
+milestones after that: Emergency leave (ROADMAP's last open Phase 2
+item) or continuing Phase 3.
+
+---
+
 ## 2026-08-12 — Session 14: Issue #14 — speaker request queue
 
 **Goal**: Review whether issue #4 (audience viewing) was still meaningful

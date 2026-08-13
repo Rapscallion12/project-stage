@@ -6,12 +6,23 @@ import type { Database } from "@/types/database";
  * bypasses RLS and every table/function grant entirely. Never import this
  * outside a genuinely trusted, non-client-reachable server code path that
  * has its own independent authorization check *before* calling anything
- * with it. Today that's: the LiveKit webhook handler (gated by verifying
- * LiveKit's webhook signature) and the event-speakers write functions that
- * are deliberately not granted to anon/authenticated
- * (`claim_speaker_seat`, `end_speaker_seat` — see migration
- * 00000000000006 and DECISIONS.md's authorization-model entry for issue
- * #13). Every other server-side Supabase access in this app uses
+ * with it. Current callers, each independently gated:
+ * - The LiveKit webhook handler (gated by verifying LiveKit's webhook
+ *   signature).
+ * - `lib/repositories/event-speakers.ts`'s `claimSpeakerSeat`/
+ *   `endSpeakerSeat`, deliberately not granted to anon/authenticated
+ *   (`claim_speaker_seat`, `end_speaker_seat` — migration
+ *   00000000000006, DECISIONS.md's authorization-model entry for issue
+ *   #13).
+ * - `lib/repositories/speaker-requests.ts`'s `rankPendingSpeakerRequests`/
+ *   `markSpeakerRequestGranted` — same tier, migration 00000000000011,
+ *   issue #14.
+ * - `lib/repositories/dev-demo.ts`, used only by the dev-only `/dev`
+ *   route (`src/app/dev/`), which independently gates on
+ *   `isDevToolsAvailable()` (`process.env.NODE_ENV !== "production"`)
+ *   before ever calling anything here — see DECISIONS.md.
+ *
+ * Every other server-side Supabase access in this app uses
  * lib/supabase/server.ts (anon key + the caller's own session), by design.
  */
 export function createServiceClient() {

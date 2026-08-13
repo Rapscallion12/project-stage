@@ -3,61 +3,30 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createHarnessEvent,
   getServiceClient,
-  HARNESS_EMAIL_DOMAIN,
-  HARNESS_EVENT_PREFIX,
-  isHarnessEventTitle,
-  isHarnessTestEmail,
   listHarnessState,
   parseArgs,
   resetHarness,
   resolveEmail,
   resolveOrCreateProfile,
   seatSpeaker,
-  timingForPhase,
 } from "./dev-harness.mts";
+// Tagging constants/helpers now live in src/lib/dev-demo.ts, shared with
+// the /dev page — their own predicate tests live there
+// (dev-demo.test.ts), not duplicated here; still imported below since
+// the integration tests further down assert against them. resolveEmail
+// stays script-specific (only the CLI auto-creates throwaway accounts;
+// the /dev page seats the currently-logged-in user instead).
+import {
+  DEV_EVENT_PREFIX as HARNESS_EVENT_PREFIX,
+  DEV_TEST_EMAIL_DOMAIN as HARNESS_EMAIL_DOMAIN,
+  isDevEventTitle as isHarnessEventTitle,
+  isDevTestEmail as isHarnessTestEmail,
+} from "../src/lib/dev-demo.ts";
 
-describe("tagging — the actual mechanism reset's safety relies on", () => {
-  it("isHarnessEventTitle only matches the harness prefix", () => {
-    expect(isHarnessEventTitle("[dev-harness] ready")).toBe(true);
-    expect(isHarnessEventTitle("Founders, Unfiltered")).toBe(false);
-    // A real title that happens to contain the tag elsewhere must not match.
-    expect(isHarnessEventTitle("Not [dev-harness] at the start")).toBe(false);
-  });
-
-  it("isHarnessTestEmail only matches the reserved harness domain", () => {
-    expect(isHarnessTestEmail("alice@dev-harness.invalid")).toBe(true);
-    expect(isHarnessTestEmail("ALICE@DEV-HARNESS.INVALID")).toBe(true);
-    expect(isHarnessTestEmail("alice@example.com")).toBe(false);
-    // A real address that merely contains the domain as a substring
-    // (not a true suffix) must not match.
-    expect(isHarnessTestEmail("alice@notdev-harness.invalid.evil.com")).toBe(false);
-  });
-
-  it("resolveEmail expands a bare label but passes a real email through unchanged", () => {
+describe("resolveEmail", () => {
+  it("expands a bare label but passes a real email through unchanged", () => {
     expect(resolveEmail("alice")).toBe(`alice${HARNESS_EMAIL_DOMAIN}`);
     expect(resolveEmail("someone@example.com")).toBe("someone@example.com");
-  });
-});
-
-describe("timingForPhase", () => {
-  const now = new Date("2026-01-01T12:00:00.000Z");
-
-  it("ready: scheduled_start and lobby_opens_at are both already in the past", () => {
-    const { scheduled_start, lobby_opens_at } = timingForPhase("ready", now);
-    expect(new Date(scheduled_start).getTime()).toBeLessThan(now.getTime());
-    expect(new Date(lobby_opens_at).getTime()).toBeLessThan(new Date(scheduled_start).getTime());
-  });
-
-  it("lobby_open: lobby has opened but the event hasn't started", () => {
-    const { scheduled_start, lobby_opens_at } = timingForPhase("lobby_open", now);
-    expect(new Date(lobby_opens_at).getTime()).toBeLessThan(now.getTime());
-    expect(new Date(scheduled_start).getTime()).toBeGreaterThan(now.getTime());
-  });
-
-  it("upcoming: both timestamps are in the future", () => {
-    const { scheduled_start, lobby_opens_at } = timingForPhase("upcoming", now);
-    expect(new Date(lobby_opens_at).getTime()).toBeGreaterThan(now.getTime());
-    expect(new Date(scheduled_start).getTime()).toBeGreaterThan(now.getTime());
   });
 });
 

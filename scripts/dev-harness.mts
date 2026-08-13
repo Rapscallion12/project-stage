@@ -25,56 +25,40 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { pathToFileURL } from "node:url";
 import type { Database } from "../src/types/database.ts";
+// Value imports (not type-only) from application code — this is the one
+// deliberate exception to this script's "imports nothing else from src/"
+// rule (see the header comment), specifically so the CLI and the /dev
+// page (src/app/dev/) share one tagging convention instead of two. Both
+// tools' `reset` relies on this being the *same* prefix/domain in both
+// places. Triggers a harmless Node warning about ambiguous module type
+// ("Reparsing as ES module...") since lib/dev-demo.ts is a plain .ts
+// file, not .mts — cosmetic only, not fixable without adding
+// "type": "module" to package.json project-wide, which isn't worth it
+// for a one-line stderr warning.
+import {
+  DEV_EVENT_PREFIX as HARNESS_EVENT_PREFIX,
+  DEV_TEST_EMAIL_DOMAIN as HARNESS_EMAIL_DOMAIN,
+  devTimingForPhase as timingForPhase,
+  isDevTestEmail as isHarnessTestEmail,
+  type DevEventPhase as Phase,
+} from "../src/lib/dev-demo.ts";
 
 type Client = SupabaseClient<Database>;
 
 // ---------------------------------------------------------------------
-// Tagging — this is the actual safety mechanism `reset` relies on: it
-// only ever touches rows matching these, never anything else in the one
+// Tagging (imported above, from src/lib/dev-demo.ts — shared with the
+// /dev page) is the actual safety mechanism `reset` relies on: it only
+// ever touches rows matching these, never anything else in the one
 // shared Supabase project this prototype uses. If you `seat` your own
 // real account (any email that doesn't end in HARNESS_EMAIL_DOMAIN),
 // nothing here will ever create, modify, or delete it.
 // ---------------------------------------------------------------------
 
-export const HARNESS_EVENT_PREFIX = "[dev-harness] ";
-/** Reserved, non-routable TLD (RFC 2606) — real signups can never collide with this. */
-export const HARNESS_EMAIL_DOMAIN = "@dev-harness.invalid";
 export const HARNESS_PASSWORD = "dev-harness-not-a-real-password-do-not-reuse-123!";
-
-export function isHarnessEventTitle(title: string): boolean {
-  return title.startsWith(HARNESS_EVENT_PREFIX);
-}
-
-export function isHarnessTestEmail(email: string): boolean {
-  return email.toLowerCase().endsWith(HARNESS_EMAIL_DOMAIN);
-}
 
 /** A bare label ("alice") expands to a harness test email; anything containing "@" is passed through unchanged (so you can point `seat` at your own real account). */
 export function resolveEmail(labelOrEmail: string): string {
   return labelOrEmail.includes("@") ? labelOrEmail : `${labelOrEmail}${HARNESS_EMAIL_DOMAIN}`;
-}
-
-export type Phase = "ready" | "lobby_open" | "upcoming";
-
-/** Timestamps chosen so a freshly-created event is immediately in the requested phase — see lib/events.ts's getEventPhase for the phase boundaries this mirrors. */
-export function timingForPhase(phase: Phase, now: Date = new Date()): { scheduled_start: string; lobby_opens_at: string } {
-  const ms = now.getTime();
-  if (phase === "ready") {
-    return {
-      scheduled_start: new Date(ms - 60_000).toISOString(),
-      lobby_opens_at: new Date(ms - 5 * 60_000).toISOString(),
-    };
-  }
-  if (phase === "lobby_open") {
-    return {
-      scheduled_start: new Date(ms + 15 * 60_000).toISOString(),
-      lobby_opens_at: new Date(ms - 60_000).toISOString(),
-    };
-  }
-  return {
-    scheduled_start: new Date(ms + 2 * 60 * 60_000).toISOString(),
-    lobby_opens_at: new Date(ms + 60 * 60_000).toISOString(),
-  };
 }
 
 // ---------------------------------------------------------------------

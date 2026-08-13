@@ -3,6 +3,94 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-12 — A dev-only `/dev` route for browser-based usability testing, and why it has to be gated differently than the CLI harness
+
+**Problem**: the CLI harness (`scripts/dev-harness.mts`) solved "create
+and seat test events" but still required running terminal commands —
+usability testing needs a way to launch and use the product without CLI
+commands, i.e. something reachable by clicking through a browser.
+
+**Alternatives considered**:
+1. Extend the CLI harness's ergonomics (shorter commands, a watch mode,
+   etc.) — doesn't solve "no CLI commands," just makes the CLI nicer.
+2. A dev-only Next.js route (`/dev`), gated at runtime.
+
+**Decision**: Option 2 — `src/app/dev/`, at the user's direction.
+
+**Reason this needs a genuinely different safety model than the CLI**:
+the CLI harness achieved zero production footprint by living entirely
+outside `src/` — never imported by application code, never bundled, not
+HTTP-reachable *at all*. A UI-reachable tool cannot make that same claim
+by construction: it has to be a Next.js route, which means it exists in
+the production server bundle regardless of gating. So "keep production
+behavior unchanged" has to mean something more precise here — the route
+must be behaviorally inert in a real deployment, verified, not just
+gated and hoped. Concretely: `isDevToolsAvailable()`
+(`lib/dev-demo.ts`) checks `process.env.NODE_ENV !== "production"` —
+reliable specifically because Next.js itself force-sets
+`NODE_ENV=production` for every `next build`/`next start`, regardless of
+shell environment, so it isn't a flag that can be accidentally left
+unset. The page calls `notFound()` on this check; **every Server Action
+in `src/app/dev/actions.ts` independently re-checks the same guard as
+its first statement**, since an action has its own callable endpoint,
+reachable whether or not the page that renders its trigger button ever
+rendered — hiding the page alone would not have been sufficient.
+Verified both ways directly: `npm run build && npm run start` on a spare
+port, confirmed `/dev` 404s while a real route stays healthy, and a unit
+test (`src/app/dev/actions.test.ts`) stubbing `NODE_ENV=production`
+proving each action rejects synchronously, before ever touching
+`resolveIdentity()`/cookies() or the database.
+
+**No new backend capability, on purpose**: every write goes through
+primitives issue #13/#14 already built and authorized — `claimSpeakerSeat`
+(seating the *currently logged-in* account directly, bypassing the
+production request-queue/ranking gate from issue #14, the same bypass
+the CLI's `seat` command already established as acceptable for testing)
+and a plain `events` insert via the existing service client. `/dev` is
+orchestration over existing, already-reviewed capability, not a new one.
+
+**One shared source of truth for tagging, not two**: extracted the
+harness's `[dev-harness] ` prefix, `.invalid` test-email domain, and
+phase-timing helper into `lib/dev-demo.ts` (pure, no Supabase/IO) and
+refactored `scripts/dev-harness.mts` to import from it instead of
+keeping its own copies. Effect: the CLI's `reset` and `/dev`'s "Reset all
+demo events" clean up *each other's* data — one convention, two entry
+points.
+
+**A genuine testing-infrastructure bug this surfaced, not a flaky
+network blip**: once `src/lib/repositories/dev-demo.test.ts` existed
+alongside `scripts/dev-harness.test.ts` — two *independent* integration
+test files both creating `[dev-harness] `-tagged fixtures and both
+running their own "delete everything tagged" reset — Vitest's default
+parallel file execution let one file's reset delete the other file's
+still-in-use fixtures mid-run, producing a real (reproducible, not
+timing-flaky) test failure (`eventsDeleted` was `0` when it should have
+found the file's own fixture). Every other integration test in this
+project was safe under parallel execution because each one scopes its
+fixtures to unique, randomly generated ids/emails that could never
+collide across files — this was the first case where two files
+deliberately *share* a broad tag, which is exactly what made them able
+to step on each other's test runs too. **Fix**: `fileParallelism: false`
+in `vitest.config.mts`, with a comment explaining why — this removes the
+whole class of cross-file shared-state interference (present and any
+future case), not just these two files, at the cost of a few extra
+seconds of total suite runtime. Considered scoping each test's
+assertions to "my own fixture specifically" instead (more surgical,
+preserves parallelism) but judged less robust: it would require
+correctly auditing every assertion in every current *and future*
+integration test file for hidden global-state assumptions, an easy thing
+to get subtly wrong once and not notice until the next flaky failure.
+
+**Tradeoffs**: none of consequence for the gating design — the "route
+necessarily ships in the bundle" tradeoff was unavoidable given the
+requirement (UI-reachable), not a choice. For the test-parallelism fix,
+the total suite runtime increased (roughly summed rather than
+overlapped for the integration-heavy files) — accepted as clearly worth
+it for a prototype's test suite, where correctness matters far more than
+shaving several seconds off `npm test`.
+
+---
+
 ## 2026-08-12 — The speaker request queue is comment-driven, not a generic waiting list; request creation is atomic by construction
 
 **Problem**: PRODUCT.md's own literal text describes "Speaker request
