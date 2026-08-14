@@ -4,6 +4,119 @@ Newest entry first.
 
 ---
 
+## 2026-08-13 — Session 16: First deployment (Vercel) + live LiveKit wiring
+
+**Goal**: Get the app onto a public HTTPS URL for phone/multi-tester
+usability testing, then finish wiring LiveKit so the live video room
+actually works there too — stopping short of any new product milestone.
+
+**Completed work — deployment**:
+
+- Inspected existing state first, per the user's explicit ask, before
+  changing anything: no `.vercel` link, no prior deploy, GitHub repo
+  private, Supabase's `[auth]` config.toml section already looked
+  drifted from the real project's dashboard settings (local file said
+  `enable_confirmations = false`; the real, working confirmation-email
+  flow implied otherwise) — decided *not* to use `supabase config push`
+  for the Auth redirect URL update because of that drift risk, guiding
+  the user through the dashboard step instead.
+- Vercel CLI device-code login took three attempts before working — the
+  first two failed because backgrounding the login process incorrectly
+  (a shell-level `&` inside a compound command, and a `timeout`-wrapped
+  call) killed the underlying process before the user could approve the
+  code. Fixed by using the harness's real `run_in_background` tracking
+  instead of shell tricks, which kept the device-auth polling alive long
+  enough to actually complete.
+- User imported the repo via Vercel's dashboard (which set up the GitHub
+  auto-deploy integration as a side effect — the reason a dashboard
+  import was preferred over a bare CLI deploy) and added the six env
+  vars the app already needed for local dev. Linked the local checkout
+  to the resulting project (`vercel link --project project-stage`),
+  confirmed via `vercel env ls` that all six were present as expected.
+- Set `NEXT_PUBLIC_SITE_URL` explicitly to the stable production domain
+  after realizing the code's existing `VERCEL_URL` fallback resolves to
+  a per-deployment hash, not a stable identity — see DECISIONS.md.
+  Triggered a rebuild for it to take effect (`NEXT_PUBLIC_*` vars are
+  build-time inlined, not read at request time).
+- Verified end-to-end against the real deployment via HTTP requests
+  (landing/events/login/signup pages all 200; `/dev` 404s): created a
+  real test event through the CLI harness and confirmed it appeared on
+  the deployed `/events` list and rendered correctly in its room page as
+  a guest — proving Supabase connectivity from the live app, not just
+  that routes respond.
+- Confirmed auto-deploy on push to `main` with a real push (a small
+  `.gitignore` fix), not just a "Git repo connected" status message —
+  watched a new deployment appear and go Ready within ~30 seconds.
+
+**Completed work — LiveKit**:
+
+- Reviewed the three code paths needing LiveKit config directly from
+  source (`token.ts`, `permissions.ts`, `webhook/route.ts`) rather than
+  from memory, confirming exactly `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`/
+  `NEXT_PUBLIC_LIVEKIT_URL` plus a dashboard-configured webhook are the
+  full requirement — nothing else in the app is LiveKit-gated.
+  Instructed the user on exactly what to create in LiveKit Cloud
+  (project, API key pair, webhook pointing at the new public URL) and
+  which Vercel env vars to set — never asked for the values themselves.
+- Rebuilt production once the vars were added, then attempted to verify
+  them server-side by pulling the real values locally
+  (`vercel env pull`) to replay the app's own token-minting/webhook-
+  signing logic against the real LiveKit project. Every var came back as
+  literal text `[SENSITIVE]` — discovered that Vercel's "Sensitive" env
+  var type (the default for anything added through the dashboard/CLI)
+  cannot be read back by anyone, including the owner, once set. Not a
+  bug; a real, useful thing to know before trying this approach again.
+  Cleaned up the now-useless scratch script and pulled placeholder file
+  immediately.
+- Pivoted to verifying through the deployed app's own observable
+  behavior instead: confirmed the live room page's SSR output shows no
+  trace of `getLiveKitToken`'s "Couldn't connect" fallback (proves the
+  vars are present, non-empty, and local JWT signing succeeds — token
+  minting itself never calls LiveKit's API, so this doesn't prove
+  network reachability on its own); confirmed the deployed webhook route
+  correctly returns 401 for both a bogus signature and a missing one,
+  proving it's live, publicly reachable, and genuinely verifying
+  signatures rather than accepting anything.
+- Explicit, stated limit rather than a glossed-over gap: a validly-signed
+  webhook payload being *accepted*, and the actual client-side WebRTC
+  connection (camera/mic prompts, real video/audio, two real devices,
+  reconnect behavior, phone orientation) cannot be verified without
+  either the real secret (which should never be pasted anywhere,
+  including into an agent session) or a real browser with camera/mic
+  hardware, neither of which this environment has. Handed back to the
+  user as a precise, scoped hands-on checklist rather than claiming
+  false coverage.
+
+**Files changed**: `README.md` (new "Deployment" section, LiveKit webhook
+note updated), `ARCHITECTURE.md` (Deployment section rewritten from "not
+yet deployed", tech stack table row), `DECISIONS.md` (the
+`NEXT_PUBLIC_SITE_URL`/`VERCEL_URL` finding and the Sensitive-env-var
+finding), `CHANGELOG.md`, `SESSION_LOG.md` (this entry). No application
+code changed this session — every fix was environment/dashboard
+configuration.
+
+**Known issues**: None in what was verified. Not yet verified (requires
+the user's own hands-on testing, handed off explicitly, not silently
+skipped): guest audience connection, authenticated speaker connection,
+camera/mic permission flows, real two-speaker video/audio, live
+permission-change reactions, reconnect behavior, and phone
+portrait/landscape behavior, all over the real deployed URL.
+
+**Tests run**: No code changed, so the existing suite wasn't expected to
+need re-running — confirmed anyway that `main`'s last known state
+(95/105 → 105/105 from Session 15) is what's actually deployed, via the
+Vercel deployment log matching the pushed commit.
+
+**Current build status**: Deployed and Ready on Vercel; `main` unchanged
+except for this session's doc updates.
+
+**Recommended next task**: the user's own hands-on LiveKit verification
+checklist (below, given directly in this session's final response, not
+duplicated here) — no new product milestone until that's done, per this
+session's explicit instruction.
+
+---
+
 ## 2026-08-12 — Session 15: `/dev` browser-based usability-testing UI
 
 **Goal**: The dev harness CLI (Session 13) still required terminal

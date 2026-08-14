@@ -3,6 +3,79 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-13 — First deployment (Vercel Hobby), and two real findings from wiring LiveKit into it
+
+**Problem**: usability testing needed a public HTTPS URL — nothing to
+decide here (the user asked for exactly this), but several details of
+*how* to configure it correctly weren't obvious from the code alone and
+only surfaced by actually doing it.
+
+**Decision**: Vercel Hobby tier, project imported from GitHub
+(`Rapscallion12/project-stage`, private — Vercel's GitHub App was granted
+access during import), no custom domain. Production URL:
+`https://project-stage-weld.vercel.app` (Vercel appended `-weld` since
+the bare `project-stage` subdomain was already taken globally). Deployed
+via the dashboard's "Import Git Repository" flow rather than a bare
+`vercel deploy` from local source specifically because the user wanted
+future pushes to `main` to auto-deploy — that requires the Git
+integration, which the dashboard import sets up as a side effect and a
+CLI-only deploy would not.
+
+**Finding 1 — `NEXT_PUBLIC_SITE_URL` must be set explicitly, not left to
+the existing `VERCEL_URL` fallback in `getSiteURL()`**: `VERCEL_URL` is
+Vercel's *per-deployment* URL — a hash that changes on every single
+build, not the stable production domain. `getSiteURL()`'s fallback
+predates any real deployment (written speculatively early in the
+project) and was never exercised against Vercel's actual runtime
+behavior until now. Left as-is, every push to `main` would have silently
+changed where auth confirmation emails point. Fixed by setting
+`NEXT_PUBLIC_SITE_URL` explicitly in Production env vars to the stable
+`project-stage-weld.vercel.app` domain — an env var change, not a code
+change (the existing fallback order already checks this var first).
+Vercel does expose a *stable* per-project variable
+(`VERCEL_PROJECT_PRODUCTION_URL`) that `getSiteURL()` could fall back to
+instead of `VERCEL_URL` — not adopted here, since an explicit,
+dashboard-visible env var is more inspectable than a second layer of
+runtime auto-detection for a single-domain prototype with no preview
+workflow that depends on it.
+
+**Finding 2 — Vercel's "Sensitive" env var type cannot be read back by
+anyone, including the project owner, once set**: attempted to verify the
+LiveKit credentials by pulling them locally (`vercel env pull`) and
+replaying the app's own token-minting/webhook-signing logic against the
+real LiveKit project as a server-side check. Every var came back as the
+literal string `[SENSITIVE]` — not a bug, a deliberate Vercel security
+property of that variable type (all vars in this project default to
+Sensitive when added through the dashboard/CLI). **Consequence**:
+verifying a Sensitive credential's correctness can only be done by
+observing the *deployed app's* actual behavior — never by fetching the
+value out for a local side-by-side test, not even by the person who set
+it. Adjusted the verification approach accordingly: checked the live
+room page's SSR output for the absence of `getLiveKitToken`'s
+"Couldn't connect" fallback text (proves the vars are present and
+non-empty, and that local JWT signing succeeds — token minting itself
+never calls LiveKit's API), and separately confirmed the deployed
+webhook route genuinely validates signatures (a bogus signature and a
+missing one both correctly return 401 from the live public URL). What
+this *doesn't* prove — a validly-signed webhook payload being accepted,
+and the actual client-side WebRTC connection succeeding — can't be
+proven without either the real secret (which nobody but the person who
+set it should paste anywhere, including here) or a real browser
+(camera/mic permission prompts, actual video negotiation), which this
+environment doesn't have. Documented as an explicit, honest limit of
+what an agent session can verify for this feature, not glossed over.
+
+**Reason both are recorded here**: neither was a design *choice* so much
+as a real gap between how the code was written (before any deployment
+existed) and how Vercel's platform actually behaves — exactly the kind
+of thing worth writing down so the next session that touches deployment
+config doesn't rediscover either the hard way.
+
+**Tradeoffs**: none of consequence — both fixes were env-var-only, no
+code changes, no new infrastructure.
+
+---
+
 ## 2026-08-12 — A dev-only `/dev` route for browser-based usability testing, and why it has to be gated differently than the CLI harness
 
 **Problem**: the CLI harness (`scripts/dev-harness.mts`) solved "create

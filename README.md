@@ -129,9 +129,11 @@ away** — gating happens at the specific action, not the page.
    from a real LiveKit room, configure a webhook pointing at
    `/api/livekit/webhook` in the LiveKit project dashboard (Settings →
    Webhooks) — it uses the same `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`
-   above, not a separate credential. This isn't reachable from local dev
-   without a public tunnel (e.g. ngrok); see the route handler's own
-   comment for why that's not a blocker for testing its logic.
+   above, not a separate credential. **This is configured and live for the
+   deployed app** (see "Deployment" below) — it was never reachable from
+   local dev without a public tunnel (e.g. ngrok), which is still true;
+   local dev's webhook logic is verified by tests constructing real signed
+   payloads instead, per the route handler's own comment.
 
 7. Run the dev server:
 
@@ -458,3 +460,50 @@ it to GitHub — no `-u`/upstream flag needed after the first push, since
 **Pulling on a new machine/session**: `git clone https://github.com/Rapscallion12/project-stage.git`,
 then follow "Getting started" above (`npm install`, copy `.env.local.example`,
 etc.) — none of that is stored in git.
+
+## Deployment
+
+**Live at [https://project-stage-weld.vercel.app](https://project-stage-weld.vercel.app)**
+— Vercel Hobby tier, no custom domain. The GitHub repo is connected via
+Vercel's Git integration: **every push to `main` auto-deploys**, no
+manual trigger needed (confirmed with a real push, not just a
+dashboard status check).
+
+**Environment variables** (Vercel Project Settings → Environment
+Variables → Production): the same ones "Getting started" above walks
+through for local dev, all marked "Sensitive" —
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+`NEXT_PUBLIC_LIVEKIT_URL` — **plus `NEXT_PUBLIC_SITE_URL`, set explicitly
+to `https://project-stage-weld.vercel.app`**. Don't leave that last one
+unset in production: the code's fallback (`VERCEL_URL`) is a
+per-deployment hash that changes on every push, not this stable domain —
+see DECISIONS.md.
+
+**Once set, a fresh production build is required** for `NEXT_PUBLIC_*`
+changes to take effect (`vercel --prod`, or push a commit) — these are
+inlined into the build output, not read at request time the way
+server-only vars are.
+
+**Supabase Auth → URL Configuration** needs the deployed domain added to
+**Redirect URLs** (`https://project-stage-weld.vercel.app/**`) alongside
+the existing localhost entry — additive, never remove the local one.
+
+**LiveKit Cloud → Settings → Webhooks** needs a webhook pointing at
+`https://project-stage-weld.vercel.app/api/livekit/webhook`, signing with
+the same `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` — this is what makes a
+disconnected speaker's seat correctly free up instead of staying stuck;
+see "Getting started" above.
+
+**`/dev` is not reachable in production** (`isDevToolsAvailable()` checks
+`NODE_ENV`, which Vercel force-sets to `production` for every deploy) —
+confirmed with a direct request returning 404, both right after deploy
+and after a later auto-triggered rebuild. Use `npm run dev:harness` (see
+"Development test harness" above) against the same linked Supabase
+project to create/seat/reset test events for the deployed app instead.
+
+**Vercel's "Sensitive" env var type can't be read back** once set — not
+via the dashboard, not via `vercel env pull`, not by the project owner.
+Verifying one of these is correctly configured has to happen by observing
+the deployed app's actual behavior, never by fetching the value back out
+for a local check. See DECISIONS.md.

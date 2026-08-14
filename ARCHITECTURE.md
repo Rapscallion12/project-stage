@@ -11,7 +11,7 @@
 | Schema management | Supabase CLI | Linked to the one live project (`xuzlgcfuwlcpejhctofv`). Migrations applied via `supabase db push --linked`, never hand-pasted into the dashboard. See [Migration workflow](#migration-workflow). |
 | Realtime | Supabase Realtime | Implemented for the pre-show lobby: chat messages (Postgres Changes), reactions (Postgres Changes), attendee presence. Not yet used for the future live room's votes/live-reactions. |
 | Video | LiveKit | Used for the two-speaker live audio/video. `livekit-server-sdk` and `livekit-client` both installed; token minting (issue #2), the server-authoritative seat-transition/disconnect-webhook write path (issue #13), and the browser room UI that actually connects (issue #3) are all implemented. See [Video plan](#video-plan) and [Live room UI](#live-room-ui). |
-| Deployment | Vercel | Not yet deployed. Local dev only so far. |
+| Deployment | Vercel | Deployed (Hobby tier): https://project-stage-weld.vercel.app. See [Deployment](#deployment) below. |
 
 ### Next.js 16: read this before writing app code
 
@@ -1186,6 +1186,53 @@ extend it rather than relying on tribal knowledge.
 
 ## Deployment
 
-Vercel is the intended target. Not yet configured — no `vercel.json` /
-project link exists in this repo. Do not deploy from an agent session
-without explicit user instruction (per the project's DO NOT list).
+**Deployed to Vercel** (Hobby tier, no custom domain):
+**https://project-stage-weld.vercel.app**. No `vercel.json` in the repo —
+Vercel's Next.js zero-config detection handles build/output settings,
+nothing to override. The GitHub repo (`Rapscallion12/project-stage`,
+private) is connected via Vercel's own Git integration, confirmed with a
+real push, not just a status check: every push to `main` triggers an
+automatic production rebuild. Do not deploy or change deployment
+configuration from an agent session without explicit user instruction
+(per the project's DO NOT list) — this section only being non-empty at
+all reflects that instruction having been given.
+
+**Production environment variables** (Vercel Project Settings →
+Environment Variables, all marked "Sensitive"): the same seven this
+project always needed locally —
+`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`/
+`SUPABASE_SERVICE_ROLE_KEY`, `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`/
+`NEXT_PUBLIC_LIVEKIT_URL`, plus `NEXT_PUBLIC_SITE_URL` — set explicitly
+to the stable `project-stage-weld.vercel.app` domain, **not** left to
+`getSiteURL()`'s `VERCEL_URL` fallback. That fallback resolves to a
+*per-deployment* hash URL that changes on every build (Vercel's stable
+identity for this purpose is `VERCEL_PROJECT_PRODUCTION_URL`, which this
+codebase doesn't currently read) — leaving `NEXT_PUBLIC_SITE_URL` unset
+would have made auth email links point at a different URL after every
+single push.
+
+**Vercel's "Sensitive" env var type cannot be read back once set** — not
+by the dashboard, not by `vercel env pull` (which returns a `[SENSITIVE]`
+placeholder string in place of the real value), not even by the project
+owner. This is deliberate on Vercel's part, not a bug, but it means
+verifying a Sensitive var's *correctness* can only be done by observing
+the deployed app's actual behavior (does the feature that depends on it
+work?), never by fetching the value back out for a local side-by-side
+check. Learned the hard way attempting exactly that for the LiveKit
+credentials — see DECISIONS.md.
+
+**The LiveKit webhook now has a real, reachable target** (`/api/livekit/webhook`
+— see LiveKit authorization model above) for the first time, since it
+needs a public HTTPS URL that local dev never had. Configured in the
+LiveKit Cloud project's Settings → Webhooks, signing with the same
+`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` already in use. Verified reachable
+and genuinely checking signatures (both a bogus signature and a missing
+one correctly return 401 from the live deployed URL) — the accept-path
+(a validly-signed payload succeeding) can only be confirmed by a real
+LiveKit-originated event or the project owner's own signed test, since
+the credential itself is Sensitive and unreadable by anyone else,
+agent included.
+
+**`/dev` is confirmed inert in production** — checked immediately after
+the first deploy and again after an auto-triggered rebuild (both
+returned a genuine 404, not just "the page looks empty").

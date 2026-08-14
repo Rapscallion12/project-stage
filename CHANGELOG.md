@@ -1,12 +1,34 @@
 # Changelog
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
-Dates are session dates, not deploy dates — nothing has been deployed yet.
+Dates are session dates, not deploy dates — every push to `main` deploys
+automatically (see README.md's Deployment section), so there's no
+separate release cadence to track here.
 
 ## [Unreleased]
 
 ### Added
 
+- **First deployment — Vercel Hobby, live at
+  [project-stage-weld.vercel.app](https://project-stage-weld.vercel.app)**.
+  GitHub-integrated (every push to `main` auto-deploys, confirmed with a
+  real push). `NEXT_PUBLIC_SITE_URL` set explicitly to the stable domain
+  rather than left to the code's `VERCEL_URL` fallback, which turned out
+  to resolve to a per-deployment hash that changes on every build — would
+  have silently shifted auth email links on every push. Supabase Auth's
+  Redirect URLs allowlist updated additively (existing localhost entry
+  untouched) to accept the new domain. LiveKit wired in for the first
+  time against a real public HTTPS URL: credentials added as Vercel env
+  vars, and — only possible now that a public URL exists —
+  `/api/livekit/webhook` configured in the LiveKit Cloud dashboard, then
+  confirmed live (a bogus signature and a missing one both correctly
+  return 401 from the deployed URL). `/dev` confirmed 404ing in
+  production both immediately after deploy and after a later
+  auto-triggered rebuild. See DECISIONS.md for the full reasoning,
+  including a real limit worth knowing: Vercel's "Sensitive" env var type
+  can't be read back once set, by anyone, which changes how a credential
+  like this can be verified (through the deployed app's behavior, never
+  by fetching the value back out).
 - **`/dev` browser-based usability-testing UI** — create a live demo
   event, open its room, and seat your logged-in account in seat 1 or 2
   without any CLI commands. Complements (doesn't replace) the CLI dev
