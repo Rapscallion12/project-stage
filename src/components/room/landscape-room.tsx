@@ -23,6 +23,10 @@ export function LandscapeRoom({
   getParticipant,
   participantCount,
   connectionStatus,
+  canPublish,
+  needsMediaActivation,
+  activateMedia,
+  mediaError,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -48,6 +52,11 @@ export function LandscapeRoom({
           isSpeaker={isSpeaker}
           identity={identity}
           hasPendingRequest={hasPendingRequest}
+          canPublish={canPublish}
+          needsMediaActivation={needsMediaActivation}
+          activateMedia={activateMedia}
+          mediaError={mediaError}
+          connectionStatus={connectionStatus}
         />
       </div>
       <RoomChatPanel

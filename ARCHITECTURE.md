@@ -869,16 +869,42 @@ have derived the speaker list from LiveKit's own track state).
 connection state. A viewer's own degraded LiveKit connection is shown
 separately, alongside it, in `RoomHeader`.
 
-**Automatic publish, reacting live to permission changes**:
-`useLiveRoomConnection` calls `setMicrophoneEnabled`/`setCameraEnabled`
-based on `shouldPublish(localParticipant.permissions)` on connect, and
-again on every `RoomEvent.ParticipantPermissionsChanged` targeting the
-local participant — the client-side half of issue #13's
-`syncPublishPermission` push. A participant whose token/permissions say
-`canPublish: false` never has an opportunity to publish: `shouldPublish`
-gates the only code path that calls `setCameraEnabled(true)`/
-`setMicrophoneEnabled(true)` at all, and LiveKit's SFU independently
-enforces the grant server-side regardless.
+**Gesture-gated publish, reacting live to permission changes** (issue
+#15): `useLiveRoomConnection` tracks `canPublish` from
+`shouldPublish(localParticipant.permissions)` on connect and on every
+`RoomEvent.ParticipantPermissionsChanged` targeting the local
+participant — the client-side half of issue #13's `syncPublishPermission`
+push — but does **not** call `setMicrophoneEnabled`/`setCameraEnabled`
+automatically the first time `canPublish` becomes true. That first call is
+what actually triggers `getUserMedia`, and iOS/macOS Safari silently
+refuses to even show the permission prompt for a `getUserMedia` call
+that isn't inside the call stack of a real user gesture — calling it from
+a `RoomEvent.Connected`/`ParticipantPermissionsChanged` callback (both are
+async event-emitter callbacks, never a click) is exactly what caused
+camera/mic to never activate on a real iPhone (see DECISIONS.md). The hook
+instead exposes `needsMediaActivation` (true once `canPublish` but before
+this tab has activated media) and `activateMedia()`, which the UI
+(`RoomControls`) must call directly from a button's `onClick` — see the
+hook's own doc comment. Once that first gesture-triggered call resolves
+(permission granted or denied), subsequent `canPublish` flips resync
+automatically without another tap, same as before — the gesture
+requirement is specifically for the first permission prompt, and
+origin-level camera/mic permission persists for the rest of the tab's
+session. Disabling (`canPublish` becoming `false`) never needed a gesture
+and still happens automatically in every case. A participant whose
+token/permissions say `canPublish: false` never has an opportunity to
+publish regardless of any of this — LiveKit's SFU independently enforces
+the grant server-side.
+
+**Media errors are specific, not silent** (issue #15): `getUserMedia`
+failures are classified via the browser's own `DOMException.name`
+(`classifyMediaError` in `use-live-room-connection.ts`) into
+`permission-denied` / `no-device` / `device-unavailable` / `init-failed`,
+per camera/microphone independently, and surfaced in `RoomControls` with
+specific copy — never a generic "camera off." `RoomLayoutProps` carries
+`mediaError`/`canPublish`/`needsMediaActivation`/`activateMedia` down
+from `LiveRoom` alongside `connectionStatus`, so this reaches the UI the
+same way every other piece of live room state does.
 
 **Orientation**: `hooks/use-orientation.ts` implements the
 `window.matchMedia('(orientation: portrait)')` pattern

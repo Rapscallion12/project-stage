@@ -4,6 +4,116 @@ Newest entry first.
 
 ---
 
+## 2026-08-13 — Session 17: Real iPhone testing findings + camera/mic activation fix (issue #15)
+
+**Goal**: Respond to the user's real hands-on iPhone testing of the
+deployed app (Session 16's first real-device test), which surfaced four
+categories of problems: account-required guest testing friction, a
+fragmented event→lobby→room flow, camera/mic never activating, and an
+undifferentiated audience/speaker UI. Per this project's standing rule
+("walk the design through out loud before implementing"), this session's
+first half was pure investigation and design — no code — followed by
+approval, GitHub issue creation, and implementation of the first
+approved issue only.
+
+**Investigation** (before any code): read every file in the actual
+guest-identity/event-lifecycle/LiveKit-connection/room-UI path — not
+from memory — to trace exactly why camera/mic silently failed, exactly
+what "account-only speaking" enforces today and where, and exactly what
+route/hook structure the lobby→room split has. Found:
+- The camera/mic root cause: `useLiveRoomConnection` triggered
+  `getUserMedia` from an async LiveKit event callback, never a user
+  gesture — invisible on desktop Chrome (no such restriction), fatal on
+  iOS Safari.
+- `mediaError` was already computed in that hook and never read anywhere
+  — a second, independent silent-failure bug.
+- Guest speaking is blocked at the schema level
+  (`event_speakers.profile_id not null references profiles`), not just
+  in application code — confirmed this was a deliberate, documented
+  design choice (migration 00000000000005's comment, PRODUCT.md
+  Principle 3's "requesting the mic is the clearest account-only action
+  in the product"), not an oversight — meaning enabling it is a stated
+  product-principle change, not a silent bug patch.
+- `lib/config.ts` already had an unused `PROTOTYPE_CONFIG.guestParticipationEnabled`
+  toggle, seemingly set up in advance for exactly this kind of decision.
+- `RoomChatPanel`'s `featuredSlot` seam (for future pinned/featured
+  comments) already exists and is already unused — nothing new needed to
+  preserve it, just don't touch it.
+
+**Design proposal presented and approved**, with one explicit reordering
+by the user: the four-issue split (camera/mic fix, guest speaking,
+unified lifecycle, role-based UI) must be built **sequentially**, each
+tested on the real deployed app on a phone before the next begins — not
+the parallel A/C split originally proposed. Locked product decisions from
+the user: guest speaking is an explicit, reversible testing-phase
+exception (not a permanent principle change) governed by the existing
+`PROTOTYPE_CONFIG` flag; mic requests should work during the pre-show
+waiting phase too, not just once live; guest identity loss on
+cookie-clear/device-switch is an accepted prototype limitation, no
+seat-recovery infrastructure yet; the Postgres function-signature
+question (overload vs. replace) is deferred to whichever preserves
+existing security guarantees with the smallest API, decided when that
+issue is actually implemented.
+
+**GitHub issues #15–#18 created** with their dependency chain documented
+in each body, added to the Project board in Ready, in dependency order.
+`gh` was confirmed available and authenticated this session (the
+project's standing instruction to check before assuming otherwise, not
+ask the user to create issues manually).
+
+**Issue #15 implemented this session** (the only one approved to start):
+- `hooks/use-live-room-connection.ts`: `useLiveRoomConnection` no longer
+  auto-publishes on `RoomEvent.Connected`/`ParticipantPermissionsChanged`.
+  It now exposes `canPublish` (the server's grant, tracked live as
+  before), `needsMediaActivation` (true once granted but not yet
+  activated in this tab), and `activateMedia()` — which must be called
+  directly from a real click handler. Once the first gesture-triggered
+  call resolves, later `canPublish` changes resync automatically without
+  another tap (permission persists for the tab's session once granted;
+  disabling never needed a gesture and still happens automatically).
+  `classifyMediaError` (newly exported, unit-tested) maps
+  `getUserMedia`'s own `DOMException.name` into
+  `permission-denied`/`no-device`/`device-unavailable`/`init-failed`,
+  per camera/microphone independently.
+- `RoomLayoutProps`/`LiveRoom`/`PortraitRoom`/`LandscapeRoom`/`RoomControls`:
+  threaded `mediaError`/`canPublish`/`needsMediaActivation`/`activateMedia`
+  through the same way `connectionStatus` already flows, down to
+  `RoomControls`, which now shows an explicit "Enable camera & mic"
+  button and specific, source-aware error/status copy for a seated
+  speaker instead of a silent generic placeholder.
+- Deliberately did not touch `SpeakerTile`'s layout or build any
+  speaker-specific UI redesign — that's issue #18, kept out of scope here
+  to stay narrowly focused on the activation bug itself.
+
+**Files changed**: `hooks/use-live-room-connection.ts` (+test),
+`components/room/types.ts`, `components/room/live-room.tsx`,
+`components/room/portrait-room.tsx`, `components/room/landscape-room.tsx`,
+`components/room/room-controls.tsx` (+test), `ARCHITECTURE.md`,
+`DECISIONS.md`, `CHANGELOG.md`, `SESSION_LOG.md` (this entry).
+
+**Tests run**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm test`
+— 115/115 passing (up from 105 at Session 15, reflecting the new
+`classifyMediaError` and `RoomControls` media-state tests), `npm run
+build` succeeds.
+
+**Known issues**: None new. Issue #15's fix is scoped to activation +
+error surfacing within the existing room layout — the speaker-specific
+layout redesign (large other-speaker view, small self-preview, etc.) is
+explicitly issue #18's job, not built here.
+
+**Current build status**: Implemented on `fix/livekit-media-activation`,
+verified locally; not yet merged/deployed as of this entry — see this
+session's next steps (merge to `main`, confirm Vercel auto-deploy, hand
+the user the public test link + a short iPhone camera/mic checklist, then
+wait for their real-device confirmation before starting issue #16 per
+their explicit instruction).
+
+**Recommended next task**: after the user confirms camera/mic works on
+their iPhone against the deployed build, start issue #16 (guest speaker
+participation) — not before, per explicit instruction.
+
+---
+
 ## 2026-08-13 — Session 16: First deployment (Vercel) + live LiveKit wiring
 
 **Goal**: Get the app onto a public HTTPS URL for phone/multi-tester

@@ -1,5 +1,5 @@
 import type { Participant } from "livekit-client";
-import type { ConnectionStatus } from "@/hooks/use-live-room-connection";
+import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
@@ -26,6 +26,13 @@ export type RoomLayoutProps = {
   getParticipant: (identity: string) => Participant | undefined;
   participantCount: number;
   connectionStatus: ConnectionStatus;
+  /** Whether the server currently grants this participant canPublish — distinct from whether media has been activated in this tab yet. */
+  canPublish: boolean;
+  /** True once canPublish but camera/mic hasn't been activated in this tab — RoomControls shows an explicit tap-to-enable affordance for this (see activateMedia's own doc comment for why it can't just happen automatically). */
+  needsMediaActivation: boolean;
+  /** Must be invoked directly from a click handler — see useLiveRoomConnection's activateMedia. */
+  activateMedia: () => Promise<void>;
+  mediaError: MediaError;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
 };

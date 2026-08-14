@@ -303,6 +303,23 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **Camera and microphone never activated for a seated speaker on real
+  iPhone Safari** (issue #15) — found via hands-on testing of the deployed
+  app. Root cause: `useLiveRoomConnection` called
+  `setMicrophoneEnabled`/`setCameraEnabled` from LiveKit's async
+  `RoomEvent.Connected`/`ParticipantPermissionsChanged` callbacks, never
+  from a real user tap; Safari silently refuses to even show the
+  permission prompt for a `getUserMedia` call outside a gesture's call
+  stack. A second bug compounded it: the hook already computed a
+  `mediaError` value that nothing in the UI ever read. Fixed by requiring
+  an explicit "Enable camera & mic" tap (`RoomControls`, calling the
+  hook's new `activateMedia()` directly from `onClick`) for the *first*
+  activation only — subsequent server-driven `canPublish` changes still
+  resync automatically, since browser media permission persists for the
+  rest of the tab's session once granted — and by classifying/surfacing
+  `getUserMedia` failures via their `DOMException.name` (permission
+  denied / no device / device unavailable / init failed) instead of a
+  generic silent placeholder. See DECISIONS.md.
 - **Project board Status field left stale after closing an issue.**
   Closing a GitHub issue via `closes #N` in a commit message closes the
   *issue*; it never touched the Project board's custom Status

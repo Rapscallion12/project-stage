@@ -65,6 +65,10 @@ export function LiveRoom({
     getParticipant: connection.getParticipant,
     participantCount: connection.participantCount,
     connectionStatus: connection.status,
+    canPublish: connection.canPublish,
+    needsMediaActivation: connection.needsMediaActivation,
+    activateMedia: connection.activateMedia,
+    mediaError: connection.mediaError,
     messages,
     reactions,
   };

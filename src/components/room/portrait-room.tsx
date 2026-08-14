@@ -22,6 +22,10 @@ export function PortraitRoom({
   getParticipant,
   participantCount,
   connectionStatus,
+  canPublish,
+  needsMediaActivation,
+  activateMedia,
+  mediaError,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -42,6 +46,11 @@ export function PortraitRoom({
         isSpeaker={isSpeaker}
         identity={identity}
         hasPendingRequest={hasPendingRequest}
+        canPublish={canPublish}
+        needsMediaActivation={needsMediaActivation}
+        activateMedia={activateMedia}
+        mediaError={mediaError}
+        connectionStatus={connectionStatus}
       />
     </div>
   );

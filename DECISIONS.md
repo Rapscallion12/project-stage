@@ -3,6 +3,86 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-13 — Camera/mic never activated on real iPhone Safari: gesture-gated activation, not automatic (issue #15)
+
+**Problem**: Hands-on testing of the deployed app on a real iPhone
+(Session 17) found that a seated speaker's camera and microphone never
+activated — Safari never even showed the permission prompt, and
+`SpeakerTile` silently rendered the generic "camera off" placeholder with
+no indication anything had failed.
+
+**Root cause, traced through the actual connection code, not guessed**:
+`useLiveRoomConnection` called `setMicrophoneEnabled`/`setCameraEnabled`
+(the calls that trigger `getUserMedia`) from `syncPublishing()`, itself
+invoked from the async `RoomEvent.Connected` and
+`RoomEvent.ParticipantPermissionsChanged` callbacks — LiveKit's own
+WebSocket event emitter, never a user tap. iOS/macOS Safari requires
+`getUserMedia` to execute synchronously within the call stack of a real
+user-gesture event handler; called from an async event callback, it
+silently declines to even show the prompt. A second, independent bug
+compounded this: the hook already computed a `mediaError` value in its
+catch blocks, but nothing in the component tree ever read it —
+`RoomLayoutProps` had no field for it — so even a *legitimate* failure
+(permission actually denied, no camera present) produced no visible
+error either.
+
+**Alternatives considered**:
+1. Try to keep auto-publishing on connect, and look for a workaround that
+   preserves "user activation" across the async gap to `RoomEvent.Connected`
+   (e.g. pre-warming a `getUserMedia` call speculatively earlier in a click
+   handler that led to this page). Rejected — fragile, browser-version
+   dependent, and exactly the "fighting the browser" approach ruled out
+   up front; Safari's user-activation window doesn't reliably survive a
+   WebSocket round trip no matter how it's massaged.
+2. Require an explicit, separate tap to first-activate camera/mic, and
+   treat every *subsequent* `canPublish` change (server promotion,
+   live revocation, re-promotion) as automatic, since browser-granted
+   media permission persists for the rest of the tab's session once
+   the first prompt is resolved.
+
+**Decision**: Option 2. `useLiveRoomConnection` now exposes
+`canPublish` (the server's grant, tracked live as before),
+`needsMediaActivation` (true once `canPublish` but before this tab has
+activated media), and `activateMedia()` — a function that must be called
+directly from a real click handler. `RoomControls` renders an explicit
+"Enable camera & mic" button for a seated speaker whenever
+`needsMediaActivation` is true, and calls `activateMedia()` synchronously
+from its `onClick`. Disabling (`canPublish` becoming `false`) never needed
+a gesture and still happens automatically in every case, same as before.
+
+**Media errors are now classified and surfaced, not swallowed**:
+`classifyMediaError` maps `getUserMedia`'s own `DOMException.name`
+(`NotAllowedError`/`SecurityError` → permission denied,
+`NotFoundError`/`OverconstrainedError` → no device,
+`NotReadableError`/`AbortError` → device unavailable, anything else →
+init failed) into a `MediaError` value threaded through
+`RoomLayoutProps` down to `RoomControls`, which shows source-specific
+copy ("Camera permission was denied…", "No microphone found on this
+device.") instead of a generic failure. A "Setting up your mic access…"
+message covers the brief connected-but-not-yet-granted window
+specifically (distinguished from still-connecting/reconnecting, which
+`RoomHeader` already covers, to avoid showing both at once).
+
+**Reason this is scoped as its own issue, not folded into the later
+role-based UI work**: this is a correctness bug affecting today's
+account-only speakers already, independent of guest participation or the
+lifecycle/UI redesign work queued behind it — fixing it first means every
+later issue in the sequence (guest speaking, the unified lifecycle,
+role-based views) gets tested against a room where media actually works,
+rather than compounding on top of a known-broken foundation.
+
+**Tradeoffs**: A seated speaker now sees an explicit button rather than
+media silently starting on its own — a small extra step, but the
+alternative (silent, and on Safari, *non-functional* auto-publish) isn't
+actually simpler, it's just broken. The activation button and error copy
+live in the existing `RoomControls` strip for now, not a
+speaker-specific layout — issue #18 (role-based Audience/Candidate/Speaker
+views) is where this gets a more prominent, purpose-built treatment; this
+issue deliberately doesn't redesign the room's layout to stay narrowly
+scoped to the activation bug itself.
+
+---
+
 ## 2026-08-13 — First deployment (Vercel Hobby), and two real findings from wiring LiveKit into it
 
 **Problem**: usability testing needed a public HTTPS URL — nothing to

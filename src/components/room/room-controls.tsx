@@ -9,7 +9,23 @@ import {
   requestToSpeak,
   withdrawSpeakerRequest,
 } from "@/app/events/[id]/room/actions";
+import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import type { Identity } from "@/lib/identity";
+
+/** Specific, named copy per failure reason — see MediaErrorReason's doc comment for why these are distinguished instead of a generic "camera off". */
+function mediaErrorMessage(error: NonNullable<MediaError>): string {
+  const device = error.source === "camera" ? "Camera" : "Microphone";
+  switch (error.reason) {
+    case "permission-denied":
+      return `${device} permission was denied. Check your browser's site settings and try again.`;
+    case "no-device":
+      return `No ${error.source} found on this device.`;
+    case "device-unavailable":
+      return `${device} is unavailable right now — it may be in use by another app.`;
+    case "init-failed":
+      return `Couldn't start the ${error.source}. Try again.`;
+  }
+}
 
 /**
  * The room's speaker-facing and request-facing controls (issues #13/#3's
@@ -39,11 +55,21 @@ export function RoomControls({
   isSpeaker,
   identity,
   hasPendingRequest: initialHasPendingRequest,
+  canPublish,
+  needsMediaActivation,
+  activateMedia,
+  mediaError,
+  connectionStatus,
 }: {
   eventId: string;
   isSpeaker: boolean;
   identity: Identity;
   hasPendingRequest: boolean;
+  canPublish: boolean;
+  needsMediaActivation: boolean;
+  activateMedia: () => Promise<void>;
+  mediaError: MediaError;
+  connectionStatus: ConnectionStatus;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -110,11 +136,37 @@ export function RoomControls({
   }
 
   if (isSpeaker) {
+    // Waiting-for-grant is only worth naming once actually connected —
+    // while still connecting/reconnecting, RoomHeader's own status text
+    // already covers it, and showing both would just be redundant.
+    const waitingForGrant = !canPublish && !needsMediaActivation && connectionStatus === "connected";
+
     return (
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-4 py-3">
-        <Button variant="secondary" onClick={handleLeave} disabled={isPending}>
-          {isPending ? "Leaving…" : "Leave the stage"}
-        </Button>
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Button variant="secondary" onClick={handleLeave} disabled={isPending}>
+            {isPending ? "Leaving…" : "Leave the stage"}
+          </Button>
+          {needsMediaActivation && (
+            <Button
+              onClick={() => {
+                // Must be called directly here, not from inside another
+                // callback/promise — this is the user gesture Safari
+                // requires to even show the camera/mic permission prompt.
+                // See useLiveRoomConnection's activateMedia doc comment.
+                void activateMedia();
+              }}
+            >
+              Enable camera &amp; mic
+            </Button>
+          )}
+        </div>
+        {waitingForGrant && <p className="text-xs text-muted">Setting up your mic access…</p>}
+        {mediaError && (
+          <p className="text-xs text-red-500" role="alert">
+            {mediaErrorMessage(mediaError)}
+          </p>
+        )}
         {error && (
           <p className="text-xs text-red-500" role="alert">
             {error}
