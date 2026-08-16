@@ -149,10 +149,23 @@ precedent bleed into the live room, which genuinely does need to.
       LiveKit's own participant/track state — see DECISIONS.md for why
       that was a correction to the initial design. Adaptive video
       quality (`adaptiveStream`/`dynacast`) enabled at the LiveKit
-      client level; explicit camera/microphone permission-denied
-      handling via `mediaError` state. `livekit-client`'s own
-      reconnect handling covers flaky networks (`RoomEvent.Reconnecting`/
-      `Reconnected`, surfaced in `RoomHeader`).
+      client level. `livekit-client`'s own reconnect handling covers
+      flaky networks (`RoomEvent.Reconnecting`/`Reconnected`, surfaced in
+      `RoomHeader`). Camera/microphone activation itself didn't actually
+      work on real mobile Safari until issue #15 below — this issue's
+      `mediaError` state existed but was never surfaced anywhere in the
+      UI, an untested gap only caught by real-device testing.
+- [x] Camera/mic activation fix (issue #15) — found via real iPhone
+      Safari testing of the deployed app: camera/mic silently never
+      activated because `getUserMedia` was triggered from an async
+      LiveKit event callback rather than a user gesture, which Safari
+      requires. Fixed with an explicit "Enable camera & mic" tap
+      (`activateMedia()`, `useLiveRoomConnection`) for the first
+      activation only; later server-driven `canPublish` changes still
+      resync automatically. `mediaError` failures are now classified via
+      `getUserMedia`'s own `DOMException.name` and surfaced in
+      `RoomControls` with specific copy instead of a silent placeholder.
+      See DECISIONS.md.
 - [x] Audience viewing (join a live room as a non-speaker) — guest-viewable,
       no account required (part of issue #3 above)
 - [x] Audience count — part of issue #3 above, but **not** a dedicated
@@ -166,6 +179,36 @@ precedent bleed into the live room, which genuinely does need to.
       (distinct from issue #13/#3's "Leave the stage," which only ends a
       seated speaker's occupancy — this is a still-unbuilt, broader
       "get out of the room" affordance)
+
+### Real-device-testing follow-on (issues #16–#18)
+
+First real iPhone testing of the deployed app (Session 17) surfaced
+product/UX problems beyond the camera/mic bug (issue #15, above): account
+creation getting in the way of testing, a fragmented event→lobby→room
+flow, and an undifferentiated audience/speaker UI. Scoped as three
+sequential issues, each deployed and tested on a real phone before the
+next starts (per the user's explicit instruction — no stacking unverified
+changes) — see DECISIONS.md for the full design reasoning and
+PRODUCT.md's testing-phase guest-participation exception.
+
+- [ ] Guest speaker participation (issue #16) — **explicit, reversible
+      testing-phase exception** to the account-only speaking rule above,
+      gated behind `PROTOTYPE_CONFIG.guestParticipationEnabled`
+      (`lib/config.ts`). Guest writes stay on the same trusted-server
+      (`service_role`-only) tier `claim_speaker_seat`/`end_speaker_seat`
+      already use — no new `anon` grant anywhere. Mic requests become
+      possible during the waiting/lobby phase, not just once live.
+- [ ] Unified event/lobby/live-room lifecycle (issue #17) — collapses
+      `/events/[id]`, `/lobby`, and `/room` into one persistent client
+      experience; the waiting room becomes the live room in place (a
+      genuine state transition, not a redirect) with chat/presence/LiveKit
+      connection surviving the transition, same discipline as the
+      orientation architecture already requires.
+- [ ] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
+      gets a purpose-built layout (other speaker prioritized, own preview
+      small, controls immediately reachable), not the audience UI with
+      their own video added. Preserves the `featuredSlot`/reply-thread
+      seams without implementing them.
 
 ## Phase 3 — Audience power features
 

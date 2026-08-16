@@ -101,16 +101,21 @@ error surfacing within the existing room layout — the speaker-specific
 layout redesign (large other-speaker view, small self-preview, etc.) is
 explicitly issue #18's job, not built here.
 
-**Current build status**: Implemented on `fix/livekit-media-activation`,
-verified locally; not yet merged/deployed as of this entry — see this
-session's next steps (merge to `main`, confirm Vercel auto-deploy, hand
-the user the public test link + a short iPhone camera/mic checklist, then
-wait for their real-device confirmation before starting issue #16 per
-their explicit instruction).
+**Current build status**: Merged to `main` (`ac8346a`, fast-forward from
+`fix/livekit-media-activation`, `closes #15`) and pushed — GitHub
+auto-closed issue #15 on the push, confirmed via `gh issue view`. Vercel
+auto-deployed it (`dpl_Ax5e8B4C64kadP1VPaHM2JpMErTK`, created ~7 minutes
+after the push, aliased to the canonical
+`project-stage-weld.vercel.app`) — confirmed via `vercel inspect`, not
+just assumed from the push succeeding. Board card for #15 initially sat
+in **Testing / Review** after the merge — the exact stale-board gap
+DECISIONS.md already flagged once before — caught and corrected to
+**Done** in the following session before doing anything else.
 
-**Recommended next task**: after the user confirms camera/mic works on
-their iPhone against the deployed build, start issue #16 (guest speaker
-participation) — not before, per explicit instruction.
+**Recommended next task**: hand the user the public test link + a short
+iPhone camera/mic checklist (below), then wait for their real-device
+confirmation before starting issue #16 (guest speaker participation) —
+not before, per their explicit instruction.
 
 ---
 
