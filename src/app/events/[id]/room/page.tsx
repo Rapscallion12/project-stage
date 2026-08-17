@@ -5,7 +5,7 @@ import { resolveIdentity } from "@/lib/identity";
 import { getEventById } from "@/lib/repositories/events";
 import { listActiveSpeakers } from "@/lib/repositories/event-speakers";
 import { listRecentMessages, listReactionsForMessages } from "@/lib/repositories/chat";
-import { getPendingRequestForProfile } from "@/lib/repositories/speaker-requests";
+import { getPendingRequestForIdentity } from "@/lib/repositories/speaker-requests";
 import { getLiveKitToken } from "./actions";
 import type { ReactionState } from "@/hooks/use-lobby-realtime";
 
@@ -32,7 +32,7 @@ export default async function RoomPage(props: PageProps<"/events/[id]/room">) {
     listActiveSpeakers(id),
     listRecentMessages(id, HISTORY_LIMIT),
     getLiveKitToken(id),
-    identity.type === "profile" ? getPendingRequestForProfile(id, identity.id) : Promise.resolve(null),
+    getPendingRequestForIdentity(id, identity),
   ]);
   const reactionRows = await listReactionsForMessages(messages.map((m) => m.id));
 

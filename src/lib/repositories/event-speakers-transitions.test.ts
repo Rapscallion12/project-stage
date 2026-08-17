@@ -115,7 +115,7 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
   }, 30_000);
 
   it("seats a profile into an empty seat, snapshotting display_name from profiles (issue #3)", async () => {
-    const row = await claimSpeakerSeat(eventId, profiles.a.id, 1);
+    const row = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.a.id }, 1);
     expect(row.profile_id).toBe(profiles.a.id);
     expect(row.seat_number).toBe(1);
     expect(row.left_at).toBeNull();
@@ -127,11 +127,13 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
   });
 
   it("rejects claiming a seat for a profile that doesn't exist, with a clear error rather than a bare FK violation", async () => {
-    await expect(claimSpeakerSeat(eventId, "00000000-0000-0000-0000-000000000000", 2)).rejects.toThrow(/does not exist/);
+    await expect(
+      claimSpeakerSeat(eventId, { type: "profile", id: "00000000-0000-0000-0000-000000000000" }, 2),
+    ).rejects.toThrow(/does not exist/);
   });
 
   it("replacing the occupant ends their row as 'replaced' (preserved, not deleted) and leaves exactly one active row for the seat", async () => {
-    const newRow = await claimSpeakerSeat(eventId, profiles.b.id, 1);
+    const newRow = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.b.id }, 1);
     expect(newRow.profile_id).toBe(profiles.b.id);
     expect(newRow.left_at).toBeNull();
     expect(newRow.display_name).toBe("Test Speaker B");
@@ -151,7 +153,7 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
   });
 
   it("rejects claiming a second seat for a profile that already holds one", async () => {
-    await expect(claimSpeakerSeat(eventId, profiles.b.id, 2)).rejects.toThrow();
+    await expect(claimSpeakerSeat(eventId, { type: "profile", id: profiles.b.id }, 2)).rejects.toThrow();
 
     const active = await activeSeats(eventId);
     expect(active.find((s) => s.seat_number === 2)).toBeUndefined();
@@ -171,8 +173,8 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
     // more than one *active* row, and every row that was ended along the
     // way is preserved as history, not lost.
     const results = await Promise.allSettled([
-      claimSpeakerSeat(eventId, profiles.c.id, 2),
-      claimSpeakerSeat(eventId, profiles.d.id, 2),
+      claimSpeakerSeat(eventId, { type: "profile", id: profiles.c.id }, 2),
+      claimSpeakerSeat(eventId, { type: "profile", id: profiles.d.id }, 2),
     ]);
 
     const fulfilled = results.filter((r) => r.status === "fulfilled");
@@ -201,15 +203,15 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
 
   it("end_speaker_seat ends an active occupant with the given reason, and is a safe no-op if they're not seated", async () => {
     const active = await activeSeats(eventId);
-    const seat2Occupant = active.find((s) => s.seat_number === 2)!.profile_id;
+    const seat2Occupant = active.find((s) => s.seat_number === 2)!.profile_id!;
 
-    const ended = await endSpeakerSeat(eventId, seat2Occupant, "disconnected");
+    const ended = await endSpeakerSeat(eventId, { type: "profile", id: seat2Occupant }, "disconnected");
     expect(ended?.left_reason).toBe("disconnected");
     expect(ended?.left_at).not.toBeNull();
 
     // Firing again (e.g. a duplicate/retried webhook, or a profile who was
     // never seated) must not throw — it's a no-op, not an error.
-    const noop = await endSpeakerSeat(eventId, seat2Occupant, "disconnected");
+    const noop = await endSpeakerSeat(eventId, { type: "profile", id: seat2Occupant }, "disconnected");
     expect(noop).toBeNull();
   });
 

@@ -130,7 +130,7 @@ describe.skipIf(!hasServiceCredentials)("speaker_requests write path (issue #14)
   });
 
   it("rejects a request from a profile who's currently an active speaker", async () => {
-    await claimSpeakerSeat(eventId, profiles.b.id, 1);
+    await claimSpeakerSeat(eventId, { type: "profile", id: profiles.b.id }, 1);
     const asB = await signInAs("b");
     const { error } = await asB.rpc("request_to_speak", { p_event_id: eventId, p_body: "let me talk more" });
     expect(error).not.toBeNull();

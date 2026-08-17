@@ -35,7 +35,14 @@ export function SpeakerStage({
     <div className={className ?? "grid grid-cols-2 gap-3"}>
       {([1, 2] as const).map((seatNumber) => {
         const seat = bySeat(seatNumber);
-        const identity = seat ? getParticipantIdentity({ type: "profile", id: seat.profile_id }) : null;
+        // Issue #16: a seat's occupant identity is whichever of
+        // profile_id/guest_id is actually set (the table's own XOR
+        // constraint guarantees exactly one) — never assume profile.
+        const identity = seat
+          ? getParticipantIdentity(
+              seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
+            )
+          : null;
         return (
           <SpeakerTile
             key={seat?.id ?? `empty-${seatNumber}`}

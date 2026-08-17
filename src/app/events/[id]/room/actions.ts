@@ -1,18 +1,22 @@
 "use server";
 
 import { resolveIdentity } from "@/lib/identity";
+import { PROTOTYPE_CONFIG } from "@/lib/config";
 import {
   claimSpeakerSeat,
-  getActiveSeatForProfile,
+  getActiveSeatForIdentity,
   leaveSpeakerSeat as leaveSpeakerSeatRow,
+  leaveSpeakerSeatAsGuest,
   listActiveSpeakers,
 } from "@/lib/repositories/event-speakers";
 import {
-  getPendingRequestForProfile,
+  getPendingRequestForIdentity,
   markSpeakerRequestGranted,
   rankPendingSpeakerRequests,
   requestToSpeak as requestToSpeakRow,
+  requestToSpeakAsGuest,
   withdrawSpeakerRequest as withdrawSpeakerRequestRow,
+  withdrawSpeakerRequestAsGuest,
 } from "@/lib/repositories/speaker-requests";
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
@@ -23,9 +27,13 @@ export type GetLiveKitTokenResult = { token: string } | { error: string };
 /**
  * Mints a LiveKit access token scoped to the caller's *current*
  * `event_speakers` occupancy — never trusts anything the client sends to
- * decide `canPublish`. Guests always come back `canPublish: false`
- * (structurally: `event_speakers` is account-only, so a guest can never
- * have an active seat — see migration 00000000000005). Changing an
+ * decide `canPublish`. Guests can hold an active seat as of issue #16
+ * (an explicit, reversible prototype-testing exception — see PRODUCT.md/
+ * DECISIONS.md, gated by `PROTOTYPE_CONFIG.guestParticipationEnabled`),
+ * so the occupancy lookup now runs for either identity type; with the
+ * flag off, guest occupancy can never exist in the first place (nothing
+ * can write a guest-owned seat), so this degrades to the pre-#16
+ * behavior automatically, not via a second code path here. Changing an
  * already-connected participant's permissions in real time (so a
  * replaced speaker loses publish rights immediately, not just on their
  * next token request) is issue #13's concern, not this one — see
@@ -34,7 +42,7 @@ export type GetLiveKitTokenResult = { token: string } | { error: string };
 export async function getLiveKitToken(eventId: string): Promise<GetLiveKitTokenResult> {
   const identity = await resolveIdentity();
 
-  const activeSeat = identity.type === "profile" ? await getActiveSeatForProfile(eventId, identity.id) : null;
+  const activeSeat = await getActiveSeatForIdentity(eventId, identity);
 
   try {
     const token = await mintLiveKitToken({ eventId, identity, activeSeat });
@@ -47,19 +55,25 @@ export async function getLiveKitToken(eventId: string): Promise<GetLiveKitTokenR
 export type LeaveSpeakerSeatResult = { ok: true } | { error: string };
 
 /**
- * Ends the caller's own active speaker occupancy (issue #13's voluntary-
- * leave path, self-service and `auth.uid()`-gated all the way down to
- * Postgres — see `leave_speaker_seat` in migration 00000000000006) and
- * best-effort pushes `canPublish: false` to their already-connected
- * LiveKit participant so the change is visible immediately, not just on
- * their next token request. No UI calls this yet (issue #3/#6 build the
- * room's "leave the stage" control) — ships as a tested primitive, same
- * pattern as `getLiveKitToken` above.
+ * Ends the caller's own active speaker occupancy — issue #13's
+ * voluntary-leave path for account holders (self-service,
+ * `auth.uid()`-gated all the way down to Postgres), extended by issue
+ * #16 to guests via a service-role-only equivalent (no `auth.uid()`
+ * exists for a guest to self-service with — see migration
+ * 00000000000012's `leave_speaker_seat_as_guest`, called only with the
+ * guest id already resolved server-side, never client input). Best-
+ * effort pushes `canPublish: false` to the already-connected LiveKit
+ * participant either way, so the change is visible immediately.
  */
 export async function leaveSpeakerSeat(eventId: string): Promise<LeaveSpeakerSeatResult> {
+  const identity = await resolveIdentity();
   try {
-    const row = await leaveSpeakerSeatRow(eventId);
-    await syncPublishPermission({ eventId, profileId: row.profile_id, canPublish: false });
+    if (identity.type === "profile") {
+      await leaveSpeakerSeatRow(eventId);
+    } else {
+      await leaveSpeakerSeatAsGuest(eventId, identity.id);
+    }
+    await syncPublishPermission({ eventId, identity, canPublish: false });
     return { ok: true };
   } catch {
     return { error: "Couldn't leave the stage. Try again." };
@@ -70,19 +84,24 @@ export type SpeakerRequestActionResult = { ok: true } | { error: string };
 
 /**
  * Submits a mic request (issue #14) — atomically posts a chat message and
- * a `speaker_requests` row via `request_to_speak` (migration
- * 00000000000011), never two independent writes. Guests get the exact
- * PRODUCT.md-scripted prompt, never a generic wall.
+ * a `speaker_requests` row, never two independent writes. Account
+ * holders use the existing self-service `request_to_speak`
+ * (auth.uid()-gated). Guests, as of issue #16, use a service-role-only
+ * equivalent when `PROTOTYPE_CONFIG.guestParticipationEnabled` is true —
+ * an explicit, reversible prototype-testing exception (see PRODUCT.md/
+ * DECISIONS.md), not a permanent change to who may request the mic.
+ * With the flag off, guests still get PRODUCT.md's scripted account
+ * prompt, exactly as before #16.
  *
- * Error messages are matched against `request_to_speak`'s own
- * `raise exception` text — a real coupling to that migration's wording,
- * accepted for now rather than duplicating the same guards in
- * TypeScript (which would just be a second place for them to drift out
- * of sync with the actual, authoritative check).
+ * Error messages are matched against the RPCs' own `raise exception`
+ * text — a real coupling to the migrations' wording, accepted for now
+ * rather than duplicating the same guards in TypeScript (which would
+ * just be a second place for them to drift out of sync with the actual,
+ * authoritative check).
  */
 export async function requestToSpeak(eventId: string, body: string): Promise<SpeakerRequestActionResult> {
   const identity = await resolveIdentity();
-  if (identity.type !== "profile") {
+  if (identity.type !== "profile" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
     return { error: "Create an account to request the mic." };
   }
 
@@ -92,7 +111,11 @@ export async function requestToSpeak(eventId: string, body: string): Promise<Spe
   }
 
   try {
-    await requestToSpeakRow(eventId, trimmed);
+    if (identity.type === "profile") {
+      await requestToSpeakRow(eventId, trimmed);
+    } else {
+      await requestToSpeakAsGuest(eventId, identity.id, identity.displayName, trimmed);
+    }
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -106,10 +129,15 @@ export async function requestToSpeak(eventId: string, body: string): Promise<Spe
   }
 }
 
-/** Self-service withdrawal of the caller's own pending request (issue #14). */
+/** Self-service withdrawal of the caller's own pending request (issue #14), extended to guests by issue #16 the same way requestToSpeak was. */
 export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRequestActionResult> {
+  const identity = await resolveIdentity();
   try {
-    await withdrawSpeakerRequestRow(eventId);
+    if (identity.type === "profile") {
+      await withdrawSpeakerRequestRow(eventId);
+    } else {
+      await withdrawSpeakerRequestAsGuest(eventId, identity.id);
+    }
     return { ok: true };
   } catch {
     return { error: "Couldn't withdraw your request. Try again." };
@@ -124,12 +152,13 @@ const CLAIM_REJECTION_MESSAGES = {
 
 /**
  * The actual authorization gate issues #13 and #3 both deferred to
- * "whatever Phase 3 builds" (issue #14). Fetches current state, hands it
- * to `decideClaimEligibility` (the actual, unit-tested decision — see
- * lib/speaker-queue.ts for the top-3-not-top-1 reasoning), and only on a
- * favorable decision calls `claimSpeakerSeat` (service client) on the
- * caller's own behalf and marks their request granted. The client never
- * sees ranking data; it only ever gets a pass/fail from attempting this.
+ * "whatever Phase 3 builds" (issue #14), extended by issue #16 to guests.
+ * Fetches current state, hands it to `decideClaimEligibility` (the
+ * actual, unit-tested decision — see lib/speaker-queue.ts for the
+ * top-3-not-top-1 reasoning), and only on a favorable decision calls
+ * `claimSpeakerSeat` (service client) on the caller's own behalf and
+ * marks their request granted. The client never sees ranking data; it
+ * only ever gets a pass/fail from attempting this.
  *
  * Not re-checking seat availability a second time immediately before
  * `claimSpeakerSeat` — `claim_speaker_seat`'s own unique-index race
@@ -140,18 +169,18 @@ const CLAIM_REJECTION_MESSAGES = {
  */
 export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActionResult> {
   const identity = await resolveIdentity();
-  if (identity.type !== "profile") {
+  if (identity.type !== "profile" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
     return { error: "Create an account to request the mic." };
   }
 
   const [myRequest, activeSpeakers, ranked] = await Promise.all([
-    getPendingRequestForProfile(eventId, identity.id),
+    getPendingRequestForIdentity(eventId, identity),
     listActiveSpeakers(eventId),
     rankPendingSpeakerRequests(eventId),
   ]);
 
   const decision = decideClaimEligibility({
-    profileId: identity.id,
+    identity,
     hasPendingRequest: myRequest !== null,
     activeSpeakers,
     rankedRequests: ranked,
@@ -162,7 +191,7 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
   }
 
   try {
-    await claimSpeakerSeat(eventId, identity.id, decision.seatNumber);
+    await claimSpeakerSeat(eventId, identity, decision.seatNumber, identity.displayName);
   } catch {
     return { error: "That seat was just taken — try again." };
   }
@@ -171,7 +200,7 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
   // myRequest is non-null — decideClaimEligibility only sees the boolean,
   // not the row itself, so TypeScript can't correlate the two on its own.
   await markSpeakerRequestGranted(myRequest!.id);
-  await syncPublishPermission({ eventId, profileId: identity.id, canPublish: true });
+  await syncPublishPermission({ eventId, identity, canPublish: true });
 
   return { ok: true };
 }

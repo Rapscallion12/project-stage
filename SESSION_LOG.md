@@ -4,6 +4,145 @@ Newest entry first.
 
 ---
 
+## 2026-08-16 — Session 18: Two more real-device #15 failures diagnosed and fixed, then guest speaker participation (issue #16)
+
+**Goal**: Continue from Session 17's camera/mic gesture fix through
+however many real-device retest cycles it took to actually reach working
+media, per the user's explicit instruction not to mark #15 done on
+anything short of their own iPhone confirmation. Three distinct
+real-device failures surfaced in sequence, each requiring a fresh trace
+rather than another guess — plus a full re-evaluation of the #15/#16
+dependency relationship once the third failure revealed guest speaking
+was now a prerequisite, not just next in line.
+
+**Retest 1 — LiveKit itself unreachable in production.** After Session
+17's gesture fix deployed, camera/mic still didn't work. Traced by
+downloading and grepping every JS chunk the deployed room page
+references for a literal LiveKit `wss://` hostname (found none —
+`NEXT_PUBLIC_LIVEKIT_URL` wasn't actually inlined), then adding a
+temporary, safe diagnostics panel (`components/room/room-diagnostics.tsx`
+— booleans/enums only, never secrets) and reading its server-rendered
+values directly off the live page: `LiveKit client URL configured:
+false`, `Server issued a token: false`, `connection status: unavailable`.
+Root cause: the LiveKit credentials on Vercel looked configured (present
+as keys, per `vercel env ls`) but weren't actually valid/non-empty —
+Vercel's "Sensitive" var type can't be read back to verify, the same
+limitation Session 16 already found once for a different variable. Not
+fixable from an agent session — the user re-entered fresh
+`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`/`NEXT_PUBLIC_LIVEKIT_URL` values
+on Vercel. Added a second temporary diagnostic
+(`/api/livekit/diagnostics`, a real `RoomServiceClient.listRooms()`
+call) specifically because token minting alone can't prove credentials
+are *valid*, only *present* — JWT signing never contacts LiveKit's
+servers. Confirmed the fresh credentials server-side
+(`{"credentialsConfigured":true,"reachable":true}`) before asking for
+another phone round trip.
+
+**Retest 2 — the fix worked, but the control was invisible.** With
+LiveKit genuinely connected, diagnostics showed `needsMediaActivation:
+true` and a successful direct `getUserMedia` test, yet the user still
+only saw "camera off" — the account-only speaker's own "Enable camera &
+mic" button (Session 17's fix) rendered correctly, but only inside
+`RoomControls`, a strip at the bottom of the room, while the user was
+looking at their own tile. Confirmed via the render tree, not guessed:
+`RoomDiagnostics` and `RoomControls` read the identical
+`needsMediaActivation`/`isSpeaker` values from one shared source, ruling
+out a logic bug. Fixed by putting the activation control directly on the
+local participant's own `SpeakerTile` placeholder — same `activateMedia()`
+call, same real-gesture discipline, just where the user's attention
+actually was. `RoomControls`' button stayed as a redundant secondary
+path.
+
+**Retest 3 — the user's own session was a guest, and guests couldn't
+become speakers at all.** With account-based speaking now fully proven,
+the third real-device diagnostics showed `Identity type: guest`,
+`Recognized as seated speaker: false`, `canPublish: false` — not a #15
+regression, but #16's gap (guest speaking didn't exist yet) surfacing
+through #15's own acceptance criteria, since the user's stated testing
+philosophy is guest-first (no login required during this prototype
+phase). Rather than ask the user to work around this by logging back in,
+did the full re-evaluation the user asked for: walked the complete
+journey end to end, named which issue owns each remaining gap, confirmed
+#16 is now a genuine prerequisite for #15's *own* final validation (not
+just next in sequence for its own sake), confirmed #17/#18's relative
+order didn't need to change (no new dependency between #16 and #17;
+#18 already depended on both), and wrote the exact end-to-end acceptance
+test (guest opens link → requests mic → claims seat → activates camera/mic
+→ another device receives live video+audio → rotation survives) that
+now gates #15 closing. Recorded all of this on the GitHub issues before
+writing any code.
+
+**Issue #16 implemented this session**: guest speaker participation, an
+explicit, reversible prototype-testing exception
+(`PROTOTYPE_CONFIG.guestParticipationEnabled`, already existed unused,
+apparently set up in advance for exactly this). Migration
+`00000000000012` — `event_speakers`/`speaker_requests` gained a nullable
+`guest_id` column each, XOR-constrained against `profile_id` (the same
+pattern `event_chat_messages` already used for guest chat authorship,
+applied to the speaking tables for the first time); `claim_speaker_seat`/
+`end_speaker_seat` widened in place (still `service_role`-only, still no
+`anon`/`authenticated` grant); `request_to_speak`/`withdraw_speaker_request`
+left untouched for accounts, with separately-named `service_role`-only
+guest siblings added instead of one unified signature, because the
+authorization *mechanism* genuinely differs (no `auth.uid()` equivalent
+for a guest) — reasoned through and documented in DECISIONS.md as the
+resolution to the signature question the user explicitly deferred to
+this session. Repository layer (`event-speakers.ts`, `speaker-requests.ts`),
+`lib/speaker-queue.ts`'s `decideClaimEligibility`, `lib/livekit/permissions.ts`'s
+`syncPublishPermission`, the LiveKit webhook route, and the UI's identity
+computations (`LiveRoom`, `SpeakerStage`, `RoomControls`) all generalized
+from profile-only to either identity shape.
+
+**A real, live security regression this caught, not just risked**: right
+after applying the migration, the existing "not callable by an ordinary
+authenticated user" integration tests failed for real against the linked
+project. Recreating `claim_speaker_seat`/`end_speaker_seat` (required —
+Postgres won't `CREATE OR REPLACE` a changed parameter list) silently
+reset them to PUBLIC-execute-by-default, the exact mistake issue #13
+already hit once (migration 6 → fixed by 8). Fixed within minutes via a
+forward migration (`00000000000013`), verified directly against
+`pg_proc.proacl`, not just the test passing. See DECISIONS.md — recorded
+at length since this is the second time this exact class of bug has
+bitten this project, worth a standing checklist reflex, not just a fix.
+
+**Files changed**: `supabase/migrations/00000000000012_*.sql`,
+`00000000000013_*.sql`, `src/types/database.ts` (regenerated),
+`lib/repositories/event-speakers.ts`, `lib/repositories/speaker-requests.ts`,
+`lib/speaker-queue.ts`, `lib/livekit/permissions.ts`,
+`app/api/livekit/webhook/route.ts`, `app/events/[id]/room/actions.ts`,
+`app/events/[id]/room/page.tsx`, `components/room/live-room.tsx`,
+`components/room/speaker-stage.tsx`, `components/room/room-controls.tsx`,
+`lib/repositories/dev-demo.ts`, plus this session's earlier files
+(`room-diagnostics.tsx`, `api/livekit/diagnostics/route.ts`,
+`speaker-tile.tsx`, `speaker-stage.tsx`, `room-header.tsx`) and their
+tests, PRODUCT.md, ARCHITECTURE.md, DECISIONS.md, ROADMAP.md,
+CHANGELOG.md, SESSION_LOG.md (this entry).
+
+**Tests run**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm test`
+— 145/145 passing (up from 120 at the start of this session's retest 1,
+reflecting new coverage for the LiveKit connectivity diagnostic, tile
+activation, and issue #16's full guest path including the
+PUBLIC-execute regression itself), `npm run build` succeeds.
+
+**Known issues**: None new from this session's own code. The temporary
+diagnostics (`RoomDiagnostics`, `/api/livekit/diagnostics`) are still
+deployed on purpose — removal is planned for right after the full
+end-to-end acceptance test passes, not before.
+
+**Current build status**: Migrations 12/13 applied to the live linked
+project and verified (`supabase migration list --linked`, plus a direct
+`pg_proc.proacl` check for the regression fix). Code deployed to `main`
+→ Vercel per the normal workflow; not yet confirmed on a real device as
+of this entry.
+
+**Recommended next task**: the user's own end-to-end real-device test
+(guest, no login, request mic → claim seat → camera/mic → another device
+receives live video+audio → rotation survives) — this is what actually
+closes #15, not automated checks. Not starting #17 until that happens,
+per explicit instruction.
+
+---
+
 ## 2026-08-13 — Session 17: Real iPhone testing findings + camera/mic activation fix (issue #15)
 
 **Goal**: Respond to the user's real hands-on iPhone testing of the

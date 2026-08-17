@@ -10,6 +10,7 @@ import {
   withdrawSpeakerRequest,
 } from "@/app/events/[id]/room/actions";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
+import { PROTOTYPE_CONFIG } from "@/lib/config";
 import type { Identity } from "@/lib/identity";
 
 /** Specific, named copy per failure reason — see MediaErrorReason's doc comment for why these are distinguished instead of a generic "camera off". */
@@ -43,12 +44,16 @@ function mediaErrorMessage(error: NonNullable<MediaError>): string {
  * (speaker_requests is in the Realtime publication for future use, see
  * migration 00000000000011, but nothing subscribes to it yet).
  *
- * Guests see the exact same "Request the mic" button everyone else
- * does — clicking it is the "action that genuinely requires an account"
- * PRODUCT.md's progressive authentication model describes, and that's
- * the moment the account prompt appears, inline. Never a separate,
- * permanently-visible "you can't do this" banner — PRODUCT.md is
- * explicit that guests should never be interrupted speculatively.
+ * Guests see the exact same "Request the mic" button everyone else does.
+ * With `PROTOTYPE_CONFIG.guestParticipationEnabled` off (its state before
+ * issue #16), clicking it is the "action that genuinely requires an
+ * account" PRODUCT.md's progressive authentication model describes, and
+ * that's the moment the account prompt appears, inline — never a
+ * separate, permanently-visible "you can't do this" banner, since
+ * PRODUCT.md is explicit that guests should never be interrupted
+ * speculatively. With the flag on (issue #16's explicit, reversible
+ * prototype-testing exception), a guest proceeds through the exact same
+ * request/claim flow an account holder does instead.
  */
 export function RoomControls({
   eventId,
@@ -86,7 +91,11 @@ export function RoomControls({
   }
 
   function handleRequestClick() {
-    if (identity.type === "guest") {
+    // Issue #16: guest speaking is an explicit, reversible prototype-
+    // testing exception (PRODUCT.md/DECISIONS.md) — with the flag on, a
+    // guest gets the exact same request form an account holder does;
+    // with it off, this is unchanged from before #16.
+    if (identity.type === "guest" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
       setError("Create an account to request the mic.");
       return;
     }

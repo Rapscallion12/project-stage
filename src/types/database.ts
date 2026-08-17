@@ -133,31 +133,34 @@ export type Database = {
         Row: {
           display_name: string
           event_id: string
+          guest_id: string | null
           id: string
           joined_at: string
           left_at: string | null
           left_reason: string | null
-          profile_id: string
+          profile_id: string | null
           seat_number: number
         }
         Insert: {
           display_name: string
           event_id: string
+          guest_id?: string | null
           id?: string
           joined_at?: string
           left_at?: string | null
           left_reason?: string | null
-          profile_id: string
+          profile_id?: string | null
           seat_number: number
         }
         Update: {
           display_name?: string
           event_id?: string
+          guest_id?: string | null
           id?: string
           joined_at?: string
           left_at?: string | null
           left_reason?: string | null
-          profile_id?: string
+          profile_id?: string | null
           seat_number?: number
         }
         Relationships: [
@@ -232,27 +235,30 @@ export type Database = {
         Row: {
           created_at: string
           event_id: string
+          guest_id: string | null
           id: string
           message_id: string
-          profile_id: string
+          profile_id: string | null
           resolved_at: string | null
           status: string
         }
         Insert: {
           created_at?: string
           event_id: string
+          guest_id?: string | null
           id?: string
           message_id: string
-          profile_id: string
+          profile_id?: string | null
           resolved_at?: string | null
           status?: string
         }
         Update: {
           created_at?: string
           event_id?: string
+          guest_id?: string | null
           id?: string
           message_id?: string
-          profile_id?: string
+          profile_id?: string | null
           resolved_at?: string | null
           status?: string
         }
@@ -288,17 +294,20 @@ export type Database = {
       claim_speaker_seat: {
         Args: {
           p_event_id: string
-          p_profile_id: string
+          p_guest_display_name?: string
+          p_guest_id?: string
+          p_profile_id?: string
           p_seat_number: number
         }
         Returns: {
           display_name: string
           event_id: string
+          guest_id: string | null
           id: string
           joined_at: string
           left_at: string | null
           left_reason: string | null
-          profile_id: string
+          profile_id: string | null
           seat_number: number
         }
         SetofOptions: {
@@ -309,15 +318,21 @@ export type Database = {
         }
       }
       end_speaker_seat: {
-        Args: { p_event_id: string; p_profile_id: string; p_reason: string }
+        Args: {
+          p_event_id: string
+          p_guest_id?: string
+          p_profile_id?: string
+          p_reason: string
+        }
         Returns: {
           display_name: string
           event_id: string
+          guest_id: string | null
           id: string
           joined_at: string
           left_at: string | null
           left_reason: string | null
-          profile_id: string
+          profile_id: string | null
           seat_number: number
         }
         SetofOptions: {
@@ -332,11 +347,32 @@ export type Database = {
         Returns: {
           display_name: string
           event_id: string
+          guest_id: string | null
           id: string
           joined_at: string
           left_at: string | null
           left_reason: string | null
-          profile_id: string
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      leave_speaker_seat_as_guest: {
+        Args: { p_event_id: string; p_guest_id: string }
+        Returns: {
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          profile_id: string | null
           seat_number: number
         }
         SetofOptions: {
@@ -349,6 +385,7 @@ export type Database = {
       rank_pending_speaker_requests: {
         Args: { p_event_id: string }
         Returns: {
+          guest_id: string
           message_id: string
           profile_id: string
           rank: number
@@ -362,14 +399,59 @@ export type Database = {
           request_id: string
         }[]
       }
+      request_to_speak_as_guest: {
+        Args: {
+          p_body: string
+          p_display_name: string
+          p_event_id: string
+          p_guest_id: string
+        }
+        Returns: {
+          message_id: string
+          request_id: string
+        }[]
+      }
+      request_to_speak_internal: {
+        Args: {
+          p_body: string
+          p_display_name: string
+          p_event_id: string
+          p_guest_id: string
+          p_profile_id: string
+        }
+        Returns: {
+          message_id: string
+          request_id: string
+        }[]
+      }
       withdraw_speaker_request: {
         Args: { p_event_id: string }
         Returns: {
           created_at: string
           event_id: string
+          guest_id: string | null
           id: string
           message_id: string
-          profile_id: string
+          profile_id: string | null
+          resolved_at: string | null
+          status: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "speaker_requests"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      withdraw_speaker_request_as_guest: {
+        Args: { p_event_id: string; p_guest_id: string }
+        Returns: {
+          created_at: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          message_id: string
+          profile_id: string | null
           resolved_at: string | null
           status: string
         }

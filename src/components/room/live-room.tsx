@@ -53,7 +53,12 @@ export function LiveRoom({
   const myIdentity = getParticipantIdentity(
     identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
   );
-  const isSpeaker = identity.type === "profile" && speakers.some((s) => s.profile_id === identity.id);
+  // Issue #16: a guest can hold a seat too (prototype-testing exception —
+  // see PRODUCT.md/DECISIONS.md), so this matches whichever identity
+  // column is actually set on the seat row, not just profile_id.
+  const isSpeaker = speakers.some((s) =>
+    identity.type === "profile" ? s.profile_id === identity.id : s.guest_id === identity.id,
+  );
 
   const layoutProps = {
     event,

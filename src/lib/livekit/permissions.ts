@@ -50,29 +50,26 @@ export function getClient(): RoomServiceClient {
  */
 export async function syncPublishPermission(params: {
   eventId: string;
-  profileId: string;
+  /** Issue #16: either identity shape — a guest promoted to a seat gets the same live push an account holder does. */
+  identity: { type: "profile" | "guest"; id: string };
   canPublish: boolean;
 }): Promise<void> {
   try {
     const client = getClient();
-    await client.updateParticipant(
-      getRoomName(params.eventId),
-      getParticipantIdentity({ type: "profile", id: params.profileId }),
-      {
-        // Permissions are replaced atomically by LiveKit, not merged — every
-        // field that matters has to be set on every call, mirroring the
-        // grant mintLiveKitToken issues.
-        permission: {
-          canSubscribe: true,
-          canPublish: params.canPublish,
-          canPublishData: false,
-        },
+    await client.updateParticipant(getRoomName(params.eventId), getParticipantIdentity(params.identity), {
+      // Permissions are replaced atomically by LiveKit, not merged — every
+      // field that matters has to be set on every call, mirroring the
+      // grant mintLiveKitToken issues.
+      permission: {
+        canSubscribe: true,
+        canPublish: params.canPublish,
+        canPublishData: false,
       },
-    );
+    });
   } catch (error) {
     console.error("syncPublishPermission: live permission push failed; next token request will self-correct", {
       eventId: params.eventId,
-      profileId: params.profileId,
+      identity: params.identity,
       canPublish: params.canPublish,
       error,
     });

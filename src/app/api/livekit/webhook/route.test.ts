@@ -90,7 +90,7 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
   }, 30_000);
 
   it("rejects a request with an invalid signature and makes no DB change", async () => {
-    await claimSpeakerSeat(eventId, profileId, 1);
+    await claimSpeakerSeat(eventId, { type: "profile", id: profileId }, 1);
 
     const body = JSON.stringify({
       event: "participant_left",
@@ -130,16 +130,40 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
     expect(data?.left_reason).toBe("disconnected");
   });
 
-  it("is a safe no-op for a guest identity (guests can never hold a seat)", async () => {
+  it("is a safe no-op for a guest identity with no active seat (e.g. an audience guest disconnecting)", async () => {
     const body = JSON.stringify({
       event: "participant_left",
       room: { name: getRoomName(eventId) },
-      participant: { identity: getParticipantIdentity({ type: "guest", id: "some-guest" }) },
+      participant: { identity: getParticipantIdentity({ type: "guest", id: crypto.randomUUID() }) },
     });
     const authHeader = await signWebhookBody(body);
 
     const response = await POST(webhookRequest(body, authHeader));
     expect(response.status).toBe(200);
+  });
+
+  it("ends a genuinely seated guest's occupancy as 'disconnected' too (issue #16 — guests can hold a seat now, this is the regression the migration comment specifically flags)", async () => {
+    const guestId = crypto.randomUUID();
+    await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, 2, "Test Webhook Guest");
+
+    const body = JSON.stringify({
+      event: "participant_left",
+      room: { name: getRoomName(eventId) },
+      participant: { identity: getParticipantIdentity({ type: "guest", id: guestId }) },
+    });
+    const authHeader = await signWebhookBody(body);
+
+    const response = await POST(webhookRequest(body, authHeader));
+    expect(response.status).toBe(200);
+
+    const { data } = await service
+      .from("event_speakers")
+      .select("left_at, left_reason")
+      .eq("event_id", eventId)
+      .eq("guest_id", guestId)
+      .single();
+    expect(data?.left_at).not.toBeNull();
+    expect(data?.left_reason).toBe("disconnected");
   });
 
   it("ignores webhook events other than participant_left", async () => {

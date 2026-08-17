@@ -27,8 +27,13 @@ These override feature requests whenever the two conflict.
    reward for audience engagement, not a fixed slot.
 3. **Anyone can eventually earn the microphone.** The speaker queue is the
    only path to stage — no invite-only or celebrity fast lane in the MVP.
-   ("Anyone" means anyone with an account — see Principle 12: requesting the
-   mic is the clearest account-only action in the product.)
+   Requesting the mic is normally the product's clearest account-only
+   action (see Principle 12) — **except during the current prototype-
+   testing phase**, where it's deliberately opened to guests too, so the
+   core social experiment can be validated without account-creation
+   friction. See "Prototype-testing exception: guest speaking" below;
+   this is an explicit, reversible testing-phase policy, not a reversal
+   of the underlying principle.
 4. **Reputation earns opportunities, not control.** A high-reputation user
    gets queue priority; they do not get extra votes or moderation power.
 5. **Maximize interesting interactions over agreement.** Do not optimize for
@@ -150,7 +155,8 @@ will let you in.
 
 ### Account holders may additionally
 
-- Request the microphone.
+- Request the microphone (**temporarily also available to guests during
+  the current prototype-testing phase** — see below).
 - Submit prompts, comments, and questions.
 - Build entertainment reputation.
 - Build reliability and trust history.
@@ -198,6 +204,39 @@ but guests do not accumulate anything that outlives the session:
 A guest who creates an account starts that history at account creation,
 not retroactively from their guest activity, unless a future session
 explicitly decides to build identity-linking (not planned for the MVP).
+
+### Prototype-testing exception: guest speaking (issue #16)
+
+During the current prototype-testing phase, guests can request the mic
+and become a seated speaker — an **explicit, reversible testing-phase
+exception** to Principle 3/12's account-only rule above, not a permanent
+product direction. The goal being validated right now is the core social
+experiment itself (do strangers join, watch, chat, request the mic,
+speak, and stay engaged?), and requiring an account to reach the actual
+thing being tested would contaminate that test the same way a login wall
+on the landing page would (see "The question this prototype answers").
+
+This is controlled by a single flag
+(`PROTOTYPE_CONFIG.guestParticipationEnabled` in `lib/config.ts`), so it
+can be tightened back to account-only later — once reputation,
+reliability, persistent identity, moderation history, or prizes actually
+require an account to mean something — without redesigning the
+authorization system. The server-authoritative model itself is
+unchanged: a guest's identity is still resolved server-side from an
+unforgeable session cookie, seat assignment and LiveKit publish rights
+are still decided entirely server-side, and no client of any kind can
+grant itself a seat or publish rights. See ARCHITECTURE.md's LiveKit
+authorization model and DECISIONS.md for the full design.
+
+While this exception is active:
+
+- A guest's seat occupancy and mic request still accrue nothing that
+  outlives the session (no reputation, no reliability, no history) — the
+  "guests do not accumulate anything permanent" rule above is unaffected.
+- A guest's identity is still just a cookie, not a verified account —
+  clearing cookies or switching devices mid-conversation loses the
+  seat's identity thread. Accepted as a prototype limitation for now; no
+  seat-recovery mechanism is built for it.
 
 ## MVP scope (v1)
 
@@ -251,14 +290,18 @@ building it directly.
   request the mic, and (later) host.
 - **Event** — a scheduled live session with a start time and two speaker
   seats. Viewable and joinable by guests and account holders alike.
-- **Speaker** — an account holder currently occupying one of the two seats.
-  Guests cannot become speakers directly — they'd need an account first.
+- **Speaker** — an account holder currently occupying one of the two
+  seats. Normally account-only, requiring an account first — **except
+  during the current prototype-testing phase**, where a guest can occupy
+  a seat too (see "Prototype-testing exception: guest speaking" above).
 - **Audience member** — anyone watching an event, guest or account holder.
-  Both can react, vote, and view chat; only account holders can comment or
-  join the speaker request queue.
-- **Speaker request queue** — ordered list of account holders waiting for a
-  seat; reputation affects position, not eligibility. Account-only — see
-  Principle 3.
+  Both can react, vote, and view chat; commenting and joining the speaker
+  request queue are normally account-only, with the same testing-phase
+  exception extended to guests.
+- **Speaker request queue** — ordered list of requesters waiting for a
+  seat; reputation affects position, not eligibility. Normally
+  account-only (Principle 3) — temporarily open to guests too, per the
+  testing-phase exception above.
 
 ### Reputation vs. reliability
 

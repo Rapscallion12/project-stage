@@ -9,6 +9,24 @@ separate release cadence to track here.
 
 ### Added
 
+- **Guest speaker participation** (issue #16) — an explicit, reversible
+  prototype-testing exception (`PROTOTYPE_CONFIG.guestParticipationEnabled`,
+  `lib/config.ts`) letting guests request the mic, get promoted, and
+  publish camera/mic through the same server-authoritative path an
+  account holder already used — no client of any kind can grant itself a
+  seat or publish rights. `event_speakers`/`speaker_requests` gained a
+  nullable `guest_id` column each, XOR-constrained against `profile_id`
+  (migration `00000000000012`). `claim_speaker_seat`/`end_speaker_seat`
+  widened in place (still `service_role`-only); `request_to_speak`/
+  `withdraw_speaker_request` kept their existing self-service path and
+  gained separately-named guest siblings instead. Caught and fixed a
+  real, live regression the same session: recreating
+  `claim_speaker_seat`/`end_speaker_seat` (required, since their
+  parameter list changed) silently reset them to PostgreSQL's
+  PUBLIC-execute-by-default, the exact mistake issue #13 already hit
+  once — fixed within minutes via a forward migration
+  (`00000000000013`), caught by the existing integration test suite
+  against the real linked database. See DECISIONS.md.
 - **First deployment — Vercel Hobby, live at
   [project-stage-weld.vercel.app](https://project-stage-weld.vercel.app)**.
   GitHub-integrated (every push to `main` auto-deploys, confirmed with a

@@ -3,6 +3,115 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-16 — Guest speaker participation (issue #16): design, and a real grant-revocation regression caught by the existing test suite
+
+**Problem**: A third real-device test of issue #15 (after the LiveKit
+credential fix and the tile-visibility fix) showed every layer working —
+connection, token, browser permission — except `canPublish`, because the
+user's own session correctly resolved as a guest, and guests couldn't
+become speakers at all. The user reframed the priority: validating "the
+live room works" the way they actually intend to test it (no login
+required during this prototype phase) requires guest speaking first.
+#16 was promoted from "next in sequence" to "prerequisite for #15's own
+final validation." See SESSION_LOG.md for the full re-evaluation this
+session did (which issue owns which piece of the journey, the exact
+end-to-end acceptance test, why #17/#18's order didn't need to change).
+
+**Design — preserving the security boundary while widening who can
+reach it**: the question wasn't "should guests speak" (the user decided
+that, as an explicit, reversible testing-phase exception — see
+PRODUCT.md) but "how, without letting an anonymous client tell Postgres
+*which* guest it is." Guest identity is a server-resolved, httpOnly-
+cookie-derived id — trustworthy as *the caller in a Server Action*
+(already true for guest chat authorship), but with no `auth.uid()`
+equivalent Postgres/RLS can check the way it can for accounts. So:
+
+- `claim_speaker_seat`/`end_speaker_seat` (already `service_role`-only,
+  already took an explicit target identity rather than `auth.uid()`) —
+  smallest possible change: widen the identity to optionally be a guest,
+  in the *same* function, XOR-validated exactly like the table's own new
+  constraint. Not a second overload — Postgres resolves overloads by
+  parameter type, and a guest-only version would have the identical
+  `(uuid, uuid, smallint)` signature, which isn't a valid overload at
+  all. `p_profile_id`/`p_guest_id`/`p_guest_display_name` all default to
+  null so an existing partial-parameter caller (including the "not
+  callable by an ordinary user" grant tests) still resolves to this one
+  function.
+- `request_to_speak`/`withdraw_speaker_request` (self-service,
+  `auth.uid()`-gated, granted to `authenticated`) — left **completely
+  unchanged**. A guest gets a separately-named, `service_role`-only
+  sibling (`request_to_speak_as_guest`/`withdraw_speaker_request_as_guest`)
+  instead of a widened single function, because the authorization
+  *mechanism* genuinely differs (a caller can't spoof `auth.uid()`; there
+  is no equivalent trust anchor for a guest) — unifying them would mean
+  one function serving two different trust models awkwardly, which is
+  the opposite of "clearest API," the standard the user asked this
+  decision be judged against. The atomic message+request insert logic is
+  shared via an internal `request_to_speak_internal` function that's
+  never granted to anyone — only reachable from the two public wrappers.
+- `event_speakers`/`speaker_requests`: `profile_id` becomes nullable,
+  `guest_id` added, `check ((profile_id is not null) <> (guest_id is not
+  null))` — the exact XOR pattern `event_chat_messages`/
+  `event_chat_message_reactions` already established for guest-vs-account
+  authorship (migration `00000000000003`), applied here for the first
+  time to the *speaking* tables. The active-occupancy/active-request
+  partial unique indexes became `coalesce(profile_id, guest_id)`-keyed,
+  same shape as the existing reaction-dedup index.
+- Everywhere else (LiveKit token minting, `syncPublishPermission`, the
+  disconnect webhook, `SpeakerStage`'s participant-identity lookup,
+  `decideClaimEligibility`) was already either identity-generic
+  (`mintLiveKitToken`/`determineCanPublish` needed zero changes) or had a
+  single hardcoded `{type: "profile", ...}` assumption to generalize —
+  no new authorization logic, just correctly propagating whichever
+  identity a seat/request actually belongs to.
+- `PROTOTYPE_CONFIG.guestParticipationEnabled` (`lib/config.ts`) — already
+  existed, unused, from a much earlier session, apparently set up in
+  advance for exactly this decision — is now the single gate every new
+  guest-facing branch in `room/actions.ts`/`RoomControls` checks, so this
+  can be tightened back to account-only later without touching the
+  authorization system.
+
+**A real, live security regression this caught, not just risked**:
+after applying the migration, the *existing* "claim_speaker_seat/
+end_speaker_seat are not callable by an ordinary authenticated user"
+integration tests failed — for real, against the live linked project,
+not a mock. Cause: both functions had to be recreated via `drop
+function` + `create function` (Postgres doesn't allow `create or
+replace` to change a parameter list), and a fresh `create function`
+resets to PostgreSQL's PUBLIC-execute-by-default — **the exact same
+mistake this project's own issue #13 entry below already documents
+happening once before** (migration `00000000000006` → fixed by
+`00000000000008`). Every other new function in this migration correctly
+included its own `revoke ... from public`; only these two, extended in
+place rather than authored from scratch, were missed. Fixed immediately
+with a forward migration (`00000000000013`, applied within minutes of
+the failing test run, before any other work continued) rather than
+editing the applied migration, per this project's standing rule.
+Verified directly against `pg_proc.proacl` afterward, not just by the
+test passing, the same way the original issue #13 finding was verified.
+
+**Reason this is worth a second, explicit callout despite already being
+a documented pattern**: it demonstrates exactly why this project's
+integration tests hit the real linked database instead of mocking it —
+this class of bug is invisible to `tsc`, to `eslint`, and to a test
+suite that mocks Postgres's grant system, and was only caught because
+the existing tests already asserted the security boundary directly
+against a real database and were run before considering the migration
+done. Worth encoding as a checklist reflex for the next session that
+touches a `security definer` function's signature: **recreating a
+function via drop+create is not the same as altering it in place —
+always re-verify its grants afterward, never assume they survived.**
+
+**Tradeoffs**: Two forward migrations (`00000000000012`/`00000000000013`)
+instead of one, for the same reason every prior grant-fix in this project
+has been a forward migration, not an edit. A guest's seat/request rows
+carry no FK to any table (unlike a profile, which FKs through
+`auth.users`) — nothing to clean up if a guest's cookie is later cleared;
+this is an accepted consequence of guest identity being a bare id, not a
+new gap introduced here.
+
+---
+
 ## 2026-08-16 — The activation control existed and worked; the user couldn't find it (issue #15, second real-device retest)
 
 **Problem**: After the user fixed the actual LiveKit credentials on

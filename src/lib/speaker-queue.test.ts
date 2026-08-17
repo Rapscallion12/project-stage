@@ -33,10 +33,10 @@ describe("isEligibleToClaim", () => {
 
 describe("decideClaimEligibility — the actual authorization gate claimOpenSeat relies on", () => {
   const baseParams = {
-    profileId: "p1",
+    identity: { type: "profile" as const, id: "p1" },
     hasPendingRequest: true,
     activeSpeakers: [{ seat_number: 1 as const }], // seat 2 open
-    rankedRequests: [{ profile_id: "p1", rank: 1 }],
+    rankedRequests: [{ profile_id: "p1", guest_id: null, rank: 1 }],
   };
 
   it("rejects a caller with no pending request, even if they'd otherwise be eligible", () => {
@@ -56,17 +56,20 @@ describe("decideClaimEligibility — the actual authorization gate claimOpenSeat
     const decision = decideClaimEligibility({
       ...baseParams,
       rankedRequests: [
-        { profile_id: "a", rank: 1 },
-        { profile_id: "b", rank: 2 },
-        { profile_id: "c", rank: 3 },
-        { profile_id: "p1", rank: 4 },
+        { profile_id: "a", guest_id: null, rank: 1 },
+        { profile_id: "b", guest_id: null, rank: 2 },
+        { profile_id: "c", guest_id: null, rank: 3 },
+        { profile_id: "p1", guest_id: null, rank: 4 },
       ],
     });
     expect(decision).toEqual({ eligible: false, reason: "not-eligible" });
   });
 
   it("rejects a caller who isn't in the ranking at all (a data inconsistency, not just low rank)", () => {
-    const decision = decideClaimEligibility({ ...baseParams, rankedRequests: [{ profile_id: "someone-else", rank: 1 }] });
+    const decision = decideClaimEligibility({
+      ...baseParams,
+      rankedRequests: [{ profile_id: "someone-else", guest_id: null, rank: 1 }],
+    });
     expect(decision).toEqual({ eligible: false, reason: "not-eligible" });
   });
 
@@ -74,8 +77,8 @@ describe("decideClaimEligibility — the actual authorization gate claimOpenSeat
     const decision = decideClaimEligibility({
       ...baseParams,
       rankedRequests: [
-        { profile_id: "a", rank: 1 },
-        { profile_id: "p1", rank: 2 },
+        { profile_id: "a", guest_id: null, rank: 1 },
+        { profile_id: "p1", guest_id: null, rank: 2 },
       ],
     });
     expect(decision).toEqual({ eligible: true, seatNumber: 2 });
@@ -84,5 +87,32 @@ describe("decideClaimEligibility — the actual authorization gate claimOpenSeat
   it("picks the lowest-numbered open seat when both are free", () => {
     const decision = decideClaimEligibility({ ...baseParams, activeSpeakers: [] });
     expect(decision).toEqual({ eligible: true, seatNumber: 1 });
+  });
+
+  describe("guest identities (issue #16)", () => {
+    const guestBaseParams = {
+      identity: { type: "guest" as const, id: "g1" },
+      hasPendingRequest: true,
+      activeSpeakers: [{ seat_number: 1 as const }], // seat 2 open
+    };
+
+    it("matches a guest's own ranked entry by guest_id, never profile_id", () => {
+      const decision = decideClaimEligibility({
+        ...guestBaseParams,
+        rankedRequests: [
+          { profile_id: "a", guest_id: null, rank: 1 },
+          { profile_id: null, guest_id: "g1", rank: 2 },
+        ],
+      });
+      expect(decision).toEqual({ eligible: true, seatNumber: 2 });
+    });
+
+    it("rejects a guest whose id doesn't appear in the ranking, even if some profile shares the same rank position", () => {
+      const decision = decideClaimEligibility({
+        ...guestBaseParams,
+        rankedRequests: [{ profile_id: "g1", guest_id: null, rank: 1 }], // same string value, wrong column — must not match
+      });
+      expect(decision).toEqual({ eligible: false, reason: "not-eligible" });
+    });
   });
 });

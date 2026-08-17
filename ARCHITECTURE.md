@@ -452,10 +452,14 @@ creating an account for them:
   themselves in the lobby (`GuestNameEditor`). Already-sent messages keep
   their `author_display_name` snapshot — renaming never rewrites history.
 - Guest-eligible Server Actions (`sendMessage`, `addReaction` in
-  `src/app/events/[id]/lobby/actions.ts`) accept either identity and
-  record whichever one acted. Account-only actions (not built yet — mic
-  request, comments) would require an authenticated user and, if absent,
-  return the specific account-prompt copy rather than silently failing.
+  `src/app/events/[id]/lobby/actions.ts`; `requestToSpeak`/
+  `withdrawSpeakerRequest`/`claimOpenSeat`/`leaveSpeakerSeat` in
+  `src/app/events/[id]/room/actions.ts` as of issue #16, gated by
+  `PROTOTYPE_CONFIG.guestParticipationEnabled`) accept either identity
+  and record whichever one acted. Genuinely account-only actions (posting
+  a comment outside a mic request — not built yet) require an
+  authenticated user and, if absent, return the specific account-prompt
+  copy rather than silently failing.
 
 ## Rate limiting & abuse prevention for guests
 
@@ -535,20 +539,38 @@ Implemented:
   ending the current row (`left_at` + a constrained `left_reason`:
   `voluntary` / `replaced` / `moderator_removed` / `event_ended` /
   `disconnected`) and inserting a new one, never updating in place.
-  **Account-only**, like `speaker_requests` below: `profile_id` is `not null`,
-  no guest column. Publicly readable (guests watching need to see who's
-  speaking); still no direct table-level write grant — every write goes
-  through one of three `security definer` functions added in migration
-  `00000000000006` (issue #13): `leave_speaker_seat` (self-service,
-  `auth.uid()`-gated, granted to `authenticated`), and
-  `claim_speaker_seat`/`end_speaker_seat` (trusted-server-only, no
-  anon/authenticated grant at all — callable only via the `service_role`
-  client). See [LiveKit authorization model](#livekit-authorization-model)
-  below for why that split exists and DECISIONS.md for the full reasoning.
-  A second partial unique index, `event_speakers_active_profile_uniq` on
-  `(event_id, profile_id) where left_at is null`, was added alongside —
-  nothing before issue #13 stopped one profile from holding two seats in
-  the same event at once. `left_reason` is a `CHECK`-constrained `text`
+  **Originally account-only**: `profile_id` was `not null`, no guest
+  column. As of migration `00000000000012` (issue #16), `profile_id` is
+  nullable and a `guest_id` column exists alongside it, with a `check`
+  constraint requiring **exactly one** of the two (same XOR pattern
+  `event_chat_messages`/`event_chat_message_reactions` already
+  established for guest-vs-account authorship) — an explicit, reversible
+  prototype-testing exception, not a permanent schema direction; see
+  PRODUCT.md/DECISIONS.md. Publicly readable (guests watching need to see
+  who's speaking); still no direct table-level write grant — every write
+  goes through `security definer` functions added in migration
+  `00000000000006` (issue #13) and widened by `00000000000012`:
+  `leave_speaker_seat` (self-service, `auth.uid()`-gated, granted to
+  `authenticated` — account holders only, since there's no `auth.uid()`
+  equivalent for a guest to self-service with) plus its guest counterpart
+  `leave_speaker_seat_as_guest`, and `claim_speaker_seat`/`end_speaker_seat`
+  (trusted-server-only, no anon/authenticated grant at all — callable only
+  via the `service_role` client, now accepting either identity shape in
+  one function rather than a second overload, since Postgres resolves
+  overloads by parameter type and a guest-only variant would be an
+  identical, invalid `(uuid, uuid, smallint)` signature clash). See
+  [LiveKit authorization model](#livekit-authorization-model) below for
+  why that split exists and DECISIONS.md for the full reasoning,
+  including a real grant-revocation regression migration `00000000000012`
+  introduced and migration `00000000000013` fixed the same day — the
+  exact PUBLIC-execute-by-default gotcha this section already warned
+  about, repeated once.
+  A partial unique index (`event_speakers_active_identity_uniq` as of
+  migration `00000000000012`, on `(event_id, coalesce(profile_id,
+  guest_id)) where left_at is null` — originally
+  `event_speakers_active_profile_uniq`, profile-only) — nothing before
+  issue #13 stopped one identity from holding two seats in the same event
+  at once. `left_reason` is a `CHECK`-constrained `text`
   column, not a native Postgres enum (easier to extend later — see
   `lib/repositories/event-speakers.ts` for the corresponding hand-typed
   TypeScript union, since the generator can't express a `CHECK`
@@ -576,14 +598,25 @@ Implemented:
   the same migration, so the room can subscribe to seat changes live —
   see [Realtime plan](#realtime-plan).
 - **`event_chat_messages.is_speaker_request`** and **`speaker_requests`**
-  (migration `00000000000011`, issue #14) — the speaker request queue.
-  **Not** a generic ordered waiting-list table, deliberately: a mic
-  request is a chat message with a permanent boolean flag on it, not a
-  separate entity — see [Speaker request queue](#speaker-request-queue)
-  below for the full design, including why this table only stores
-  lifecycle (`pending`/`granted`/`withdrawn`) and never duplicates
-  message content, and how it leaves room for a future pinned/featured
-  comment surface without a schema change.
+  (migration `00000000000011`, issue #14; widened to guests by
+  `00000000000012`, issue #16) — the speaker request queue. **Not** a
+  generic ordered waiting-list table, deliberately: a mic request is a
+  chat message with a permanent boolean flag on it, not a separate entity
+  — see [Speaker request queue](#speaker-request-queue) below for the
+  full design, including why this table only stores lifecycle
+  (`pending`/`granted`/`withdrawn`) and never duplicates message content,
+  and how it leaves room for a future pinned/featured comment surface
+  without a schema change. Same nullable-`profile_id`/`guest_id` XOR
+  widening as `event_speakers` above: `request_to_speak` (self-service,
+  `auth.uid()`-gated) is unchanged for account holders; a guest goes
+  through a new, separately-named `request_to_speak_as_guest`
+  (`service_role`-only, sharing the atomic message+request insert logic
+  via an internal `request_to_speak_internal` function neither is exposed
+  directly) rather than one function serving both trust models — the two
+  paths' authorization mechanisms are different in kind (a caller
+  can't spoof `auth.uid()`; there's no equivalent for a guest), so keeping
+  them as distinct functions is the clearer API, not a unified signature.
+  Same split for `withdraw_speaker_request`/`withdraw_speaker_request_as_guest`.
 
 Not yet implemented (planned — see ROADMAP.md for sequencing). Guest
 eligibility is called out explicitly per table since it's a schema-level
@@ -706,9 +739,15 @@ manually seeded for testing.
   `event_speakers` row for that event (`determineCanPublish()`, a pure
   function over an already-fetched occupancy record — deliberately
   separated from the DB lookup so it's unit-testable without a live
-  fixture). Guests structurally can never come back `canPublish: true` —
-  `event_speakers` is account-only, so a guest can never have an active
-  row to find.
+  fixture). As of issue #16, that occupancy row can belong to a guest
+  too — an explicit, reversible prototype-testing exception (see
+  PRODUCT.md/DECISIONS.md, gated by
+  `PROTOTYPE_CONFIG.guestParticipationEnabled`) — so this no longer
+  structurally excludes guests the way it did before #16. The
+  authorization boundary hasn't moved: a guest can only ever reach an
+  active `event_speakers` row through the same trusted-server
+  (`service_role`-only) write path an account holder's seat write
+  already went through, never a client-supplied claim.
 - **`canPublishData: false`** for everyone — chat/reactions already go
   through Supabase Realtime (`hooks/use-lobby-realtime.ts`); LiveKit's
   data channel is deliberately unused, keeping the two realtime systems

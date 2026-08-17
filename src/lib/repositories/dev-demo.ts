@@ -61,7 +61,7 @@ export async function seatCurrentUserAsSpeaker(
   profileId: string,
   seatNumber: 1 | 2,
 ): Promise<EventSpeaker> {
-  return claimSpeakerSeat(eventId, profileId, seatNumber);
+  return claimSpeakerSeat(eventId, { type: "profile", id: profileId }, seatNumber);
 }
 
 export async function listActiveSpeakersForDevEvent(eventId: string): Promise<EventSpeaker[]> {

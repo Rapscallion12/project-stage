@@ -1,4 +1,4 @@
-import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { EventSpeaker, SeatIdentity } from "@/lib/repositories/event-speakers";
 import type { RankedSpeakerRequest } from "@/lib/repositories/speaker-requests";
 
 /**
@@ -58,10 +58,11 @@ export type ClaimDecision =
  * this codebase: keep the decision pure, keep the I/O in a thin wrapper.
  */
 export function decideClaimEligibility(params: {
-  profileId: string;
+  /** Issue #16: either identity shape — a guest's own requests are matched by guest_id, never profile_id. */
+  identity: SeatIdentity;
   hasPendingRequest: boolean;
   activeSpeakers: Pick<EventSpeaker, "seat_number">[];
-  rankedRequests: Pick<RankedSpeakerRequest, "profile_id" | "rank">[];
+  rankedRequests: Pick<RankedSpeakerRequest, "profile_id" | "guest_id" | "rank">[];
 }): ClaimDecision {
   if (!params.hasPendingRequest) {
     return { eligible: false, reason: "no-request" };
@@ -72,7 +73,9 @@ export function decideClaimEligibility(params: {
     return { eligible: false, reason: "no-open-seat" };
   }
 
-  const myEntry = params.rankedRequests.find((r) => r.profile_id === params.profileId);
+  const myEntry = params.rankedRequests.find((r) =>
+    params.identity.type === "profile" ? r.profile_id === params.identity.id : r.guest_id === params.identity.id,
+  );
   if (!myEntry || !isEligibleToClaim(myEntry.rank)) {
     return { eligible: false, reason: "not-eligible" };
   }

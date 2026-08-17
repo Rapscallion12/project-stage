@@ -28,7 +28,7 @@ describe("syncPublishPermission", () => {
     vi.stubEnv("NEXT_PUBLIC_LIVEKIT_URL", "");
 
     await expect(
-      syncPublishPermission({ eventId: "event-1", profileId: "profile-1", canPublish: true }),
+      syncPublishPermission({ eventId: "event-1", identity: { type: "profile", id: "profile-1" }, canPublish: true }),
     ).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalledOnce();
   });
@@ -41,7 +41,7 @@ describe("syncPublishPermission", () => {
     await expect(
       syncPublishPermission({
         eventId: "nonexistent-event-does-not-exist",
-        profileId: "nonexistent-profile",
+        identity: { type: "profile", id: "nonexistent-profile" },
         canPublish: true,
       }),
     ).resolves.toBeUndefined();
@@ -54,7 +54,18 @@ describe("syncPublishPermission", () => {
     vi.stubEnv("LIVEKIT_API_SECRET", "test-secret-at-least-32-bytes-long");
 
     await expect(
-      syncPublishPermission({ eventId: "event-1", profileId: "profile-1", canPublish: false }),
+      syncPublishPermission({ eventId: "event-1", identity: { type: "profile", id: "profile-1" }, canPublish: false }),
+    ).resolves.toBeUndefined();
+    expect(console.error).toHaveBeenCalledOnce();
+  });
+
+  it("never throws for a guest identity either (issue #16) — the push mechanism is identity-agnostic", async () => {
+    vi.stubEnv("LIVEKIT_API_KEY", "");
+    vi.stubEnv("LIVEKIT_API_SECRET", "");
+    vi.stubEnv("NEXT_PUBLIC_LIVEKIT_URL", "");
+
+    await expect(
+      syncPublishPermission({ eventId: "event-1", identity: { type: "guest", id: "guest-1" }, canPublish: true }),
     ).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalledOnce();
   });

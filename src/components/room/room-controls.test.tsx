@@ -45,7 +45,7 @@ describe("RoomControls", () => {
     expect(screen.queryByRole("button", { name: "Request the mic" })).not.toBeInTheDocument();
   });
 
-  it("shows the account prompt inline when a guest clicks 'Request the mic' — never proactively", () => {
+  it("lets a guest proceed to the request form, same as an account holder — guest participation is enabled by default (issue #16)", () => {
     render(
       <RoomControls
         eventId="e1"
@@ -59,8 +59,8 @@ describe("RoomControls", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Request the mic" }));
 
-    expect(screen.getByText("Create an account to request the mic.")).toBeInTheDocument();
-    expect(requestToSpeak).not.toHaveBeenCalled();
+    expect(screen.queryByText("Create an account to request the mic.")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Why should you get the mic?")).toBeInTheDocument();
   });
 
   it("an account holder can open the request form and submit, moving to the pending state", async () => {
@@ -215,6 +215,34 @@ describe("RoomControls", () => {
         />,
       );
       expect(screen.queryByText("Setting up your mic access…")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("guest participation disabled (issue #16's flag turned off)", () => {
+    // A separate module registry, not the file's top-level RoomControls
+    // import — PROTOTYPE_CONFIG is mocked to its pre-#16 value only for
+    // this dynamically re-imported instance, so every other test in this
+    // file keeps exercising the real, default-on config.
+    it("still shows the account prompt when PROTOTYPE_CONFIG.guestParticipationEnabled is false", async () => {
+      vi.resetModules();
+      vi.doMock("@/lib/config", () => ({ PROTOTYPE_CONFIG: { guestParticipationEnabled: false } }));
+      const { RoomControls: RoomControlsWithGuestsDisabled } = await import("./room-controls");
+
+      render(
+        <RoomControlsWithGuestsDisabled
+          eventId="e1"
+          isSpeaker={false}
+          identity={guestIdentity}
+          hasPendingRequest={false}
+          {...readyMediaProps}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Request the mic" }));
+      expect(screen.getByText("Create an account to request the mic.")).toBeInTheDocument();
+
+      vi.doUnmock("@/lib/config");
+      vi.resetModules();
     });
   });
 });

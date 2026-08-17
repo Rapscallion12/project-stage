@@ -54,19 +54,23 @@ export async function POST(request: Request): Promise<Response> {
   const eventId = event.room?.name ? parseRoomName(event.room.name) : null;
   const identity = event.participant?.identity ? parseParticipantIdentity(event.participant.identity) : null;
 
-  if (!eventId || !identity || identity.type !== "profile") {
-    // Not one of this app's rooms, or a guest — guests can never hold a
-    // seat (event_speakers is account-only), so there's nothing to clean
-    // up either way.
+  if (!eventId || !identity) {
+    // Not one of this app's rooms.
     return NextResponse.json({ ok: true });
   }
 
+  // Issue #16: guests can now hold a seat too (a prototype-testing
+  // exception, see PRODUCT.md/DECISIONS.md) — endSpeakerSeat is a safe
+  // no-op for any identity with no active seat, so this doesn't need to
+  // check identity.type first; a disconnecting audience guest just hits
+  // the no-op path, same as an audience account holder always has.
+  //
   // No live LiveKit permission push here, unlike the leave/claim paths —
   // the participant is already gone, so there's no connected participant
   // left to push a permission change to. The DB write alone is the fix for
   // "stuck seat"; the next person who requests a token for this seat will
   // correctly see it as open.
-  await endSpeakerSeat(eventId, identity.id, "disconnected");
+  await endSpeakerSeat(eventId, identity, "disconnected");
 
   return NextResponse.json({ ok: true });
 }

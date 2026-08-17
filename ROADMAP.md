@@ -191,13 +191,25 @@ next starts (per the user's explicit instruction — no stacking unverified
 changes) — see DECISIONS.md for the full design reasoning and
 PRODUCT.md's testing-phase guest-participation exception.
 
-- [ ] Guest speaker participation (issue #16) — **explicit, reversible
+- [x] Guest speaker participation (issue #16) — **explicit, reversible
       testing-phase exception** to the account-only speaking rule above,
       gated behind `PROTOTYPE_CONFIG.guestParticipationEnabled`
-      (`lib/config.ts`). Guest writes stay on the same trusted-server
-      (`service_role`-only) tier `claim_speaker_seat`/`end_speaker_seat`
-      already use — no new `anon` grant anywhere. Mic requests become
-      possible during the waiting/lobby phase, not just once live.
+      (`lib/config.ts`, defaults to enabled). Guest writes stay on the
+      same trusted-server (`service_role`-only) tier
+      `claim_speaker_seat`/`end_speaker_seat` already use — no new `anon`
+      grant anywhere; `request_to_speak`/`withdraw_speaker_request` kept
+      their existing self-service `auth.uid()` path unchanged and gained
+      separately-named `service_role`-only guest siblings instead of a
+      unified signature (see DECISIONS.md for why). `event_speakers`/
+      `speaker_requests` gained a nullable `guest_id` column each,
+      XOR-constrained against `profile_id`, same pattern
+      `event_chat_messages` already used for guest authorship. A guest
+      can request the mic, get promoted, and receive `canPublish: true`
+      through the exact same server-authoritative path an account holder
+      does. Requesting the mic during the pre-show waiting phase (not
+      just once live) is still gated on issue #17's unified lifecycle
+      landing — today's `RoomControls` only renders inside the room page,
+      reachable once the event is "ready".
 - [ ] Unified event/lobby/live-room lifecycle (issue #17) — collapses
       `/events/[id]`, `/lobby`, and `/room` into one persistent client
       experience; the waiting room becomes the live room in place (a

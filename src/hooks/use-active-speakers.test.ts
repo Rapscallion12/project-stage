@@ -7,6 +7,7 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     id: "00000000-0000-0000-0000-000000000001",
     event_id: "00000000-0000-0000-0000-0000000000ee",
     profile_id: "00000000-0000-0000-0000-000000000aaa",
+    guest_id: null,
     seat_number: 1,
     display_name: "Jamie",
     joined_at: new Date().toISOString(),
