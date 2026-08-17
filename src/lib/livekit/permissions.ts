@@ -15,7 +15,15 @@ function getServiceUrl(): string {
   return wsUrl.replace(/^ws/, "http");
 }
 
-function getClient(): RoomServiceClient {
+/**
+ * Exported (not just used internally by syncPublishPermission below) so
+ * the temporary LiveKit connectivity diagnostic
+ * (api/livekit/diagnostics/route.ts, issue #15) can make a real,
+ * authenticated REST call against the configured project — the only way
+ * to prove the credentials are actually valid, not just present, since
+ * JWT signing (mintLiveKitToken) never contacts LiveKit's servers at all.
+ */
+export function getClient(): RoomServiceClient {
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   if (!apiKey || !apiSecret) {
