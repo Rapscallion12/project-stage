@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { Participant, Track, TrackPublication } from "livekit-client";
 import { SpeakerTile } from "./speaker-tile";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -64,5 +64,70 @@ describe("SpeakerTile", () => {
   it("marks the local participant's own tile distinctly", () => {
     render(<SpeakerTile speaker={speaker({ display_name: "You Yourself" })} participant={undefined} isLocal={true} />);
     expect(screen.getByTestId("speaker-tile")).toHaveTextContent("You Yourself (you)");
+  });
+
+  describe("tile-level media activation (issue #15 real-device follow-up)", () => {
+    // Real-device testing found the RoomControls-strip-only activation
+    // button easy to miss entirely — the user is looking at their own
+    // tile (it's the thing showing "camera off"), not scrolling down to a
+    // separate control strip. These tests cover the tile itself becoming
+    // a real, working tap target.
+
+    it("shows a tappable 'Tap to enable camera & mic' control on the local tile when activation is needed, instead of the generic placeholder", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={true}
+          needsMediaActivation={true}
+          activateMedia={vi.fn(async () => {})}
+        />,
+      );
+      expect(screen.getByTestId("tile-activate-media")).toHaveTextContent("Tap to enable camera & mic");
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("calls activateMedia directly from the tile's own click handler — the real user gesture Safari requires", () => {
+      const activateMedia = vi.fn(async () => {});
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={true}
+          needsMediaActivation={true}
+          activateMedia={activateMedia}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("tile-activate-media"));
+      expect(activateMedia).toHaveBeenCalledTimes(1);
+    });
+
+    it("never shows the tile activation control on a remote speaker's tile, even if needsMediaActivation is somehow true", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={false}
+          needsMediaActivation={true}
+          activateMedia={vi.fn(async () => {})}
+        />,
+      );
+      expect(screen.queryByTestId("tile-activate-media")).not.toBeInTheDocument();
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+    });
+
+    it("shows a specific short error label on the local tile instead of the generic 'Camera off', once media has been attempted and failed", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={true}
+          needsMediaActivation={false}
+          mediaError={{ source: "camera", reason: "permission-denied" }}
+        />,
+      );
+      expect(screen.getByTestId("no-video-placeholder")).toHaveTextContent("Permission denied");
+      expect(screen.queryByText("Camera off")).not.toBeInTheDocument();
+    });
   });
 });

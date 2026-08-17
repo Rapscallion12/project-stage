@@ -38,7 +38,14 @@ export function PortraitRoom({
         connectionStatus={connectionStatus}
       />
       <div className="shrink-0 p-3">
-        <SpeakerStage speakers={speakers} getParticipant={getParticipant} myIdentity={myIdentity} />
+        <SpeakerStage
+          speakers={speakers}
+          getParticipant={getParticipant}
+          myIdentity={myIdentity}
+          needsMediaActivation={needsMediaActivation}
+          activateMedia={activateMedia}
+          mediaError={mediaError}
+        />
       </div>
       <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
       <RoomControls

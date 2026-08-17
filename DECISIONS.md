@@ -3,6 +3,76 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-16 — The activation control existed and worked; the user couldn't find it (issue #15, second real-device retest)
+
+**Problem**: After the user fixed the actual LiveKit credentials on
+Vercel (see the entry below), a second real iPhone test confirmed every
+layer up through browser permission was genuinely working — production
+diagnostics read `LiveKit connection status: connected`, `Server grants
+canPublish: true`, `Needs media-activation tap: true`, `Media error:
+none`, and the tile's own direct `getUserMedia` test reported `SUCCESS`.
+Despite all of that, the user still reported "I still only see my
+initials / camera off" and couldn't find a working activation control.
+
+**Diagnosis**: Confirmed by re-reading the render tree, not guessed —
+`RoomDiagnostics` and `RoomControls` both read the exact same
+`needsMediaActivation`/`isSpeaker` values from one shared source
+(`LiveRoom`'s `layoutProps`), so there was no possible state mismatch
+between what the diagnostics panel reported and what `RoomControls`
+received. The actual "Enable camera & mic" button (added by the first
+#15 fix) rendered correctly — but only inside `RoomControls`, a small
+control strip at the very bottom of the room, competing for space with
+"Leave the stage," chat, and (this session) the diagnostics panel itself.
+`SpeakerTile` — the thing actually showing "camera off," which is what
+the user is looking at — had no awareness of `needsMediaActivation` at
+all and offered no interactive element whatsoever. This was a
+discoverability/placement bug, not a logic bug: the fix from the first
+#15 entry was real and worked, it just lived somewhere the user's
+attention never went.
+
+**Alternatives considered**:
+1. Make the existing `RoomControls` button more visually prominent
+   (larger, different color, moved higher in the strip) — doesn't
+   address the root issue, which is that the control lives in the wrong
+   *place* on the page, not that it's insufficiently styled.
+2. Put the primary activation control directly on the local
+   participant's own `SpeakerTile` — exactly where the "camera off"
+   placeholder the user is looking at already is.
+
+**Decision**: Option 2, keeping `RoomControls`' button too (redundant,
+still useful, doesn't hurt). `SpeakerTile` now takes optional
+`needsMediaActivation`/`activateMedia`/`mediaError` props; when
+`isLocal && needsMediaActivation`, the tile's placeholder becomes a real
+`<button>` ("Tap to enable camera & mic") instead of static text, calling
+`activateMedia()` directly from its own `onClick` — still a genuine user
+gesture, satisfying Safari's requirement the same way `RoomControls`'
+button already did. `SpeakerStage` threads these three props to every
+tile (they only ever act on the tile matching `myIdentity`), and
+`PortraitRoom`/`LandscapeRoom` pass them through unchanged from
+`layoutProps`, same wiring pattern as everything else in the room.
+`mediaError`, when present on the local tile with no activation pending,
+now shows a compact reason ("Permission denied", "No camera found") in
+place of the generic "Camera off" too — the tile itself, not just
+`RoomControls`, now explains what's happening.
+
+**Reason this matters beyond just "add a button"**: this is the second
+distinct #15 finding where a value was computed correctly and even
+verified correct by a diagnostics panel, yet the actual product surface
+failed to make it actionable for a real user under real conditions — the
+first was a silently-discarded `mediaError` (never rendered anywhere),
+this is a correctly-rendered control the user's attention never reached.
+Both are the same underlying lesson: computing the right state isn't the
+same as a real person being able to act on it, and only real-device
+testing — not unit tests, not code review, not even a passing diagnostics
+readout — caught either one.
+
+**Tradeoffs**: None of consequence — purely additive props with safe
+defaults, existing `SpeakerTile`/`SpeakerStage` callers/tests needed no
+changes beyond the two room-layout call sites that now pass the three new
+props through.
+
+---
+
 ## 2026-08-16 — Issue #15's gesture fix never got exercised in production: LiveKit itself isn't reachable there (issue #15, real-device retest)
 
 **Problem**: The gesture-gating fix (below) shipped, passed full automated

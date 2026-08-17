@@ -44,6 +44,9 @@ export function LandscapeRoom({
             speakers={speakers}
             getParticipant={getParticipant}
             myIdentity={myIdentity}
+            needsMediaActivation={needsMediaActivation}
+            activateMedia={activateMedia}
+            mediaError={mediaError}
             className="grid w-full max-w-4xl grid-cols-2 gap-4"
           />
         </div>
