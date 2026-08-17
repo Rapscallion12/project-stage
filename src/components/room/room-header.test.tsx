@@ -34,4 +34,9 @@ describe("RoomHeader", () => {
     expect(screen.getByText("Live")).toBeInTheDocument();
     expect(screen.queryByText(/Connecting|Reconnecting|Connection lost/)).not.toBeInTheDocument();
   });
+
+  it("explicitly names an unavailable LiveKit connection, rather than staying silent (issue #15 real-device follow-up)", () => {
+    render(<RoomHeader eventTitle="E" roomStatus="waiting" participantCount={0} connectionStatus="unavailable" />);
+    expect(screen.getByText(/Live video isn't configured for this room/)).toBeInTheDocument();
+  });
 });

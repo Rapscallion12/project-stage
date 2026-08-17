@@ -6,6 +6,7 @@ import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks
 import { useOrientation } from "@/hooks/use-orientation";
 import { PortraitRoom } from "@/components/room/portrait-room";
 import { LandscapeRoom } from "@/components/room/landscape-room";
+import { RoomDiagnostics } from "@/components/room/room-diagnostics";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
@@ -73,5 +74,23 @@ export function LiveRoom({
     reactions,
   };
 
-  return orientation === "landscape" ? <LandscapeRoom {...layoutProps} /> : <PortraitRoom {...layoutProps} />;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1">
+        {orientation === "landscape" ? <LandscapeRoom {...layoutProps} /> : <PortraitRoom {...layoutProps} />}
+      </div>
+      {/* TEMPORARY — issue #15 real-device diagnosis, see DECISIONS.md. Remove once root cause is confirmed fixed. */}
+      <RoomDiagnostics
+        identityType={identity.type}
+        isSpeaker={isSpeaker}
+        hasServerToken={initialToken !== null}
+        liveKitUrlConfigured={Boolean(LIVEKIT_URL)}
+        connectionStatus={connection.status}
+        canPublish={connection.canPublish}
+        needsMediaActivation={connection.needsMediaActivation}
+        mediaError={connection.mediaError}
+        participantCount={connection.participantCount}
+      />
+    </div>
+  );
 }

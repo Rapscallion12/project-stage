@@ -29,6 +29,7 @@ export function RoomHeader({
           {connectionStatus === "connecting" && " · Connecting…"}
           {connectionStatus === "reconnecting" && " · Reconnecting…"}
           {connectionStatus === "disconnected" && " · Connection lost"}
+          {connectionStatus === "unavailable" && " · Live video isn't configured for this room"}
         </p>
       </div>
       <p className="shrink-0 text-xs text-muted">
