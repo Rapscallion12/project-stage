@@ -2,6 +2,8 @@
 
 import { resolveIdentity } from "@/lib/identity";
 import { PROTOTYPE_CONFIG } from "@/lib/config";
+import { getEventPhase } from "@/lib/events";
+import { getEventById } from "@/lib/repositories/events";
 import {
   claimSpeakerSeat,
   getActiveSeatForIdentity,
@@ -166,11 +168,25 @@ const CLAIM_REJECTION_MESSAGES = {
  * attempt this at nearly the same moment; the bounded, benign outcome
  * (whichever call lands second replaces the first) is accepted, same
  * reasoning issue #13's own race-safety test documents.
+ *
+ * Issue #17: requesting the mic is available from the moment the lobby
+ * opens (see requestToSpeak above), but *claiming* a seat — actually
+ * going live — is enforced here to require the event's scheduled start
+ * to have arrived. This is server-enforced, not just a hidden button:
+ * the unified event/room experience makes RoomControls reachable well
+ * before "ready" now, so without this check, a claim during the waiting
+ * phase would start the live conversation early, which the scheduled
+ * start time exists to prevent.
  */
 export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActionResult> {
   const identity = await resolveIdentity();
   if (identity.type !== "profile" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
     return { error: "Create an account to request the mic." };
+  }
+
+  const event = await getEventById(eventId);
+  if (!event || getEventPhase(event) !== "ready") {
+    return { error: "The conversation hasn't started yet — hang tight." };
   }
 
   const [myRequest, activeSpeakers, ranked] = await Promise.all([

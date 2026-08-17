@@ -2,6 +2,7 @@ import { RoomHeader } from "@/components/room/room-header";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomChatPanel } from "@/components/room/room-chat-panel";
 import { RoomControls } from "@/components/room/room-controls";
+import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
@@ -14,6 +15,8 @@ import type { RoomLayoutProps } from "@/components/room/types";
  */
 export function LandscapeRoom({
   event,
+  phase,
+  countdownText,
   roomStatus,
   speakers,
   myIdentity,
@@ -36,6 +39,7 @@ export function LandscapeRoom({
         <RoomHeader
           eventTitle={event.title}
           roomStatus={roomStatus}
+          countdownText={countdownText}
           participantCount={participantCount}
           connectionStatus={connectionStatus}
         />
@@ -60,14 +64,18 @@ export function LandscapeRoom({
           activateMedia={activateMedia}
           mediaError={mediaError}
           connectionStatus={connectionStatus}
+          phase={phase}
+          countdownText={countdownText}
         />
       </div>
-      <RoomChatPanel
-        eventId={event.id}
-        messages={messages}
-        reactions={reactions}
-        className="w-80 shrink-0 border-l border-border"
-      />
+      <div className="flex w-80 shrink-0 flex-col border-l border-border">
+        {identity.type === "guest" && (
+          <div className="shrink-0 border-b border-border px-3 py-2">
+            <GuestNameEditor initialName={identity.displayName} />
+          </div>
+        )}
+        <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
+      </div>
     </div>
   );
 }

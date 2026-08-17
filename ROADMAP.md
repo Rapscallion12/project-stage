@@ -210,12 +210,20 @@ PRODUCT.md's testing-phase guest-participation exception.
       just once live) is still gated on issue #17's unified lifecycle
       landing — today's `RoomControls` only renders inside the room page,
       reachable once the event is "ready".
-- [ ] Unified event/lobby/live-room lifecycle (issue #17) — collapses
+- [x] Unified event/lobby/live-room lifecycle (issue #17) — collapsed
       `/events/[id]`, `/lobby`, and `/room` into one persistent client
-      experience; the waiting room becomes the live room in place (a
-      genuine state transition, not a redirect) with chat/presence/LiveKit
-      connection surviving the transition, same discipline as the
-      orientation architecture already requires.
+      experience (`components/room/event-room.tsx`, renamed from
+      `live-room.tsx`); the waiting room becomes the live room in place
+      (a genuine state transition, phase computed the same
+      `useNow()`-driven way as `EventCountdown`, sitting above the
+      orientation branch alongside the other live hooks — never a
+      redirect) with chat/presence/LiveKit connection surviving the
+      transition, same discipline the orientation architecture already
+      required. `/lobby`/`/room` kept as backward-compatible redirect
+      stubs. Requesting the mic works from `lobby_open` onward; claiming
+      a seat stays server-enforced to `ready` only (see DECISIONS.md) so
+      the scheduled start time still means something now that
+      `RoomControls` is reachable earlier.
 - [ ] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
       gets a purpose-built layout (other speaker prioritized, own preview
       small, controls immediately reachable), not the audience UI with

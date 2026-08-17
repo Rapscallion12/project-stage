@@ -3,6 +3,110 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-16 — One event URL: collapsing event/lobby/room into a single persistent experience (issue #17)
+
+**Problem**: Real-device testing repeatedly confirmed the three-route
+event→lobby→room split (each a full navigation, each mounting its own
+top-level state-owning component) as an active usability failure, not
+polish — roughly three taps before reaching anything interactive, and a
+screenshot showing the room's empty-seat/"Waiting for speakers" state
+with the chat/request-mic flow the user expected not actually present
+(because they'd reached it via the narrower, chat-only `LobbyRoom`
+before "Enter the room," not the full room layout). The user's own
+framing: tapping an event should mean immediately being in the room,
+whatever state it's currently in.
+
+**Alternatives considered**:
+1. Keep three routes; make the "Enter Lobby"/"Enter the room" transition
+   automatic (a client-side redirect once the phase flips) instead of a
+   manual click. Rejected explicitly by the user up front — an automatic
+   redirect between routes still unmounts and remounts every
+   top-level component, tearing down and rebuilding the chat/presence
+   Realtime subscription and (once live) the LiveKit connection. That's
+   the reload-equivalent PRODUCT.md's mobile-orientation principle
+   already forbids for rotation; the same reasoning applies to a phase
+   transition.
+2. One URL (`/events/[id]`), one persistent client component owning
+   every live hook unconditionally, with phase becoming a render branch
+   *above* the existing orientation branch — the exact same shape
+   already proven for orientation (see the mobile-orientation entries
+   below): hooks that never unmount, only the presentation chosen
+   underneath them changes.
+
+**Decision**: Option 2. `LiveRoom` was renamed `EventRoom` (it now owns
+the whole lifecycle, not just the "live" part) and gained a fourth
+unconditional piece of state — `phase`, computed the same
+`useNow()`-driven way `EventCountdown`/the old `LobbyRoom` already did —
+sitting above `useLobbyRealtime`/`useActiveSpeakers`/`useOrientation`.
+`useLiveRoomConnection` already handled a `null → real params`
+transition by design (its own doc comment states this explicitly); the
+LiveKit connection simply starts using the token already fetched at
+initial page load the moment `phase` becomes `"ready"`, without any
+remount or new fetch. The room's *existing* layout
+(`RoomHeader`/`SpeakerStage`/`RoomChatPanel`/`RoomControls`) needed no
+restructuring — it already showed seat placeholders, chat, and (as of
+issue #16) the request-mic control together; the actual bug was that
+this layout was gated behind an extra click and only reachable once
+`phase === "ready"`, not that the layout itself was missing anything.
+It's now reachable from `lobby_open` onward, with only a lightweight
+countdown-only view before that (matching what the old event-detail page
+showed pre-lobby).
+
+**Server-side data fetching also unified**: `/events/[id]`'s page now
+fetches speakers, messages/reactions, a LiveKit token, and pending-request
+status unconditionally, regardless of phase, replacing the old
+per-route, phase-gated fetches. Minting a token before "ready" is
+harmless — signing a JWT never contacts LiveKit's servers, and
+`canPublish` is still derived purely from real `event_speakers`
+occupancy either way (see the LiveKit authorization model section).
+`initialPhase` is computed server-side (no `now` parameter, so it
+reflects the actual request-time truth) and used until the client's
+`useNow()` clock ticks past hydration — this is what makes opening an
+already-live shared link land directly in the live state on first
+paint, not a placeholder that flips a moment later.
+
+**A real, deliberate gap this surfaced, not silently absorbed**: making
+`RoomControls` reachable before `phase === "ready"` means requesting the
+mic (a real product requirement — "waiting together is part of the
+experience") also makes *claiming* a seat reachable from the same
+screen, before the scheduled start. Left unguarded, that would let the
+live conversation start early, defeating the purpose of a scheduled
+start time. Fixed by adding a server-enforced check to `claimOpenSeat`
+itself — fetches the event, rejects with a clear message unless
+`getEventPhase(event) === "ready"` — not just a hidden button, consistent
+with this project's "the server decides, the client never does" rule.
+Requesting the mic and withdrawing a request remain available from
+`lobby_open` onward, unchanged.
+
+**Route fate**: `/events/[id]/lobby` and `/events/[id]/room` become
+plain `redirect()` stubs — kept, not deleted, for any link already
+shared before this change, per the user's explicit allowance. The old
+`LobbyRoom` and `EventEntryStatus` components became genuinely dead code
+once nothing rendered them and were deleted rather than left unused;
+`GuestNameEditor` (previously only in `LobbyRoom`'s sidebar) moved into
+the unified room's layout, shown for guests in both the pre-lobby
+countdown view and the main room view.
+
+**Reason this is recorded as a first-class architectural decision, not
+just a routing tweak**: it's the second time in this project a
+navigation/redirect pattern was rejected specifically because it would
+tear down live state (the first being the mobile-orientation principle
+itself) — worth naming explicitly so a future session recognizes the
+pattern (hooks-above-the-branch) as the general answer to "how do I add
+a new mode to a live experience," not something to rediscover per
+feature.
+
+**Tradeoffs**: `EventRoom` is now a larger component, owning one more
+piece of branching logic (phase) on top of orientation and role — still
+manageable, but issue #18's role-based UI split will add a third
+dimension on top of this same base, worth watching for complexity as
+that lands. The pre-lobby countdown view duplicates a small amount of
+"upcoming" rendering logic that used to live in the now-deleted
+`EventEntryStatus` — judged acceptable since it's a handful of lines,
+not worth extracting into a shared component for one caller.
+
+---
+
 ## 2026-08-16 — Guest speaker participation (issue #16): design, and a real grant-revocation regression caught by the existing test suite
 
 **Problem**: A third real-device test of issue #15 (after the LiveKit

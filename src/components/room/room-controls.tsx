@@ -11,6 +11,7 @@ import {
 } from "@/app/events/[id]/room/actions";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import { PROTOTYPE_CONFIG } from "@/lib/config";
+import type { EventPhase } from "@/lib/events";
 import type { Identity } from "@/lib/identity";
 
 /** Specific, named copy per failure reason — see MediaErrorReason's doc comment for why these are distinguished instead of a generic "camera off". */
@@ -65,6 +66,8 @@ export function RoomControls({
   activateMedia,
   mediaError,
   connectionStatus,
+  phase,
+  countdownText,
 }: {
   eventId: string;
   isSpeaker: boolean;
@@ -75,6 +78,9 @@ export function RoomControls({
   activateMedia: () => Promise<void>;
   mediaError: MediaError;
   connectionStatus: ConnectionStatus;
+  /** Issue #17: requesting the mic works from lobby_open onward, but claiming a seat (going live) is still gated to "ready" — enforced server-side in claimOpenSeat, not just here. */
+  phase: EventPhase;
+  countdownText: string | null;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -186,14 +192,21 @@ export function RoomControls({
   }
 
   if (hasPendingRequest) {
+    const canClaimNow = phase === "ready";
     return (
       <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-muted">Your request is live in chat.</p>
+          <p className="text-xs text-muted">
+            {canClaimNow
+              ? "Your request is live in chat."
+              : `Your request is live in chat — you can claim a seat once the conversation starts${countdownText ? ` (${countdownText.toLowerCase()})` : ""}.`}
+          </p>
           <div className="flex gap-2">
-            <Button onClick={handleClaim} disabled={isPending}>
-              {isPending ? "Claiming…" : "Claim your seat"}
-            </Button>
+            {canClaimNow && (
+              <Button onClick={handleClaim} disabled={isPending}>
+                {isPending ? "Claiming…" : "Claim your seat"}
+              </Button>
+            )}
             <Button variant="ghost" onClick={handleWithdraw} disabled={isPending}>
               Withdraw
             </Button>

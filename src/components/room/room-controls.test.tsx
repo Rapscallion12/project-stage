@@ -28,6 +28,10 @@ const readyMediaProps = {
   activateMedia: vi.fn(async () => {}),
   mediaError: null as MediaError,
   connectionStatus: "connected" as const,
+  // Issue #17: most tests exercise the room once genuinely live — the
+  // phase-gating-specific tests below override these.
+  phase: "ready" as const,
+  countdownText: null as string | null,
 };
 
 describe("RoomControls", () => {
@@ -243,6 +247,42 @@ describe("RoomControls", () => {
 
       vi.doUnmock("@/lib/config");
       vi.resetModules();
+    });
+  });
+
+  describe("claiming a seat is gated to phase === \"ready\" (issue #17)", () => {
+    it("hides the 'Claim your seat' button pre-show, showing a countdown-aware explanation instead", () => {
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          identity={profileIdentity}
+          hasPendingRequest={true}
+          {...readyMediaProps}
+          phase="lobby_open"
+          countdownText="Live in 2h 15m"
+        />,
+      );
+      expect(screen.queryByRole("button", { name: "Claim your seat" })).not.toBeInTheDocument();
+      expect(screen.getByText(/you can claim a seat once the conversation starts \(live in 2h 15m\)/i)).toBeInTheDocument();
+      // Withdraw must still work pre-show — only claiming is phase-gated.
+      expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
+    });
+
+    it("shows the real 'Claim your seat' button once phase is ready", () => {
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          identity={profileIdentity}
+          hasPendingRequest={true}
+          {...readyMediaProps}
+          phase="ready"
+          countdownText={null}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Claim your seat" })).toBeInTheDocument();
+      expect(screen.queryByText(/hasn't started yet/i)).not.toBeInTheDocument();
     });
   });
 });

@@ -56,17 +56,19 @@ src/
                    actions, never call Supabase directly from the browser
                    for auth mutations).
     events/       Event list/detail presentational components.
-    lobby/         Pre-show lobby presentational components (chat panel,
-                   message item, guest name editor). Consume state from
+    lobby/         Chat panel, message item, guest name editor — reused by
+                   the unified event room (issue #17), not a separate
+                   "pre-show" surface anymore. Consume state from
                    useLobbyRealtime; don't touch Supabase themselves.
-    room/          Live room (issue #3): live-room.tsx (the one place
-                   useActiveSpeakers/useLiveRoomConnection/
-                   useLobbyRealtime/useOrientation are called),
-                   portrait-room.tsx/landscape-room.tsx (presentation
-                   only — see Mobile orientation implementation),
-                   speaker-stage.tsx/speaker-tile.tsx (render from
-                   event_speakers, never from LiveKit's participant
-                   list — see Live room UI), room-header.tsx,
+    room/          The event room (issue #3, unified into one persistent
+                   experience by issue #17): event-room.tsx (the one
+                   place useActiveSpeakers/useLiveRoomConnection/
+                   useLobbyRealtime/useOrientation, and the event-phase
+                   clock, are called), portrait-room.tsx/landscape-room.tsx
+                   (presentation only — see Mobile orientation
+                   implementation), speaker-stage.tsx/speaker-tile.tsx
+                   (render from event_speakers, never from LiveKit's
+                   participant list — see Live room UI), room-header.tsx,
                    room-controls.tsx, room-chat-panel.tsx (reuses
                    components/lobby/'s ChatPanel), types.ts
                    (RoomLayoutProps, shared by the two layouts).
@@ -872,16 +874,21 @@ self-healing.
 
 ## Live room UI
 
-Issue #3: `src/app/events/[id]/room/page.tsx` (Server Component — fetches
-the event, resolves identity, awaits `listActiveSpeakers`,
-`listRecentMessages`/`listReactionsForMessages`, and `getLiveKitToken`
-directly, same pattern the lobby page already uses) renders
-`components/room/live-room.tsx`, the one Client Component that calls
-`useActiveSpeakers`, `useLiveRoomConnection`, `useLobbyRealtime`, and
-`useOrientation` — every other room component is presentation, reading
-props from `LiveRoom`. Not enterable before the event's `getEventPhase`
-is `"ready"`; an early visitor is redirected to the lobby, same precedent
-as the lobby redirecting an early visitor back to the event page.
+Issue #3, restructured by issue #17 into the single event experience:
+`src/app/events/[id]/page.tsx` (Server Component — fetches the event,
+resolves identity, and awaits `listActiveSpeakers`,
+`listRecentMessages`/`listReactionsForMessages`, `getLiveKitToken`, and
+the caller's pending-request status, all unconditionally regardless of
+event phase) renders `components/room/event-room.tsx`, the one Client
+Component that calls `useActiveSpeakers`, `useLiveRoomConnection`,
+`useLobbyRealtime`, `useOrientation`, and (issue #17) a `useNow()`-driven
+event-phase clock — every other room component is presentation, reading
+props from `EventRoom`. There is no phase-based redirect or separate
+route anymore — `/events/[id]/lobby` and `/events/[id]/room` are
+backward-compatible `redirect()` stubs only; see
+[Event lifecycle](#event-lifecycle) below for the full design and
+DECISIONS.md for why an automatic redirect was rejected in favor of one
+persistent component.
 
 **`event_speakers` decides who's speaking; LiveKit only decides whether a
 video frame is available.** This is the central design constraint of the
@@ -901,6 +908,52 @@ speaker mutes, loses camera permission, or has a connection hiccup — none
 of that changes who the room says is speaking. See DECISIONS.md for the
 design reasoning (this was a correction to an earlier draft that would
 have derived the speaker list from LiveKit's own track state).
+
+### Event lifecycle
+
+One URL (`/events/[id]`), one persistent experience, three phases
+(`getEventPhase()`, `lib/events.ts`: `upcoming` / `lobby_open` / `ready`)
+rendered by the same mounted `EventRoom` component — never a route
+change between them. `phase` is computed the same way as every other
+live piece of room state: server-side at request time
+(`initialPhase`, passed as a prop so first paint is correct even for
+someone opening an already-live link), then reactively via `useNow()`
+once hydrated, exactly the pattern `EventCountdown` already established.
+It sits *above* the orientation branch, alongside
+`useLobbyRealtime`/`useActiveSpeakers`/`useOrientation` — all four are
+called unconditionally on every render, so none of them ever unmount
+when phase changes, the same discipline
+[Mobile orientation implementation](#mobile-orientation-implementation)
+already established for rotation. See DECISIONS.md for why an automatic
+redirect between routes was considered and rejected: it would tear down
+and rebuild the chat/presence Realtime subscription (and, once live, the
+LiveKit connection) on every phase transition, the reload-equivalent
+PRODUCT.md already forbids for rotation.
+
+- **`upcoming`** (before `lobby_opens_at`): a lightweight countdown-only
+  view — event title/description and "Lobby opens in…" — no chat
+  subscription is *shown*, though `useLobbyRealtime` is still mounted
+  underneath (cheap, and means zero connection-establishment delay the
+  moment `lobby_opens_at` arrives).
+- **`lobby_open`** and **`ready`**: the *same* full room layout
+  (`RoomHeader`/`SpeakerStage`/`RoomChatPanel`/`RoomControls`) either
+  way — chat, seat placeholders (occupied or not), and the request-mic
+  control are always present together; there is no separate "waiting
+  room" component. The only differences: `RoomHeader` shows a countdown
+  string appended to the room status before `ready`; and LiveKit only
+  actually connects once `phase === "ready"` (`canConnect = Boolean(...
+  && phase === "ready")` in `EventRoom` — `useLiveRoomConnection` already
+  handled a `null → real params` transition by design, so this flip
+  doesn't remount or refetch anything).
+- **Claiming a seat is phase-gated server-side, requesting isn't**:
+  since `RoomControls` is reachable before `ready` now, `claimOpenSeat`
+  (`app/events/[id]/room/actions.ts`) explicitly checks
+  `getEventPhase(event) === "ready"` before allowing a claim, rejecting
+  otherwise with a clear message — enforced in the action, not just a
+  hidden button, per this project's "the server decides" rule.
+  `requestToSpeak`/`withdrawSpeakerRequest` remain available from
+  `lobby_open` onward, unchanged — waiting together and signaling intent
+  to speak is part of the pre-show experience by design (see PRODUCT.md).
 
 **Room status** (`lib/room-status.ts`) is likewise derived purely from
 `event_speakers`' active-speaker count — `0` → "Waiting for speakers",
@@ -942,7 +995,7 @@ failures are classified via the browser's own `DOMException.name`
 per camera/microphone independently, and surfaced in `RoomControls` with
 specific copy — never a generic "camera off." `RoomLayoutProps` carries
 `mediaError`/`canPublish`/`needsMediaActivation`/`activateMedia` down
-from `LiveRoom` alongside `connectionStatus`, so this reaches the UI the
+from `EventRoom` alongside `connectionStatus`, so this reaches the UI the
 same way every other piece of live room state does.
 
 **Orientation**: `hooks/use-orientation.ts` implements the
@@ -951,10 +1004,11 @@ same way every other piece of live room state does.
 already specified, via `useSyncExternalStore` (not `useEffect`+`useState`
 — see the hook's own comment on why: setting state synchronously in an
 effect body trips `react-hooks/set-state-in-effect`, and this is exactly
-the "subscribe to external state" case that hook is for). `LiveRoom`
+the "subscribe to external state" case that hook is for). `EventRoom`
 reads it to choose `PortraitRoom` vs `LandscapeRoom`, but every live
-hook is called in `LiveRoom` itself, above that branch — rotating only
-changes which presentation component receives the same props.
+hook — including the event-phase clock added by issue #17 — is called
+in `EventRoom` itself, above that branch — rotating only changes which
+presentation component receives the same props.
 
 **Layout**: portrait maximizes chat, with a compact speaker strip staying
 visible above it (discussion secondary but never hidden); landscape
@@ -1168,18 +1222,21 @@ so whoever builds it doesn't default to the naive approach:
   JS-driven layout thrash; the goal is that rotating reads as "the same
   live session redecorated," not a navigation.
 
-**The pre-show lobby (`components/lobby/`) does not branch by orientation
-at all** — it's a concrete example of the "where structure doesn't
-genuinely differ" case above, not an exception to this section. There's no
-video yet competing for space, so there's no genuine structural difference
-between portrait-phone and landscape-phone for the lobby; the real
-difference is phone vs. desktop width, handled with ordinary Tailwind
-breakpoints in `LobbyRoom`. This is also *why* the lobby was safe to build
-without the orientation-state-ownership rule above ever coming into play —
-`useLobbyRealtime` is called once, unconditionally, and nothing about it
-changes based on orientation. Keep it that way until the live room actually
-needs to reflow around video; don't add orientation branching to the lobby
-speculatively.
+**The pre-lobby countdown view (`EventRoom`'s `phase === "upcoming"`
+branch) does not branch by orientation at all** — a concrete example of
+the "where structure doesn't genuinely differ" case above, not an
+exception to this section. There's no video or chat competing for space
+yet, so there's no genuine structural difference between portrait-phone
+and landscape-phone for a countdown; the real difference is phone vs.
+desktop width, handled with ordinary Tailwind breakpoints. This is also
+*why* that view is safe to render without the orientation-state-ownership
+rule above ever coming into play for it specifically — `useOrientation()`
+is still called unconditionally in `EventRoom` (same as every other live
+hook), it just isn't read by this particular branch. **From
+`lobby_open` onward**, the same room layout used once live
+(`PortraitRoom`/`LandscapeRoom`) is already in effect — issue #17 didn't
+change this section's rule, it just made that layout, and the
+orientation-safety it already had, reachable earlier than `ready`.
 
 ## Testing & Definition of Done
 

@@ -9,6 +9,21 @@ separate release cadence to track here.
 
 ### Added
 
+- **One event URL** (issue #17) — `/events/[id]` is now the entire event
+  experience: tapping an event from the list lands directly in it, no
+  "Enter Lobby"/"Enter the room" clicks. The same mounted component
+  (`EventRoom`, renamed from `LiveRoom`) shows a lightweight countdown
+  before the lobby opens, then the full room layout (chat, seat
+  placeholders, request-mic control, event status) from `lobby_open`
+  onward — the same layout that already existed for the live room, just
+  reachable earlier, not a new "waiting room" surface. LiveKit connects
+  in place once the event goes live, using the token already fetched at
+  page load — no remount, no redirect, no dropped Realtime subscription.
+  `/events/[id]/lobby` and `/events/[id]/room` redirect to the unified
+  URL for backward compatibility. Claiming a seat (not requesting)
+  stays server-enforced to the event's actual start time, since the
+  request/claim controls are now reachable before the show technically
+  begins. See DECISIONS.md.
 - **Guest speaker participation** (issue #16) — an explicit, reversible
   prototype-testing exception (`PROTOTYPE_CONFIG.guestParticipationEnabled`,
   `lib/config.ts`) letting guests request the mic, get promoted, and

@@ -39,4 +39,26 @@ describe("RoomHeader", () => {
     render(<RoomHeader eventTitle="E" roomStatus="waiting" participantCount={0} connectionStatus="unavailable" />);
     expect(screen.getByText(/Live video isn't configured for this room/)).toBeInTheDocument();
   });
+
+  it("appends the countdown to the room status rather than replacing it, once one is provided (issue #17)", () => {
+    render(
+      <RoomHeader
+        eventTitle="E"
+        roomStatus="waiting"
+        countdownText="Live in 2h 15m"
+        participantCount={0}
+        connectionStatus="connected"
+      />,
+    );
+    const status = screen.getByText(/Waiting for speakers/);
+    expect(status).toHaveTextContent("Waiting for speakers");
+    expect(status).toHaveTextContent("Live in 2h 15m");
+  });
+
+  it("shows nothing extra when there's no countdown to show", () => {
+    render(
+      <RoomHeader eventTitle="E" roomStatus="live" countdownText={null} participantCount={2} connectionStatus="connected" />,
+    );
+    expect(screen.getByText("Live")).toBeInTheDocument();
+  });
 });

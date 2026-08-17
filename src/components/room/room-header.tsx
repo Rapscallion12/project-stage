@@ -7,16 +7,21 @@ import { ROOM_STATUS_LABEL, type RoomStatus } from "@/lib/room-status";
  * depend on whether *this particular viewer's* LiveKit connection is
  * healthy. `connectionStatus` only surfaces here when this viewer's own
  * connection is degraded, since a healthy connection has nothing worth
- * saying.
+ * saying. `countdownText` (issue #17) is appended when the event hasn't
+ * gone live yet — "Waiting for speakers" stays literally true pre-show
+ * (nobody has claimed a seat), the countdown just adds *when* on top of
+ * it, rather than replacing it.
  */
 export function RoomHeader({
   eventTitle,
   roomStatus,
+  countdownText,
   participantCount,
   connectionStatus,
 }: {
   eventTitle: string;
   roomStatus: RoomStatus;
+  countdownText?: string | null;
   participantCount: number;
   connectionStatus: "unavailable" | "connecting" | "connected" | "reconnecting" | "disconnected";
 }) {
@@ -26,6 +31,7 @@ export function RoomHeader({
         <h1 className="truncate text-base font-semibold">{eventTitle}</h1>
         <p className="text-xs text-muted">
           {ROOM_STATUS_LABEL[roomStatus]}
+          {countdownText && ` · ${countdownText}`}
           {connectionStatus === "connecting" && " · Connecting…"}
           {connectionStatus === "reconnecting" && " · Reconnecting…"}
           {connectionStatus === "disconnected" && " · Connection lost"}

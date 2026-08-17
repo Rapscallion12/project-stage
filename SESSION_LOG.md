@@ -4,6 +4,94 @@ Newest entry first.
 
 ---
 
+## 2026-08-16 — Session 19: Unified event/lobby/room lifecycle (issue #17)
+
+**Goal**: With #15/#16 mid-validation, the user asked to pause that loop
+and address #17 directly — real-device testing had made the three-route
+event→lobby→room split an active usability failure (roughly three taps
+before anything interactive), not something to defer as polish.
+
+**Design, walked through before implementing (per the user's explicit
+ask and this project's own standing rule)**: inspected the actual route/
+component structure first — `/events/[id]` (countdown + "Enter Lobby"),
+`/events/[id]/lobby` (a separate `LobbyRoom` component: chat + presence
++ countdown sidebar, no speaker stage, no request-mic control), and
+`/events/[id]/room` (the full room layout, phase-gated to `"ready"`
+only). Found that the room's *existing* layout already satisfied nearly
+every requirement the user listed (seat placeholders, chat, request-mic
+control, status) — the actual bug was that layout being gated behind an
+extra click and unreachable before `"ready"`, not that anything was
+missing from it. Proposed and implemented the smallest consolidation:
+one URL, one persistent component (`LiveRoom` renamed `EventRoom`)
+owning phase as a fourth unconditional piece of state alongside the
+three hooks already there, sitting above the orientation branch —
+exactly the pattern already proven for rotation. `useLiveRoomConnection`
+already handled a `null → real params` transition by design, so gating
+`canConnect` by `phase === "ready"` (instead of always-true-if-configured)
+was enough to make the room "go live in place" with no remount.
+
+**A real, deliberate gap this design surfaced, not silently absorbed**:
+making `RoomControls` reachable before `"ready"` (so requesting the mic
+works pre-show, per the user's explicit ask) also made *claiming* a seat
+reachable from the same screen before the scheduled start — which would
+let the live conversation begin early. Named this explicitly before
+implementing, then added a server-enforced phase check to `claimOpenSeat`
+itself (not just a hidden button) — requesting/withdrawing stay available
+from `lobby_open` onward, unchanged.
+
+**Implemented**: `EventRoom` (`components/room/event-room.tsx`, replacing
+`live-room.tsx`) computes `phase` via the same `useNow()`-driven pattern
+`EventCountdown` already used, using a server-computed `initialPhase` for
+correct first paint (so an already-live shared link lands live
+immediately, not on a placeholder). Renders a lightweight countdown-only
+view before `lobby_open`, then the full `PortraitRoom`/`LandscapeRoom`
+layout from `lobby_open` onward — unchanged in structure, just reachable
+earlier. `RoomHeader` gained an optional countdown string appended to the
+room status. `/events/[id]/page.tsx` now fetches everything (speakers,
+messages/reactions, a LiveKit token, pending-request status)
+unconditionally regardless of phase, replacing three separate phase-gated
+fetches. `/events/[id]/lobby` and `/events/[id]/room` became
+backward-compatible `redirect()` stubs. `LobbyRoom` and `EventEntryStatus`
+were deleted as dead code once nothing rendered them;`GuestNameEditor`
+moved into the unified layout (shown for guests in both the pre-lobby
+view and the main room).
+
+**Files changed**: `app/events/[id]/page.tsx` (rewritten),
+`app/events/[id]/lobby/page.tsx`/`room/page.tsx` (reduced to redirects),
+`app/events/[id]/room/actions.ts` (claimOpenSeat's phase gate),
+`components/room/event-room.tsx` (new, replaces `live-room.tsx`),
+`components/room/{portrait,landscape}-room.tsx`, `room-header.tsx`,
+`room-controls.tsx`, `types.ts` (phase/countdownText threading + guest
+name editor placement), deleted `components/lobby/lobby-room.tsx` and
+`components/events/event-entry-status.tsx`, plus tests for all of the
+above, PRODUCT.md/ARCHITECTURE.md/DECISIONS.md/ROADMAP.md/CHANGELOG.md/
+SESSION_LOG.md (this entry).
+
+**Tests run**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm test`
+— 149/149 passing (up from 145 at the end of Session 18, reflecting new
+coverage for the countdown rendering and the claim-seat phase gate),
+`npm run build` succeeds.
+
+**Known issues**: None new. `claimOpenSeat`'s phase-gate enforcement
+itself isn't covered by a dedicated unit test — Server Actions in this
+project aren't unit-tested directly (the `next/headers` `cookies()`
+dependency), consistent with existing precedent; covered instead by the
+`RoomControls` UI-level tests for the *display* logic, with the actual
+server enforcement to be confirmed by the user's real-device test.
+
+**Current build status**: Deployed to `main` → Vercel per the normal
+workflow; not yet confirmed on a real device as of this entry. #15/#16
+remain open in Testing/Review per the user's explicit instruction to
+keep them there while #17 stabilizes.
+
+**Recommended next task**: the user's real-device confirmation that one
+tap from the event list reaches the room, chat/request-mic are
+immediately available, and the waiting state becomes live in place with
+no extra navigation steps. Resume the #15/#16 validation loop after
+that, still not starting #18 until #15/#16 close.
+
+---
+
 ## 2026-08-16 — Session 18: Two more real-device #15 failures diagnosed and fixed, then guest speaker participation (issue #16)
 
 **Goal**: Continue from Session 17's camera/mic gesture fix through
