@@ -3,6 +3,87 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-16 — Issue #15's gesture fix never got exercised in production: LiveKit itself isn't reachable there (issue #15, real-device retest)
+
+**Problem**: The gesture-gating fix (below) shipped, passed full automated
+verification, and deployed — but a second real iPhone test against the
+same deployed build still showed no camera/mic activation at all.
+Re-closing the issue on the first fix's merge, before this retest, was
+premature; reopened per the user's explicit correction. Rather than
+assume the original gesture diagnosis was incomplete and layer on another
+speculative fix, this session traced the actual deployed path end to end.
+
+**Investigation, in order**:
+1. Downloaded every JS chunk the deployed room page's HTML actually
+   references and grepped all of them for a literal LiveKit `wss://`
+   hostname — `NEXT_PUBLIC_LIVEKIT_URL` is a build-time-inlined
+   `NEXT_PUBLIC_` var, so a genuinely-configured value must appear as a
+   literal string somewhere in the client bundle. Found none, anywhere.
+2. Added a temporary, safe diagnostics panel to the room UI
+   (`components/room/room-diagnostics.tsx` — booleans/enums only, never
+   token contents) surfacing identity type, seated-speaker recognition,
+   whether the server issued a token, whether the client LiveKit URL is
+   configured, live connection status, `canPublish`,
+   `needsMediaActivation`, and `mediaError`, plus a button that calls
+   `getUserMedia` directly, bypassing LiveKit entirely, to isolate raw
+   browser/OS permission failures from every other layer.
+3. Deployed the diagnostics-only change and read the *server-rendered*
+   values directly off the live production page (no phone needed for
+   this part) — confirmed, not inferred:
+   - `LiveKit client URL configured: false`
+   - `Server issued a token: false` (`mintLiveKitToken` is throwing —
+     `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` aren't usable at runtime
+     either, not just the client URL)
+   - `LiveKit connection status: unavailable` (the room never even
+     attempts to connect — `useLiveRoomConnection` is called with `null`
+     params from the very first render)
+4. Cross-checked against `vercel env ls`: all three vars
+   (`LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `NEXT_PUBLIC_LIVEKIT_URL`)
+   are listed as configured for Production — but, per the Session 16
+   finding, Vercel's "Sensitive" var type can't be read back by CLI, so
+   "the key exists" and "the value is correct and non-empty" are
+   different claims, and step 3's runtime evidence says the second one
+   is false for at least these three. My own local `.env.local` has the
+   same var present as a key with a confirmed 0-length value — the same
+   class of gap, not a coincidence.
+
+**Root cause**: LiveKit is not actually reachable from the deployed app
+at all — client URL and server API key/secret alike — which is why the
+room never gets far enough to even show issue #15's "Enable camera &
+mic" button. The gesture-gating fix is real, correct, and still needed
+once this is resolved; it simply was never exercised, because everything
+upstream of it was already broken. This is a deployment *configuration*
+gap (empty or invalid env var values on Vercel), not a defect in #15's
+code.
+
+**Decision**: Not a code fix. `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+and `NEXT_PUBLIC_LIVEKIT_URL` need their actual values re-verified/
+re-entered on Vercel (Production environment) — something only the
+project owner can do, consistent with this project's standing rule
+against ever having a secret value pasted into an agent session (see
+Session 16's Migration workflow note on the database password, same
+principle). The temporary diagnostics panel stays deployed specifically
+so this can be re-confirmed the moment the values are fixed, without
+needing another full phone round trip for the parts that don't actually
+require a phone.
+
+**Reason this is recorded as its own entry, not folded into the fix
+below**: this is a second, independent example of the exact risk
+Session 16's "Sensitive env var" finding already named — a credential
+that *looks* configured (present as a key, scoped correctly) but cannot
+actually be verified as *correct* without exercising the deployed app's
+real behavior. Worth a second entry because it's now happened twice, to
+two different LiveKit-related variable sets, which makes it a pattern
+this project's deployment checklist should watch for by default, not
+just a one-off.
+
+**Tradeoffs**: None of consequence — the diagnostics panel is
+temporary and explicitly marked for removal once the real root cause is
+confirmed fixed by a real-device test, not left as permanent surface
+area.
+
+---
+
 ## 2026-08-13 — Camera/mic never activated on real iPhone Safari: gesture-gated activation, not automatic (issue #15)
 
 **Problem**: Hands-on testing of the deployed app on a real iPhone
