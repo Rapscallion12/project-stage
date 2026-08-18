@@ -13,6 +13,14 @@ import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connect
  * already safe to show the room's own occupant (booleans/enums, never a
  * token, key, or secret). Remove once the real-device root cause is
  * confirmed fixed — see DECISIONS.md.
+ *
+ * Collapsed by default (issue #17 real-device follow-up): this panel was
+ * itself found to be a real contributor to a *different* discoverability
+ * failure — always-expanded, it added a meaningful chunk of permanent
+ * height below the actual room controls, pushing them further from the
+ * top of a real phone's viewport. Collapsed to a single-line toggle, it
+ * stays available on demand without competing with the product UI for
+ * space it doesn't need most of the time.
  */
 export function RoomDiagnostics({
   identityType,
@@ -35,6 +43,7 @@ export function RoomDiagnostics({
   mediaError: MediaError;
   participantCount: number;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
 
@@ -58,28 +67,39 @@ export function RoomDiagnostics({
   }
 
   return (
-    <div className="border-t border-dashed border-amber-500 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-      <p className="mb-2 font-semibold">Temporary diagnostics (issue #15) — screenshot or report these values</p>
-      <ul className="mb-3 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
-        <li>Identity type: {identityType}</li>
-        <li>Recognized as seated speaker: {String(isSpeaker)}</li>
-        <li>Server issued a token: {String(hasServerToken)}</li>
-        <li>LiveKit client URL configured: {String(liveKitUrlConfigured)}</li>
-        <li>LiveKit connection status: {connectionStatus}</li>
-        <li>Server grants canPublish: {String(canPublish)}</li>
-        <li>Needs media-activation tap: {String(needsMediaActivation)}</li>
-        <li>Participants connected: {participantCount}</li>
-        <li>Media error: {mediaError ? `${mediaError.source}/${mediaError.reason}` : "none"}</li>
-      </ul>
+    <div className="shrink-0 border-t border-dashed border-amber-500 bg-amber-50 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
       <button
         type="button"
-        onClick={() => void runRawMediaTest()}
-        disabled={testing}
-        className="rounded border border-amber-600 px-2 py-1 font-medium"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-1.5 font-semibold"
       >
-        {testing ? "Testing…" : "Test camera/mic permission directly"}
+        <span>Temporary diagnostics (issue #15)</span>
+        <span>{expanded ? "▲ Hide" : "▼ Show"}</span>
       </button>
-      {testResult && <p className="mt-2 font-medium">{testResult}</p>}
+      {expanded && (
+        <div className="px-4 pb-3">
+          <ul className="mb-3 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+            <li>Identity type: {identityType}</li>
+            <li>Recognized as seated speaker: {String(isSpeaker)}</li>
+            <li>Server issued a token: {String(hasServerToken)}</li>
+            <li>LiveKit client URL configured: {String(liveKitUrlConfigured)}</li>
+            <li>LiveKit connection status: {connectionStatus}</li>
+            <li>Server grants canPublish: {String(canPublish)}</li>
+            <li>Needs media-activation tap: {String(needsMediaActivation)}</li>
+            <li>Participants connected: {participantCount}</li>
+            <li>Media error: {mediaError ? `${mediaError.source}/${mediaError.reason}` : "none"}</li>
+          </ul>
+          <button
+            type="button"
+            onClick={() => void runRawMediaTest()}
+            disabled={testing}
+            className="rounded border border-amber-600 px-2 py-1 font-medium"
+          >
+            {testing ? "Testing…" : "Test camera/mic permission directly"}
+          </button>
+          {testResult && <p className="mt-2 font-medium">{testResult}</p>}
+        </div>
+      )}
     </div>
   );
 }

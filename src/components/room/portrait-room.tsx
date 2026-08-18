@@ -6,10 +6,19 @@ import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * Chat maximized, discussion secondary but always visible — a compact
- * speaker strip stays above the feed rather than being hidden behind a
- * tab, so the conversation is still comfortable to watch while chat gets
- * the primary real estate. Presentation only: every prop here is owned by
+ * Chat gets the remaining real estate below a fixed-height header block
+ * (speaker strip + controls), rather than controls trailing after a
+ * variable-height chat feed. Issue #17 real-device follow-up: with
+ * RoomControls previously positioned *after* RoomChatPanel, its "Request
+ * the mic" control depended on the chat feed's height to determine how
+ * far down the page it landed — on a real phone this meant it required
+ * scrolling past however much chat/diagnostics content came before it to
+ * even discover it existed, the same discoverability failure the tile
+ * placement fix already addressed once for camera/mic activation.
+ * Controls now sit directly below the speaker stage instead, so they're
+ * reachable without depending on chat content height at all; only the
+ * chat feed itself (already internally scrollable) absorbs the
+ * remaining space. Presentation only: every prop here is owned by
  * EventRoom, above the orientation branch.
  */
 export function PortraitRoom({
@@ -56,7 +65,6 @@ export function PortraitRoom({
           <GuestNameEditor initialName={identity.displayName} />
         </div>
       )}
-      <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
       <RoomControls
         eventId={event.id}
         isSpeaker={isSpeaker}
@@ -70,6 +78,7 @@ export function PortraitRoom({
         phase={phase}
         countdownText={countdownText}
       />
+      <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
     </div>
   );
 }

@@ -3,6 +3,83 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-18 — Two more real-device #17 findings: stale test fixtures, and the request-mic control buried below the fold
+
+**Problem**: The user's real-device retest of #17 found two blockers:
+(1) the test event handed off couldn't be found through the actual
+"Landing page → Browse events" journey at all, and (2) the direct room
+link worked, but no "Request the mic" control was visibly reachable —
+exactly the flow #16 exists to let a guest exercise.
+
+**Finding 1 — not a code bug, a stale-fixture bug of my own making.**
+Reproduced directly: `listUpcomingEvents` filters `scheduled_start >
+(now - 2h)` (`getEventsListCutoffIso`, intentional — hides events that
+"started" more than two hours ago, documented in its own comment). The
+test events handed off earlier had been created under a stale
+assumption about the current date — real wall-clock time had moved
+forward roughly two days since — so their `scheduled_start` had aged
+`~48h` past that cutoff and was correctly excluded from "Browse events."
+`getEventById` (used by the direct room link) has no such time filter,
+so the direct link kept working the whole time and masked the problem —
+which is exactly why the user's instruction not to substitute a direct
+link for the real journey mattered: the direct link's success was
+hiding a real gap in how discoverable the test event actually was.
+Confirmed by reproducing the exact query against the anon key locally
+(returned zero rows for the stale event, non-zero for a freshly created
+one) rather than assumed. **Fix**: none needed to the list/query logic
+itself — it's working as designed. Created fresh test data and
+reconfirmed it appears in the deployed "Browse events" page before
+handing anything off again.
+
+**Finding 2 — the request-mic control's logic was correct; its position
+wasn't.** Traced the full render-condition chain the user asked for —
+event phase (`ready`), `PROTOTYPE_CONFIG.guestParticipationEnabled`
+(`true`, default), identity type (`guest`), pending-request state
+(`false`, fresh guest), active-speaker state (`false`) — every condition
+correctly resolves to `RoomControls` rendering its default "Request the
+mic" branch, confirmed present in the actual deployed HTML. The gap
+wasn't the logic, it was position: `RoomControls` sat *after*
+`RoomChatPanel` (a variable-, potentially-tall-height flex-1 element) in
+`PortraitRoom`, with the temporary `RoomDiagnostics` panel stacked below
+*that* — meaning on a real phone, reaching the request-mic control
+depended on scrolling past however much chat content and diagnostic
+text came before it. This is the same shape of bug the tile-placement
+fix already found once for camera/mic activation: a control that's
+logically present and even present in the server-rendered HTML, but not
+reliably discoverable to a real user under real viewport constraints.
+
+**Decision**: Two changes, without trying to fully prove the exact
+viewport-unit mechanics on a device I can't access directly:
+1. Reordered `PortraitRoom` so `RoomControls` sits directly below the
+   speaker stage, *before* `RoomChatPanel` — its reachability no longer
+   depends on chat content height at all; only the chat feed itself
+   (already internally scrollable via its own `overflow-y-auto`)
+   absorbs remaining space. Landscape wasn't changed — its chat is a
+   fixed-width side panel, not vertically stacked, so this specific
+   failure mode doesn't apply there.
+2. `RoomDiagnostics` collapsed to a single-line toggle by default,
+   expandable on demand — it was itself a real, measurable contributor
+   to pushing real controls further down the page, on top of being
+   something the user had already flagged as "not a product feature."
+   Still fully available for the next round of debugging, just not
+   permanently consuming vertical space it doesn't need most of the
+   time.
+
+**Reason recorded together with finding 1**: both are the same root
+lesson in different clothes — verifying "the code is correct" (a passing
+query, a rendered button) is not the same claim as "a real user can
+actually reach this," and this project's own standing discipline (real
+devices, real linked databases, not mocks or assumptions) is what caught
+both. Worth a checklist reflex for future sessions: when handing off a
+test link, reproduce that it's reachable through the *actual* discovery
+path, not just that the direct link responds.
+
+**Tradeoffs**: None of consequence for either fix — the reorder is
+presentation-only (no state/logic moved), and the diagnostics collapse
+is reversible/still fully available on tap.
+
+---
+
 ## 2026-08-16 — One event URL: collapsing event/lobby/room into a single persistent experience (issue #17)
 
 **Problem**: Real-device testing repeatedly confirmed the three-route

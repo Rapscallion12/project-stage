@@ -4,6 +4,62 @@ Newest entry first.
 
 ---
 
+## 2026-08-18 — Session 20: Real-device #17 retest — stale test data, and the request-mic control buried below the fold
+
+**Goal**: The user's real-device retest of #17 hit two blockers and
+explicitly refused a direct-link substitute: the test event wasn't
+discoverable via the actual "Landing page → Browse events" journey, and
+the request-mic control wasn't reachable from the unified room.
+
+**Finding 1 (not a code bug)**: reproduced the events-list query
+directly against the anon key — it correctly excludes events whose
+`scheduled_start` is more than 2 hours old, by design. The handed-off
+test events had been created under a stale date assumption; real
+wall-clock time had moved roughly two days forward since. The direct
+room link (no time filter) kept working the whole session and masked
+this — exactly the risk the user's "don't substitute a direct link"
+instruction was guarding against. No code changed; created fresh test
+data and reconfirmed it in the deployed "Browse events" page.
+
+**Finding 2**: traced the full render-condition chain — phase, the
+guest-participation flag, identity type, pending-request state,
+active-speaker state — all correctly resolved to `RoomControls`
+rendering "Request the mic," confirmed present in the actual deployed
+HTML. The gap was position, not logic: `RoomControls` sat after the
+chat panel (variable height) with the temporary diagnostics panel
+stacked below that, so reaching it on a real phone meant scrolling past
+however much content came first — the same shape of bug the earlier
+tile-placement fix (#15) already found once. Fixed by moving
+`RoomControls` above `RoomChatPanel` in `PortraitRoom` (position no
+longer depends on chat height) and collapsing `RoomDiagnostics` to a
+single-line toggle by default (it was itself a real, measurable
+contributor to the problem, on top of already being flagged as "not a
+product feature").
+
+**Files changed**: `components/room/portrait-room.tsx` (control order),
+`components/room/room-diagnostics.tsx` (+test, collapsed by default),
+`components/site-header.tsx` (defensive `shrink-0`), DECISIONS.md,
+SESSION_LOG.md (this entry).
+
+**Tests run**: lint clean, tsc clean, 150/150 tests passing, build
+succeeds.
+
+**Known issues**: None new. #15/#16/#17 all stay open/Testing-Review —
+not marking anything Done until the user confirms the complete deployed
+journey (landing → browse → tap → unified room → chat/reactions/request
+mic → guest becomes speaker → media publishes → a second device sees
+it) themselves.
+
+**Current build status**: Deployed to `main` → Vercel; verified
+server-side that the fresh test event is discoverable via the deployed
+"Browse events" page before handing off the landing-page URL.
+
+**Recommended next task**: wait for the user's real-device confirmation
+of the full journey via the landing page, not a deep link. Not starting
+#18.
+
+---
+
 ## 2026-08-16 — Session 19: Unified event/lobby/room lifecycle (issue #17)
 
 **Goal**: With #15/#16 mid-validation, the user asked to pause that loop

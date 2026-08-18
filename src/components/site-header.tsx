@@ -10,7 +10,7 @@ export async function SiteHeader() {
   } = await supabase.auth.getUser();
 
   return (
-    <header className="flex items-center justify-between border-b border-border px-6 py-4">
+    <header className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
       <div className="flex items-center gap-6">
         <Link href="/" className="text-sm font-semibold tracking-wide">
           VIRTUAL STAGE

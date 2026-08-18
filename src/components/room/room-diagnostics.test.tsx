@@ -14,13 +14,24 @@ const defaultProps = {
   participantCount: 2,
 };
 
+function expand() {
+  fireEvent.click(screen.getByRole("button", { name: /Temporary diagnostics/ }));
+}
+
 describe("RoomDiagnostics", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("surfaces every state value needed to distinguish the failure layers", () => {
+  it("is collapsed by default, showing only the toggle — issue #17 real-device follow-up (this panel itself was pushing real controls out of view)", () => {
+    render(<RoomDiagnostics {...defaultProps} />);
+    expect(screen.getByRole("button", { name: /Temporary diagnostics/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Identity type:/)).not.toBeInTheDocument();
+  });
+
+  it("surfaces every state value needed to distinguish the failure layers, once expanded", () => {
     render(<RoomDiagnostics {...defaultProps} liveKitUrlConfigured={false} connectionStatus="unavailable" />);
+    expand();
     expect(screen.getByText(/Identity type: profile/)).toBeInTheDocument();
     expect(screen.getByText(/Recognized as seated speaker: true/)).toBeInTheDocument();
     expect(screen.getByText(/Server issued a token: true/)).toBeInTheDocument();
@@ -30,6 +41,7 @@ describe("RoomDiagnostics", () => {
 
   it("shows the specific media error source/reason, not a generic label", () => {
     render(<RoomDiagnostics {...defaultProps} mediaError={{ source: "camera", reason: "permission-denied" }} />);
+    expand();
     expect(screen.getByText(/Media error: camera\/permission-denied/)).toBeInTheDocument();
   });
 
@@ -39,6 +51,7 @@ describe("RoomDiagnostics", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
     render(<RoomDiagnostics {...defaultProps} />);
+    expand();
     fireEvent.click(screen.getByRole("button", { name: "Test camera/mic permission directly" }));
 
     await waitFor(() => expect(screen.getByText(/SUCCESS/)).toBeInTheDocument());
@@ -53,6 +66,7 @@ describe("RoomDiagnostics", () => {
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
     render(<RoomDiagnostics {...defaultProps} />);
+    expand();
     fireEvent.click(screen.getByRole("button", { name: "Test camera/mic permission directly" }));
 
     await waitFor(() => expect(screen.getByText(/FAILED — NotAllowedError/)).toBeInTheDocument());
