@@ -7,6 +7,22 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Checkpoints
+
+- **`prototype-mobile-single-device-stable`** (2026-08-18, commit
+  `1e72311`) — the first state of the project the user personally
+  confirmed as a stable, usable mobile prototype, verified end to end on
+  a real iPhone against the live deployment: landing page, Browse
+  Events, discovering a test event through that page, one-tap entry
+  into the unified room, chat, reactions, request-the-mic, the full
+  guest-speaker request→claim flow, and camera/microphone both
+  activating. A real two-device live-media test (another participant
+  actually receiving audio/video, and vice versa) is explicitly **not**
+  yet verified — see DECISIONS.md. Tagged as a known-good recovery
+  point, not a production release; see the GitHub Release marked
+  prerelease. Issues #15/#16/#17 remain open — this checkpoint doesn't
+  close them.
+
 ### Added
 
 - **One event URL** (issue #17) — `/events/[id]` is now the entire event

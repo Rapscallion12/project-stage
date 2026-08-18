@@ -58,6 +58,26 @@ server-side that the fresh test event is discoverable via the deployed
 of the full journey via the landing page, not a deep link. Not starting
 #18.
 
+**Addendum, same day**: the user's real-device confirmation arrived —
+the full landing-page → Browse Events → tap → unified room → chat/
+reactions/request-mic → guest-claims-seat → camera/mic-activates journey
+all worked on their iPhone, and they called this "the first state of
+the project I consider a stable, usable mobile prototype." Before any
+further feature work, they asked for this exact state preserved as a
+recovery point. Tagged `prototype-mobile-single-device-stable` on commit
+`1e72311e20efb195e5d63d6e7e8f6b6d7ca06d65` — confirmed via two
+independent checks (not assumed) that this is exactly what's live in
+production: `vercel inspect` on the current production deployment
+(`dpl_3ncVAw1JEPQHRamaaxMXVNw1gdZA`) and GitHub's own deployments API
+for that SHA, which recorded the identical Vercel deployment ID. Pushed
+the tag and created a GitHub Release from it, explicitly marked
+prerelease (a checkpoint, not a production version). No code changed.
+Full verified/not-yet-verified list recorded in DECISIONS.md and the
+release notes — the key unverified piece remaining is a genuine
+two-device live-media test (another participant actually receiving
+audio/video). Issues #15/#16/#17 stay open; this checkpoint doesn't
+close them, per the user's explicit instruction.
+
 ---
 
 ## 2026-08-16 — Session 19: Unified event/lobby/room lifecycle (issue #17)

@@ -3,6 +3,58 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-18 — First user-confirmed stable checkpoint tagged (`prototype-mobile-single-device-stable`)
+
+**Problem**: After several rounds of real-device fixes (issues #15/#16/#17),
+the user personally verified the deployed app end to end on their iPhone
+for the first time and confirmed it as "the first state of the project
+I consider a stable, usable mobile prototype." They asked for this exact
+state to be preserved as a known-good recovery point, separate from and
+prior to any further feature work, so a future regression has something
+concrete to compare against or restore to.
+
+**Decision**: An annotated Git tag, `prototype-mobile-single-device-stable`,
+on commit `1e72311e20efb195e5d63d6e7e8f6b6d7ca06d65` — confirmed (not
+assumed) to be exactly what's live in production via two independent
+checks: `vercel inspect` on the current production deployment
+(`dpl_3ncVAw1JEPQHRamaaxMXVNw1gdZA`) and GitHub's own deployments API
+for that commit SHA, which recorded the identical Vercel deployment ID.
+Pushed to `origin`, plus a GitHub Release created from the tag and
+explicitly marked as a **prerelease** — deliberately not a normal
+"Latest Release," since this is a prototype checkpoint, not a production
+version number. No code changed to create this checkpoint; the working
+tree and `main` were already clean and in sync with `origin/main` before
+tagging.
+
+**What was actually verified, exactly as the user reported it** (real
+iPhone, against the live deployment): landing page, Browse Events,
+discovering the test event through that page (not a direct link),
+one-tap entry into the unified room with no lobby/room navigation step,
+chat, reactions, the request-the-mic control, the full guest-speaker
+request→claim flow, and camera/microphone both activating successfully.
+The click count/navigation feel was explicitly confirmed acceptable.
+
+**What remains explicitly unverified — recorded so it isn't quietly
+assumed later**: a genuine two-device live-media test. Specifically:
+a second device receiving the first speaker's video; a second device
+receiving the first speaker's audio; the first speaker receiving a
+second speaker's video/audio; a simultaneous two-speaker conversation;
+and rotation/orientation surviving an active two-device call. Camera/mic
+*activating* on one device was confirmed — tracks actually reaching
+another participant was not, and is a materially different claim.
+
+**Reason issues #15/#16/#17 stay open despite this checkpoint**: the
+user was explicit that this milestone doesn't constitute their
+acceptance criteria for those issues — it's a recovery point for what's
+been built so far, not a closing confirmation. Each issue's actual
+closing bar (stated in their own threads/DECISIONS.md entries above)
+still requires the two-device verification listed above.
+
+**Tradeoffs**: None — this is a pure bookkeeping/safety action, no
+implementation changed.
+
+---
+
 ## 2026-08-18 — Two more real-device #17 findings: stale test fixtures, and the request-mic control buried below the fold
 
 **Problem**: The user's real-device retest of #17 found two blockers:
