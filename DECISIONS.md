@@ -3,6 +3,40 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-18 — Second checkpoint tagged (`prototype-live-av-stable`): two-device LiveKit verified
+
+**Problem**: `prototype-mobile-single-device-stable`'s one explicitly
+unverified item — real two-device LiveKit audio/video — was the last
+gap before the user considered the core live-conversation hypothesis
+actually testable. They personally verified it with two real devices
+connected to the same live event and asked for the same
+checkpoint/tag/release/documentation process to mark this state too,
+before shifting focus to participation-friction UX work.
+
+**Decision**: Same process as the first checkpoint. Annotated tag
+`prototype-live-av-stable` on commit `397d3ffa496ace5dd7eeb2fa21b1617049e4715e`
+(the tip of `main` at the time — the previous checkpoint's own
+documentation commit, no code changes since), confirmed via the same
+two independent checks as before: `vercel inspect` on the live
+production deployment (`dpl_7LsVvkZReBHXAhkSY64durDmCaze`) and GitHub's
+deployments API for that commit SHA, which recorded the identical
+Vercel deployment ID. Pushed to `origin`, plus a GitHub Release created
+from the tag, marked **prerelease** for the same reason as before — a
+prototype checkpoint, not a production version.
+
+**What was verified**: the core LiveKit conversation working between
+two real devices, audio and video both directions. Everything from the
+first checkpoint still holds underneath it.
+
+**Reason issues #15/#16/#17 stay open despite this checkpoint**: same
+as the first checkpoint — this marks a recovery point in what's been
+built, not a closing confirmation against each issue's own stated
+acceptance bar.
+
+**Tradeoffs**: None — pure bookkeeping, no implementation changed.
+
+---
+
 ## 2026-08-18 — First user-confirmed stable checkpoint tagged (`prototype-mobile-single-device-stable`)
 
 **Problem**: After several rounds of real-device fixes (issues #15/#16/#17),

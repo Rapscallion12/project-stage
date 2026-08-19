@@ -4,6 +4,33 @@ Newest entry first.
 
 ---
 
+## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work
+
+**Goal**: The user personally verified real two-device LiveKit audio/
+video, closing the one gap the first checkpoint left open. Asked for a
+second checkpoint using the same process, then to shift focus from
+infrastructure verification to reducing participation friction — a
+first-time tester found "getting on stage" confusing, and the user's
+own testing surfaced several unnecessary clicks/steps.
+
+**Checkpoint 2**: `prototype-live-av-stable` tagged on commit
+`397d3ffa496ace5dd7eeb2fa21b1617049e4715e` (tip of `main`, the previous
+checkpoint's own docs commit — no code changed since). Confirmed via
+the same two independent checks as the first checkpoint (`vercel
+inspect` + GitHub's deployments API for the SHA, matching Vercel
+deployment IDs exactly), pushed, and a GitHub Release created from it
+marked prerelease. Issues #15/#16/#17 stay open — this doesn't close
+them. See DECISIONS.md.
+
+**Participation-friction design work**: investigated the existing
+queue/request/chat/room architecture before proposing anything, per the
+user's explicit request not to implement until approved. Covered in
+full in this turn's response to the user, not duplicated here — see the
+conversation itself and the follow-up session entry once implementation
+actually starts for the settled design.
+
+---
+
 ## 2026-08-18 — Session 20: Real-device #17 retest — stale test data, and the request-mic control buried below the fold
 
 **Goal**: The user's real-device retest of #17 hit two blockers and

@@ -9,6 +9,14 @@ separate release cadence to track here.
 
 ### Checkpoints
 
+- **`prototype-live-av-stable`** (2026-08-18, commit `397d3ff`) — the
+  one item `prototype-mobile-single-device-stable` explicitly left
+  unverified: the user personally confirmed real two-device LiveKit
+  audio/video working between two real devices connected to the same
+  live event. Everything from the first checkpoint still holds
+  underneath it. Tagged as a known-good recovery point, not a
+  production release; see the GitHub Release marked prerelease. Issues
+  #15/#16/#17 remain open — this checkpoint doesn't close them.
 - **`prototype-mobile-single-device-stable`** (2026-08-18, commit
   `1e72311`) — the first state of the project the user personally
   confirmed as a stable, usable mobile prototype, verified end to end on
