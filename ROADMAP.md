@@ -230,6 +230,57 @@ PRODUCT.md's testing-phase guest-participation exception.
       their own video added. Preserves the `featuredSlot`/reply-thread
       seams without implementing them.
 
+### Video-first participation redesign (issues #19–#25)
+
+Design work following the two-device AV checkpoint (`prototype-live-av-stable`,
+Session 21) — reduces participation friction (direct-join, composer-integrated
+mic requests, automatic promotion) and replaces the room's stacked-block
+layout with a video-first, overlay/scrim-based one, ahead of #18's visual
+polish. Sequenced by dependency, not left as one large "build the live room
+UX" issue — see DECISIONS.md for the full design reasoning (scrim vs. video
+opacity, dead-zone gesture mechanism, voting-evaluation scaling, the
+room-format seam). #18 is now the final step in this sequence, not a
+separate one.
+
+- [ ] Room format seam (issue #19) — additive `events.format` column,
+      defaulted/constrained to `'main_stage'` today, so Main Stage's
+      two-seat/voting/ranking assumptions don't become inseparable from
+      "what a room is" once Roulette/Spotlight/Group Stage exist. Those
+      three formats are documented, not built.
+- [ ] Video-first room shell (issue #20) — video-dominant base layer that
+      stays geometrically stable across focus changes, a scrim/overlay
+      compositing primitive (opacity/transform only, never resizing the
+      video element itself), a fixed self-preview slot, a structural
+      (inert) speaker divider, and removal of issue #15's diagnostics
+      panel from normal UI (kept dev-only).
+- [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
+      drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
+      and voting-focus, tap always available independent of the gesture,
+      and `ChatPanel` made a single continuously-mounted component so
+      draft text/scroll position/mic-request-mode survive focus changes.
+- [ ] Composer mic-request + candidate readiness/self-preview (issue
+      #22) — mic-mode toggle built into the chat composer (no separate
+      "Request the mic" control), local media acquired once via
+      `createLocalTracks()` at request time, a persistent spatially-stable
+      self-preview that morphs (not remounts) from candidate to active
+      speaker, and promotion via `publishTrack()` on the already-held
+      tracks — no second `getUserMedia()` call.
+- [ ] Direct empty-seat join + automatic ranked promotion (issue #23) —
+      an empty seat with no real queue can be joined directly; a queued
+      seat auto-promotes the highest-ranked eligible *ready* candidate
+      server-side, no manual `claimOpenSeat` race, unready candidates
+      yield via a bounded grace period.
+- [ ] Fresh next-speaker ranking rounds (issue #24) — ranking freshness
+      bounded by the current pairing's `joined_at`, so stale reaction
+      support from a previous pairing can't dominate a new one.
+- [ ] Audience retention voting (issue #25) — decision-window model (not
+      continuous polling): independent A/Both/B/New-speakers support
+      tallies, recurring windows computed from `pairing_start_time` via
+      modular arithmetic (no stored timer state), evaluation triggered by
+      the two active speakers' clients plus opportunistic vote-casting
+      (not audience-wide polling), reveal-after-vote percentages on the
+      divider. Gated behind `format === 'main_stage'` (#19).
+
 ## Phase 3 — Audience power features
 
 - [x] Speaker request queue + request-to-speak flow (issue #14)

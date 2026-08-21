@@ -4,6 +4,54 @@ Newest entry first.
 
 ---
 
+## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created
+
+**Goal**: Continuation of Session 21's participation-friction design work,
+now reconciled with a mobile UX direction the user specified: video stays
+the stable visual foundation, chat/voting are revealed as layers over it
+rather than causing the video to shrink/rearrange. Explicitly no
+implementation this session — resolve the remaining open technical
+questions, create the approved issues, update docs, then stop.
+
+**Checkpoint reconfirmed**: `prototype-live-av-stable` (tag + prerelease)
+verified still intact and unchanged — tag commit `397d3ff`, working tree
+clean, no code shipped since. No new checkpoint needed.
+
+**Architecture finalized** (full reasoning in DECISIONS.md, not duplicated
+here): scrim/overlay layers over a geometrically stable video base (never
+resizing the video element itself); a dead-zone-gated drag-handle gesture
+for chat/voting focus, explicitly not scroll-snap or scroll-position
+interpolation (both would reintroduce the nested-scroll bug already
+diagnosed); `ChatPanel` as one continuously-mounted component so draft
+text/scroll/mic-request-mode survive focus changes; self-preview spatial
+stability falls out of the scrim architecture for free; voting-window
+evaluation triggered by the two active speakers' clients plus opportunistic
+vote-casting (not audience-wide polling — Vercel Cron and Supabase
+`pg_cron` were both considered and rejected); recurring voting windows via
+modular arithmetic on `pairing_start_time`, no stored timer state;
+immediate (not held) eviction on a no-replacement vote outcome; a minimal
+`events.format` column as the room-format seam, no rules-engine.
+
+**Issues created and added to the project board** (Backlog column,
+dependency order): #19 room format seam, #20 video-first room shell, #21
+chat/voting focus interactions, #22 composer mic-request + candidate
+readiness/self-preview, #23 direct-join + automatic promotion, #24 fresh
+next-speaker ranking, #25 audience retention voting. #20 was split from a
+single larger "layout" issue specifically so the stable video shell can be
+verified on a real phone before the gesture layer (#21) is added on top.
+ROADMAP.md's Phase 2 gained a new "Video-first participation redesign"
+subsection listing all seven, sequenced ahead of issue #18 (now the final
+step). Explicitly deferred, not created: candidate snapshot/profile-preview
+icons, Roulette, Spotlight, Group Stage, avatars/VTubers, image/GIF chat
+uploads, cosmetic animation/polish beyond functional interaction,
+monetization.
+
+**Next task**: Implementation starts with issue #19 (room format seam) —
+smallest, no true dependency on anything else, establishes the boundary
+the rest of the sequence checks against.
+
+---
+
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work
 
 **Goal**: The user personally verified real two-device LiveKit audio/

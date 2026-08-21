@@ -3,6 +3,122 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-20 — Video-first room redesign finalized, issues #19–#25 created
+
+**Problem**: Session 21's participation-friction design work (queue/mic-request/
+direct-join/voting) needed to be reconciled with a mobile UX direction the
+user specified: the live video should stay the stable visual foundation of
+the room, not something that shrinks/rearranges as focus shifts to chat or
+voting. Several open technical questions had to be resolved before issues
+could be created: how to layer chat/voting over video without touching the
+video element itself, how to prevent accidental swipes from morphing the
+room, how the self-preview stays spatially stable through candidate→speaker
+promotion, and — the one with real scaling risk — how a voting window's
+close gets *evaluated* server-side without every audience member polling.
+
+**Decisions**:
+
+- **Scrim/overlay layers, not video resizing.** The video base layer's own
+  size/position never changes across focus states. A translucent scrim
+  `div` animates `opacity` above it; panel content animates in via
+  `transform`, never `top`/`left`/`width`/`height`. Verified against mobile
+  Safari's compositing behavior before committing: video elements typically
+  get their own compositor layer, and repeatedly mutating their box is the
+  more expensive, glitch-prone path versus leaving the video alone and
+  animating a separate layer. Only `opacity`/`transform` are used for any
+  focus-state animation — both GPU-compositable, neither triggers reflow.
+- **Controlled layout state with a dead zone, not scroll-snap or
+  scroll-position interpolation.** Both scroll-based options were
+  considered and rejected: scroll-snap can't deliver a continuous
+  transition, and scroll-position interpolation would require nesting a
+  native scrollable "focus" container against chat's own scrollable
+  message list — the same nested/ambiguous-scroll-container pattern
+  already diagnosed as the root cause of the "video disappears while
+  scrolling chat" bug (`layout.tsx`'s `overflow-y-auto` on `<body>`
+  competing with `ChatPanel`'s internal scroll). A dedicated drag-handle
+  gesture (bottom-sheet pattern, `touch-action: none` during drag) with an
+  explicit dead zone — no visual change below a small delta threshold,
+  live-follows-finger above it, commit/cancel decided on release — avoids
+  reintroducing that class of bug entirely, since nothing in the mechanism
+  touches native scroll. Tap remains the unconditional, guaranteed path to
+  voting regardless of the gesture layer.
+- **`ChatPanel` becomes one continuously-mounted component** across
+  default/chat-focus, clipped to a short height in one state and expanded
+  in the other — not two separate components. This is the same
+  "state-owning component stays mounted, presentation branches below it"
+  discipline already established for orientation (`useOrientation`) and
+  the event/lobby/room lifecycle (issue #17), applied a third time. Draft
+  text, mic-request mode, scroll position, and the Realtime subscription
+  survive focus changes automatically as a result, with no state-lifting
+  or sync code needed.
+- **Self-preview spatial stability falls out of the scrim architecture for
+  free.** Because focus-state changes only affect the overlay layers above
+  the video (per the first decision above), a self-preview living in a
+  fixed slot in the stable base layer is naturally unaffected by chat/
+  voting focus changes — no separate mechanism needed to "protect" it.
+  Candidate→speaker promotion keeps the same DOM `<video>`/attached track
+  the entire time (`createLocalTracks()` once at mic-request time,
+  `publishTrack()` on the same track object at promotion — no second
+  `getUserMedia()` call, confirmed via `livekit-client`'s own type
+  definitions).
+- **Voting-window evaluation triggers scale with active pairings, not
+  audience size.** Audience clients never poll for evaluation — they
+  receive results via the room's existing Realtime subscription (the same
+  mechanism `event_speakers` changes already use) and their own vote-cast
+  response for the reveal-then-collapse percentage display. Only the two
+  currently active speakers' clients (2 per room, not 2 per viewer) poll
+  as a heartbeat, plus any vote being cast opportunistically re-checks as
+  a side effect. Considered and rejected: **Vercel Cron** (this project's
+  actual deployment tier, Hobby, only supports daily-granularity cron —
+  not workable for a sub-minute voting window without a paid upgrade) and
+  **Supabase `pg_cron`** (a new backend extension adopted solely for this,
+  when the existing serverless-triggered-by-real-activity pattern issue
+  #13's LiveKit webhook already established covers it with no new
+  infrastructure). Every evaluation independently recomputes the window/
+  tally and re-verifies the pairing hasn't already changed before acting —
+  the same idempotent, safe-no-op pattern #13's disconnect cleanup and
+  #23's promotion already rely on.
+- **Recurring voting windows via modular arithmetic on `pairing_start_time`
+  (`(now - start) mod (CONVERSATION_PERIOD + WINDOW_DURATION) >=
+  CONVERSATION_PERIOD`)** — a pure function every client and the server
+  compute identically, with no stored "which window number" state and no
+  server timer opening/closing anything.
+- **No-replacement eviction is immediate, not held.** A vote evicting one
+  or both speakers with nobody queued produces `room-status.ts`'s already-
+  modeled `"selecting"`/`"waiting"` states, picked up by direct-join or
+  automatic promotion (#23) the instant anyone's eligible. Chosen
+  explicitly over holding a rejected speaker until a replacement exists,
+  because the audience's vote should visibly do something the moment it
+  resolves — these are presented states already built for other reasons,
+  not an accidental fallthrough left for the schema to imply.
+- **Room format seam**: one additive `events.format` column
+  (`default 'main_stage'`, CHECK-constrained), same pattern as
+  `left_reason`. No plugin/rules-engine framework. Roulette/Spotlight/
+  Group Stage documented as future values, not built.
+
+**Reason issue #20 (the shell) is still sequenced after #19 (the format
+seam)** despite no true technical dependency between them: kept as
+intentional sequencing, landing the small boundary-setting issue first,
+per the user's own instruction to distinguish sequencing from genuine
+dependency rather than justify ordering after the fact.
+
+**Issues created**: #19 (room format seam), #20 (video-first room shell),
+#21 (chat/voting focus interactions), #22 (composer mic-request/candidate
+readiness/self-preview), #23 (direct-join/automatic promotion), #24 (fresh
+next-speaker ranking), #25 (audience retention voting) — all added to the
+project board. Full technical reasoning (including the rejected
+alternatives for each decision above) is in the design conversation itself,
+not duplicated here.
+
+**Tradeoffs**: The video-first/scrim architecture (#20/#21) is a larger,
+riskier rewrite of the room's layout than the original "sticky layout" fix
+this was scoped as in Session 21 — split into a shell issue (#20) and an
+interactions issue (#21) specifically so the stable frame can be verified
+on a real phone before the gesture layer is added on top, rather than
+shipping both as one large, harder-to-isolate change.
+
+---
+
 ## 2026-08-18 — Second checkpoint tagged (`prototype-live-av-stable`): two-device LiveKit verified
 
 **Problem**: `prototype-mobile-single-device-stable`'s one explicitly
