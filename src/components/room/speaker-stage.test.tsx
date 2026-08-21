@@ -58,6 +58,13 @@ describe("SpeakerStage", () => {
     expect(slot).toBeEmptyDOMElement();
   });
 
+  it("anchors the self-preview slot to the top-right, not bottom-right (issue #20's corrective pass — the bottom is the chat/controls overlay's territory now)", () => {
+    render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+    const slot = screen.getByTestId("self-preview-slot");
+    expect(slot.className).toMatch(/\btop-3\b/);
+    expect(slot.className).not.toMatch(/\bbottom-3\b/);
+  });
+
   it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath (issue #21 animates it)", () => {
     render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
     const scrim = screen.getByTestId("room-scrim");

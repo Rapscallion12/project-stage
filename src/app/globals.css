@@ -33,3 +33,26 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * Issue #20's corrective pass: the room's chat/controls overlay sits over
+ * live video, unconditionally dark, regardless of the visitor's own
+ * light/dark system preference — the same convention any video player's
+ * chrome uses. Re-scoping the theme tokens here (rather than editing
+ * ChatPanel/RoomControls/Input/Button themselves) means every component
+ * already using `text-muted`/`border-border`/`text-accent`/etc. picks up
+ * overlay-appropriate values automatically, with zero component changes:
+ * Tailwind's `@theme inline` above compiles those utilities to reference
+ * `var(--foreground)`/`var(--muted)`/etc. directly, so redefining them on
+ * this wrapper cascades to every descendant using them, the same way
+ * `prefers-color-scheme: dark` already redefines them at `:root`.
+ */
+.stage-overlay {
+  --background: transparent;
+  --foreground: #ffffff;
+  --accent: #fb923c;
+  --muted: #d4d4d8;
+  --border: rgb(255 255 255 / 30%);
+  color: var(--foreground);
+  color-scheme: dark;
+}

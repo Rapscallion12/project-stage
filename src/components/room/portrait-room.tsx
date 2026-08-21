@@ -6,14 +6,33 @@ import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * Video-first (issue #20): the stage takes essentially all remaining
- * space below the header (`flex-1`), replacing the old small
- * fixed-height speaker block. Controls and a *compact* chat strip live
- * below it in a fixed-height footer, not the page-filling chat panel
- * this used to be — expanding that strip into a full chat-focus view is
- * issue #21, not this one. The same `ChatPanel` instance is used here
- * (via `RoomChatPanel`) in both states so #21 can make it expandable
- * without ever swapping which component is mounted — see DECISIONS.md.
+ * Video-first (issue #20, corrective pass): the stage takes 100% of the
+ * space below the header — controls and the compact chat strip no longer
+ * consume a separate flex sibling below it, they're an absolutely
+ * positioned overlay *over* the stage instead, anchored to the bottom.
+ * The first pass got this wrong (a smaller-but-still-separate block below
+ * the video, not a layer over it) and failed its own real-device
+ * gut-check; this is the fix, not a new issue — see DECISIONS.md.
+ *
+ * `.stage-overlay` (globals.css) re-scopes the theme's color tokens to
+ * fixed, dark-appropriate values for this subtree only — the overlay sits
+ * over live video unconditionally, regardless of the visitor's own
+ * light/dark preference, so `ChatPanel`/`RoomControls`/`Input`/`Button`
+ * need to render legibly against that video, not against whatever the
+ * app's normal page background happens to be. None of those components
+ * change; they already use theme tokens (`text-muted`, `border-border`,
+ * `text-accent`), which pick up the re-scoped values automatically.
+ *
+ * The bottom gradient is a *separate* concern from the stage's own
+ * `room-scrim` (still `opacity-0`, still issue #21's job to animate for
+ * focus-state darkening) — this one is always-on, for baseline legibility
+ * of the always-visible compact chat, not something a later issue
+ * animates.
+ *
+ * Still zero gesture/drag/expand logic — the same `ChatPanel` instance
+ * used here (via `RoomChatPanel`) is what issue #21 will later make
+ * expandable via a drag handle, without ever swapping which component is
+ * mounted. This pass only changes *where* it renders, not *what* it does.
  */
 export function PortraitRoom({
   event,
@@ -44,7 +63,7 @@ export function PortraitRoom({
         participantCount={participantCount}
         connectionStatus={connectionStatus}
       />
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
         <SpeakerStage
           speakers={speakers}
           getParticipant={getParticipant}
@@ -54,28 +73,27 @@ export function PortraitRoom({
           mediaError={mediaError}
           orientation="portrait"
         />
-      </div>
-      <div className="flex shrink-0 flex-col border-t border-border">
-        {identity.type === "guest" && (
-          <div className="shrink-0 px-3 pb-2">
-            <GuestNameEditor initialName={identity.displayName} />
+        <div
+          data-testid="stage-bottom-overlay"
+          className="stage-overlay absolute inset-x-0 bottom-0 flex flex-col gap-1 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pt-14 pb-3"
+        >
+          {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
+          <RoomControls
+            eventId={event.id}
+            isSpeaker={isSpeaker}
+            identity={identity}
+            hasPendingRequest={hasPendingRequest}
+            canPublish={canPublish}
+            needsMediaActivation={needsMediaActivation}
+            activateMedia={activateMedia}
+            mediaError={mediaError}
+            connectionStatus={connectionStatus}
+            phase={phase}
+            countdownText={countdownText}
+          />
+          <div className="h-40 min-h-0">
+            <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="h-full" />
           </div>
-        )}
-        <RoomControls
-          eventId={event.id}
-          isSpeaker={isSpeaker}
-          identity={identity}
-          hasPendingRequest={hasPendingRequest}
-          canPublish={canPublish}
-          needsMediaActivation={needsMediaActivation}
-          activateMedia={activateMedia}
-          mediaError={mediaError}
-          connectionStatus={connectionStatus}
-          phase={phase}
-          countdownText={countdownText}
-        />
-        <div className="h-40 min-h-0">
-          <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="h-full" />
         </div>
       </div>
     </div>

@@ -24,7 +24,8 @@ import type { Orientation } from "@/hooks/use-orientation";
  *   *outside* the flex row/col below (a sibling, absolutely positioned
  *   against this component's own `relative` root) so it stays visually
  *   anchored to the stage as a whole, never inside either individual
- *   tile.
+ *   tile. Top-right, not bottom-right (issue #20's real-device corrective
+ *   pass) — the bottom is now the chat/controls overlay's territory.
  * - The **scrim**, spanning the whole stage — #21 will animate its
  *   opacity as chat/voting focus panels open above it. `opacity-0` and
  *   `pointer-events-none` today: present in the DOM (so #21 doesn't need
@@ -100,7 +101,7 @@ export function SpeakerStage({
       <div
         data-testid="self-preview-slot"
         aria-hidden="true"
-        className="pointer-events-none absolute right-3 bottom-3 h-24 w-16 rounded-md border border-dashed border-white/30 bg-white/5 sm:h-28 sm:w-20"
+        className="pointer-events-none absolute top-3 right-3 h-24 w-16 rounded-md border border-dashed border-white/30 bg-white/5 sm:h-28 sm:w-20"
       />
 
       {/* Scrim (issue #21 animates this) */}
