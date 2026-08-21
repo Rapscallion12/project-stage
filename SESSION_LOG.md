@@ -173,10 +173,47 @@ owns it, and proposed a revision the user approved in full:
   updated to match; #24/#25 deliberately left untouched per explicit
   instruction not to start voting work.
 
-**Next task**: implement #20's corrective pass, verify, merge, deploy —
-then stop again for another real-device test against an explicit
-visual/experiential acceptance bar (not just automated checks). Do not
-continue into #22 automatically.
+**Plan approved and executed, same session**: issue bodies updated (#20
+amended with the corrective-pass scope, #21 tightened to stop it from
+absorbing default-state compositing, #23 narrowed to contested seats
+only), **#27** ("Direct join on an uncontested empty seat") created and
+split from #23, board statuses/positions updated to match the new order
+(#20 stays Testing/Review; #22 → Ready; #27, #23, #21 → Backlog,
+positioned in that order). #24/#25 deliberately left untouched.
+
+**#20's corrective pass implemented**: portrait's controls + compact chat
+strip are now an absolutely-positioned overlay anchored to the bottom of
+the stage, over the video, instead of a shrink-0 flex sibling — the stage
+gets 100% of the space below the header now, not ~65–70%. New
+`.stage-overlay` class (`globals.css`) re-scopes theme color tokens
+(`--foreground`/`--muted`/`--border`/`--accent`) to fixed dark values for
+that subtree, so chat/controls stay legible against live video regardless
+of the visitor's system theme — zero changes to `ChatPanel`/
+`RoomControls`/`Input`/`Button` themselves, since they already reference
+theme tokens Tailwind compiles to read the raw custom properties
+directly. Self-preview slot moved to top-right. Landscape untouched
+(not what the real-device test flagged). Zero gesture/drag logic added —
+confirms the fix genuinely belonged to #20, not #21.
+
+**Test fixture had disappeared entirely, same session — recreated**:
+verifying the corrective pass against a local production build hit an
+HTTP 404 for the event created for the previous real-device test — the
+row was gone from the database outright (not just aged out of the list's
+2-hour window; a direct `getEventById` query returned zero rows). Cause
+not conclusively identified (most likely the user or another session ran
+`dev-harness reset`), but the fix is the same either way: recreate the
+fixture immediately before handing off, verify it exists right before
+asking for a test, don't assume a fixture created earlier in the session
+still exists later in it. New event created (id `b4f8403b-b39b-4dad-ac92-
+b841ccbbab44`, same seeded structure — one seat occupied by
+`alice@dev-harness.invalid`, one open), verified via a local production
+build (HTTP 200, all shell markers present, self-preview-slot at
+`top-3`), and will be re-verified against the actual deployed production
+site before the user is asked to test again.
+
+**Next task**: same acceptance bar as before, now against the corrective
+pass. Stop for real-device confirmation — do not continue into #22
+automatically.
 
 ---
 

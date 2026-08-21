@@ -33,6 +33,28 @@ separate release cadence to track here.
 
 ### Added
 
+- **Video-first room shell, corrective pass** (issue #20) — the first
+  pass (below) shipped a compact-but-still-separate footer below the
+  video; real-device testing found that didn't meet the issue's own bar
+  ("chat/voting reached by revealing layers over it"). Portrait's
+  controls + compact chat strip are now an absolutely-positioned overlay
+  anchored to the bottom of the stage, over the video, instead of a
+  shrink-0 flex sibling — the stage now gets 100% of the space below the
+  header, not ~65–70%. An always-on bottom gradient
+  (`bg-gradient-to-t from-black/90 via-black/60 to-transparent`) gives
+  the overlaid text legibility — a different, always-on layer from the
+  existing `room-scrim`, which stays exactly as built (`opacity-0`,
+  inert), still #21's job. New `.stage-overlay` class (`globals.css`)
+  re-scopes the theme's color tokens to fixed, dark-appropriate values
+  for this subtree only, so `ChatPanel`/`RoomControls`/`Input`/`Button`
+  render legibly against video regardless of the visitor's own
+  light/dark preference — none of those components changed, they already
+  use theme tokens that pick up the re-scoped values via CSS cascade.
+  Self-preview slot moved to the top-right (bottom-right now sits under
+  the new overlay). Landscape untouched — not what real-device testing
+  flagged. Zero gesture/drag logic added, confirming this was #20's gap,
+  not #21's. Still in Testing/Review pending another real-device
+  confirmation. See DECISIONS.md and SESSION_LOG.md.
 - **Video-first room shell** (issue #20) — replaces the room's stacked
   header/speaker-grid/controls/chat blocks with a video-dominant layout:
   `SpeakerStage` now fills essentially all remaining space below the

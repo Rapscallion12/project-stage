@@ -272,12 +272,13 @@ different dependencies. Current order:
       panel from normal UI (kept dev-only). First pass merged/deployed but
       **not checked off** — real-device testing found the default state
       still read as a webpage with video embedded, not a layered
-      livestream. Corrective pass in progress: controls/chat become a
-      true bottom overlay over the video with an always-on legibility
-      gradient (distinct from the still-inert `room-scrim`, still #21's
-      job), self-preview slot moved to the top-right. Stays in
-      Testing/Review until confirmed again on a real iPhone against the
-      original gut-check bar. See SESSION_LOG.md and DECISIONS.md.
+      livestream. Corrective pass merged/deployed too: controls/chat are
+      now a true bottom overlay over the video (portrait) with an
+      always-on legibility gradient (distinct from the still-inert
+      `room-scrim`, still #21's job), self-preview slot moved to the
+      top-right. **Still not checked off** — stays in Testing/Review
+      until confirmed on a real iPhone against the original gut-check
+      bar. See SESSION_LOG.md and DECISIONS.md.
 - [ ] Composer mic-request + candidate readiness/self-preview (issue
       #22) — mic-mode toggle built into the chat composer (no separate
       "Request the mic" control), local media acquired once via
