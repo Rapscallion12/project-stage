@@ -139,6 +139,45 @@ touches the live room going forward, not just when reminded.
 shell, now against a working test path. Issue #21 does not start until
 that happens.
 
+**#20's real-device test came back negative, same session — replanned,
+not yet re-implemented**: the user tested the working fixture above and
+found #20 didn't meet its own stated bar. Three findings: (1) the default
+room still reads as "video, then controls, then chat" stacked sections,
+not a video-dominant livestream with layers over it — a genuine #20 gap,
+not #21's to fix; (2) the empty-seat request flow (Request → type a
+reason → submit → Claim) is high-friction for a seat nobody's contesting,
+confirming the user's product intent for direct-join is worth pulling
+forward; (3) the separate "why should you get the mic?" composer is
+exactly the duplication #22 already exists to remove.
+
+Re-read #20–#23 fresh, mapped each finding to the issue that actually
+owns it, and proposed a revision the user approved in full:
+
+- **#20 gets a corrective pass under the same issue** (not a new one) —
+  controls/chat become a genuine bottom overlay over the video with an
+  always-on legibility gradient, distinct from the still-inert
+  `room-scrim` (still #21's job); self-preview slot moves to the
+  top-right so the new overlay doesn't sit under it. Zero gesture/drag
+  logic in this pass — confirms the fix belongs to #20, not #21, since it
+  needed none of #21's actual mechanics to be correct.
+- **#21's body tightened** to explicitly not own default-state
+  compositing, so this exact ambiguity can't recur when #21 starts.
+- **#23 split**: **#27** ("Direct join on an uncontested empty seat") is
+  the readiness-independent half, pulled forward; #23 narrowed to
+  automatic promotion for genuinely contested seats only, keeping its
+  (now non-soft) dependency on #22.
+- **Board/issue reorder**: #20 (corrective pass, stays Testing/Review) →
+  #22 (Ready) → #27 → #23 → #21 (moved later — no dependency on
+  #22/#23/#27, just lower priority than the friction those remove) → #24
+  → #25 → #18, unchanged. Project board statuses and item positions
+  updated to match; #24/#25 deliberately left untouched per explicit
+  instruction not to start voting work.
+
+**Next task**: implement #20's corrective pass, verify, merge, deploy —
+then stop again for another real-device test against an explicit
+visual/experiential acceptance bar (not just automated checks). Do not
+continue into #22 automatically.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

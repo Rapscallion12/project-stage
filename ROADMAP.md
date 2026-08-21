@@ -230,7 +230,7 @@ PRODUCT.md's testing-phase guest-participation exception.
       their own video added. Preserves the `featuredSlot`/reply-thread
       seams without implementing them.
 
-### Video-first participation redesign (issues #19–#25)
+### Video-first participation redesign (issues #19–#27)
 
 Design work following the two-device AV checkpoint (`prototype-live-av-stable`,
 Session 21) — reduces participation friction (direct-join, composer-integrated
@@ -242,6 +242,23 @@ opacity, dead-zone gesture mechanism, voting-evaluation scaling, the
 room-format seam). #18 is now the final step in this sequence, not a
 separate one.
 
+**Reordered after #20's first real-device test (2026-08-21)** — automated
+checks passing had let #20 quietly under-deliver on its own stated bar
+("chat/voting reached by revealing layers over it") without anyone
+noticing until a real phone made it obvious. #20 got a corrective pass
+under the same issue number rather than a new one; #23 got split once
+real-device use showed its two halves have different urgency and
+different dependencies. Current order:
+
+1. **#20 corrective pass** (below)
+2. **#22** — composer-integrated mic request + readiness/self-preview
+3. **#27** — direct join on an uncontested empty seat (new, split from #23)
+4. **#23** — automatic ranked promotion, narrowed to contested seats only
+5. **#21** — chat/voting focus interactions, moved later: no dependency
+   relationship with #22/#23/#27 in either direction, just lower priority
+   than the friction those issues remove
+6. #24, #25, #18 — unchanged
+
 - [x] Room format seam (issue #19) — additive `events.format` column,
       defaulted/constrained to `'main_stage'` today, so Main Stage's
       two-seat/voting/ranking assumptions don't become inseparable from
@@ -252,16 +269,15 @@ separate one.
       compositing primitive (opacity/transform only, never resizing the
       video element itself), a fixed self-preview slot, a structural
       (inert) speaker divider, and removal of issue #15's diagnostics
-      panel from normal UI (kept dev-only). Merged and deployed; **not
-      checked off** until the user confirms the deployed experience on a
-      real iPhone — automated/server-side verification alone isn't the
-      bar for a change that specifically touches the mobile room
-      experience. See SESSION_LOG.md.
-- [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
-      drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
-      and voting-focus, tap always available independent of the gesture,
-      and `ChatPanel` made a single continuously-mounted component so
-      draft text/scroll position/mic-request-mode survive focus changes.
+      panel from normal UI (kept dev-only). First pass merged/deployed but
+      **not checked off** — real-device testing found the default state
+      still read as a webpage with video embedded, not a layered
+      livestream. Corrective pass in progress: controls/chat become a
+      true bottom overlay over the video with an always-on legibility
+      gradient (distinct from the still-inert `room-scrim`, still #21's
+      job), self-preview slot moved to the top-right. Stays in
+      Testing/Review until confirmed again on a real iPhone against the
+      original gut-check bar. See SESSION_LOG.md and DECISIONS.md.
 - [ ] Composer mic-request + candidate readiness/self-preview (issue
       #22) — mic-mode toggle built into the chat composer (no separate
       "Request the mic" control), local media acquired once via
@@ -269,11 +285,23 @@ separate one.
       self-preview that morphs (not remounts) from candidate to active
       speaker, and promotion via `publishTrack()` on the already-held
       tracks — no second `getUserMedia()` call.
-- [ ] Direct empty-seat join + automatic ranked promotion (issue #23) —
-      an empty seat with no real queue can be joined directly; a queued
-      seat auto-promotes the highest-ranked eligible *ready* candidate
-      server-side, no manual `claimOpenSeat` race, unready candidates
-      yield via a bounded grace period.
+- [ ] Direct join on an uncontested empty seat (issue #27) — split from
+      #23 after real-device testing: with a seat open and no pending
+      requests, the tile itself should say "Join the conversation" and
+      one tap should occupy it — no request message, no separate Claim
+      button. Falls back to the normal request flow if a queue exists.
+      No dependency on #22.
+- [ ] Automatic ranked promotion for contested seats (issue #23,
+      narrowed) — when a seat with a real queue opens, the highest-ranked
+      eligible *ready* candidate is auto-promoted server-side, no manual
+      `claimOpenSeat` race, unready candidates yield via a bounded grace
+      period. Depends on #22's readiness signal.
+- [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
+      drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
+      and voting-focus, tap always available independent of the gesture,
+      and `ChatPanel` made a single continuously-mounted component so
+      draft text/scroll position/mic-request-mode survive focus changes.
+      Explicitly does not own default-state compositing — that's #20's.
 - [ ] Fresh next-speaker ranking rounds (issue #24) — ranking freshness
       bounded by the current pairing's `joined_at`, so stale reaction
       support from a previous pairing can't dominate a new one.
