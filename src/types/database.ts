@@ -184,6 +184,7 @@ export type Database = {
         Row: {
           created_at: string
           description: string
+          format: string
           id: string
           lobby_opens_at: string
           scheduled_start: string
@@ -192,6 +193,7 @@ export type Database = {
         Insert: {
           created_at?: string
           description?: string
+          format?: string
           id?: string
           lobby_opens_at: string
           scheduled_start: string
@@ -200,6 +202,7 @@ export type Database = {
         Update: {
           created_at?: string
           description?: string
+          format?: string
           id?: string
           lobby_opens_at?: string
           scheduled_start?: string
