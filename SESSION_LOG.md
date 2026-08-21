@@ -46,9 +46,26 @@ icons, Roulette, Spotlight, Group Stage, avatars/VTubers, image/GIF chat
 uploads, cosmetic animation/polish beyond functional interaction,
 monetization.
 
-**Next task**: Implementation starts with issue #19 (room format seam) —
-smallest, no true dependency on anything else, establishes the boundary
-the rest of the sequence checks against.
+**Issue #19 implemented, same session**: docs committed first via a
+dedicated `chore/video-first-architecture-docs` branch (fast-forward merged
+to `main`, no new checkpoint — a docs-only change). Confirmed #19's scope
+was unchanged by the finalized architecture (nothing in #20/#21/#22
+touches `event.format`) before starting. `feature/room-format-seam`:
+migration `00000000000014_add_events_format.sql`
+(`events.format text not null default 'main_stage' check (format in
+('main_stage'))`, same pattern as `event_speakers.left_reason`), types
+regenerated, and `format` added to the `events` repository's `Event`
+domain type (a literal `"main_stage"` union, cast at the query boundary —
+without this the column existed in the database but was unreachable from
+application code). Verified directly against the linked database: existing
+rows backfilled to `'main_stage'`, and the CHECK constraint actually
+rejects an invalid value (not just assumed from the migration text).
+lint/tsc/build/test all pass (150/150). Merged to `main`, pushed. Board
+card moved to Done. No new checkpoint tag — this is incremental,
+not a new verified-stable milestone.
+
+**Next task**: Issue #20 (video-first room shell) — not started per the
+user's explicit instruction to stop after #19.
 
 ---
 

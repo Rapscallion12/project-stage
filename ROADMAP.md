@@ -242,7 +242,7 @@ opacity, dead-zone gesture mechanism, voting-evaluation scaling, the
 room-format seam). #18 is now the final step in this sequence, not a
 separate one.
 
-- [ ] Room format seam (issue #19) — additive `events.format` column,
+- [x] Room format seam (issue #19) — additive `events.format` column,
       defaulted/constrained to `'main_stage'` today, so Main Stage's
       two-seat/voting/ranking assumptions don't become inseparable from
       "what a room is" once Roulette/Spotlight/Group Stage exist. Those

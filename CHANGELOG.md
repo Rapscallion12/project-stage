@@ -33,6 +33,18 @@ separate release cadence to track here.
 
 ### Added
 
+- **Room format seam** (issue #19) — `events.format`, an additive text
+  column defaulted and CHECK-constrained to `'main_stage'` (migration
+  `00000000000014`), so Main Stage's two-seat/voting/ranking assumptions
+  don't become inseparable from "what a room is" once other formats
+  (Roulette, Spotlight, Group Stage — documented, not built) exist.
+  Existing rows backfilled to `'main_stage'` automatically; constraint
+  verified directly against the linked database to actually reject an
+  invalid value, not just assumed from the migration text. Exposed on the
+  `events` repository's `Event` domain type as a literal union, cast at
+  the query boundary the same way `event_speakers.left_reason` already is.
+  First of seven issues (#19–#25) from the video-first room redesign — see
+  DECISIONS.md and ROADMAP.md's Phase 2.
 - **One event URL** (issue #17) — `/events/[id]` is now the entire event
   experience: tapping an event from the list lands directly in it, no
   "Enter Lobby"/"Enter the room" clicks. The same mounted component
