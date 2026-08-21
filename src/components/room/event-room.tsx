@@ -11,6 +11,7 @@ import { RoomDiagnostics } from "@/components/room/room-diagnostics";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { formatCountdown, getEventPhase, type EventPhase } from "@/lib/events";
+import { isDevToolsAvailable } from "@/lib/dev-demo";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -82,7 +83,7 @@ export function EventRoom({
   if (phase === "upcoming") {
     const now = nowMs === null ? null : new Date(nowMs);
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-hidden p-6 text-center">
         <h1 className="text-xl font-semibold">{event.title}</h1>
         {event.description && <p className="max-w-md text-sm text-muted">{event.description}</p>}
         <p className="text-sm text-muted">
@@ -125,22 +126,32 @@ export function EventRoom({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1">
         {orientation === "landscape" ? <LandscapeRoom {...layoutProps} /> : <PortraitRoom {...layoutProps} />}
       </div>
-      {/* TEMPORARY — issue #15 real-device diagnosis, see DECISIONS.md. Remove once root cause is confirmed fixed. */}
-      <RoomDiagnostics
-        identityType={identity.type}
-        isSpeaker={isSpeaker}
-        hasServerToken={initialToken !== null}
-        liveKitUrlConfigured={Boolean(LIVEKIT_URL)}
-        connectionStatus={connection.status}
-        canPublish={connection.canPublish}
-        needsMediaActivation={connection.needsMediaActivation}
-        mediaError={connection.mediaError}
-        participantCount={connection.participantCount}
-      />
+      {/*
+       * Issue #20: pulled out of the normal room UI entirely — it was
+       * floating/obstructing real controls on real devices (see issue
+       * #17's real-device follow-up, and RoomDiagnostics' own doc
+       * comment). Still mounted, but only outside production, the same
+       * `isDevToolsAvailable()` gate `/dev` and its Server Actions already
+       * use — a real phone testing the deployed app never sees this; a
+       * local dev server still can for real-device debugging.
+       */}
+      {isDevToolsAvailable() && (
+        <RoomDiagnostics
+          identityType={identity.type}
+          isSpeaker={isSpeaker}
+          hasServerToken={initialToken !== null}
+          liveKitUrlConfigured={Boolean(LIVEKIT_URL)}
+          connectionStatus={connection.status}
+          canPublish={connection.canPublish}
+          needsMediaActivation={connection.needsMediaActivation}
+          mediaError={connection.mediaError}
+          participantCount={connection.participantCount}
+        />
+      )}
     </div>
   );
 }

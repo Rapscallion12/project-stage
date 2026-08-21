@@ -6,12 +6,14 @@ import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * Discussion maximized, chat becomes a narrower secondary panel — the
- * inverse priority from portrait. Used for landscape phones and desktop
- * browsers alike (both get the wide-viewport treatment; see
- * ARCHITECTURE.md's responsive implementation notes on desktop/mobile
- * sharing structure where it genuinely doesn't differ). Presentation
- * only, same as PortraitRoom.
+ * Video-first (issue #20), landscape variant: the stage fills the left
+ * column edge to edge (no more centered/max-width/padded box around it —
+ * side by side already gives video most of the width, so it should
+ * actually use it), with the side panel narrow by comparison rather than
+ * needing further compacting the way portrait's chat strip does. Used
+ * for landscape phones and desktop browsers alike (see ARCHITECTURE.md's
+ * responsive implementation notes). Presentation only, same as
+ * PortraitRoom.
  */
 export function LandscapeRoom({
   event,
@@ -34,7 +36,7 @@ export function LandscapeRoom({
   reactions,
 }: RoomLayoutProps) {
   return (
-    <div className="flex min-h-0 flex-1 flex-row">
+    <div className="flex h-full min-h-0 flex-row overflow-hidden">
       <div className="flex min-h-0 flex-1 flex-col">
         <RoomHeader
           eventTitle={event.title}
@@ -43,7 +45,7 @@ export function LandscapeRoom({
           participantCount={participantCount}
           connectionStatus={connectionStatus}
         />
-        <div className="flex flex-1 items-center justify-center p-4">
+        <div className="min-h-0 flex-1">
           <SpeakerStage
             speakers={speakers}
             getParticipant={getParticipant}
@@ -51,7 +53,7 @@ export function LandscapeRoom({
             needsMediaActivation={needsMediaActivation}
             activateMedia={activateMedia}
             mediaError={mediaError}
-            className="grid w-full max-w-4xl grid-cols-2 gap-4"
+            orientation="landscape"
           />
         </div>
         <RoomControls

@@ -82,7 +82,7 @@ export function SpeakerTile({
     return (
       <div
         data-testid="empty-seat"
-        className="flex aspect-video flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border bg-foreground/[0.02] text-muted"
+        className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted"
       >
         <p className="text-sm font-medium">Seat open</p>
       </div>
@@ -90,7 +90,7 @@ export function SpeakerTile({
   }
 
   return (
-    <div data-testid="speaker-tile" className="relative aspect-video overflow-hidden rounded-lg bg-foreground/10">
+    <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
       {hasVideo ? (
         // Local video is muted to avoid feedback; there is no local audio
         // element at all (see the effect above) for the same reason.

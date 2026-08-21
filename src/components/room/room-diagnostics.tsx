@@ -21,6 +21,11 @@ import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connect
  * top of a real phone's viewport. Collapsed to a single-line toggle, it
  * stays available on demand without competing with the product UI for
  * space it doesn't need most of the time.
+ *
+ * Issue #20: pulled out of the normal room UI entirely — EventRoom only
+ * mounts this component when `isDevToolsAvailable()` is true, the same
+ * production guard `/dev` uses. No longer floats/obstructs anything for
+ * a real visitor; still reachable from a local dev server.
  */
 export function RoomDiagnostics({
   identityType,

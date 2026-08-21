@@ -6,20 +6,14 @@ import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * Chat gets the remaining real estate below a fixed-height header block
- * (speaker strip + controls), rather than controls trailing after a
- * variable-height chat feed. Issue #17 real-device follow-up: with
- * RoomControls previously positioned *after* RoomChatPanel, its "Request
- * the mic" control depended on the chat feed's height to determine how
- * far down the page it landed — on a real phone this meant it required
- * scrolling past however much chat/diagnostics content came before it to
- * even discover it existed, the same discoverability failure the tile
- * placement fix already addressed once for camera/mic activation.
- * Controls now sit directly below the speaker stage instead, so they're
- * reachable without depending on chat content height at all; only the
- * chat feed itself (already internally scrollable) absorbs the
- * remaining space. Presentation only: every prop here is owned by
- * EventRoom, above the orientation branch.
+ * Video-first (issue #20): the stage takes essentially all remaining
+ * space below the header (`flex-1`), replacing the old small
+ * fixed-height speaker block. Controls and a *compact* chat strip live
+ * below it in a fixed-height footer, not the page-filling chat panel
+ * this used to be — expanding that strip into a full chat-focus view is
+ * issue #21, not this one. The same `ChatPanel` instance is used here
+ * (via `RoomChatPanel`) in both states so #21 can make it expandable
+ * without ever swapping which component is mounted — see DECISIONS.md.
  */
 export function PortraitRoom({
   event,
@@ -42,7 +36,7 @@ export function PortraitRoom({
   reactions,
 }: RoomLayoutProps) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <RoomHeader
         eventTitle={event.title}
         roomStatus={roomStatus}
@@ -50,7 +44,7 @@ export function PortraitRoom({
         participantCount={participantCount}
         connectionStatus={connectionStatus}
       />
-      <div className="shrink-0 p-3">
+      <div className="min-h-0 flex-1">
         <SpeakerStage
           speakers={speakers}
           getParticipant={getParticipant}
@@ -58,27 +52,32 @@ export function PortraitRoom({
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
           mediaError={mediaError}
+          orientation="portrait"
         />
       </div>
-      {identity.type === "guest" && (
-        <div className="shrink-0 px-3 pb-2">
-          <GuestNameEditor initialName={identity.displayName} />
+      <div className="flex shrink-0 flex-col border-t border-border">
+        {identity.type === "guest" && (
+          <div className="shrink-0 px-3 pb-2">
+            <GuestNameEditor initialName={identity.displayName} />
+          </div>
+        )}
+        <RoomControls
+          eventId={event.id}
+          isSpeaker={isSpeaker}
+          identity={identity}
+          hasPendingRequest={hasPendingRequest}
+          canPublish={canPublish}
+          needsMediaActivation={needsMediaActivation}
+          activateMedia={activateMedia}
+          mediaError={mediaError}
+          connectionStatus={connectionStatus}
+          phase={phase}
+          countdownText={countdownText}
+        />
+        <div className="h-40 min-h-0">
+          <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="h-full" />
         </div>
-      )}
-      <RoomControls
-        eventId={event.id}
-        isSpeaker={isSpeaker}
-        identity={identity}
-        hasPendingRequest={hasPendingRequest}
-        canPublish={canPublish}
-        needsMediaActivation={needsMediaActivation}
-        activateMedia={activateMedia}
-        mediaError={mediaError}
-        connectionStatus={connectionStatus}
-        phase={phase}
-        countdownText={countdownText}
-      />
-      <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
+      </div>
     </div>
   );
 }
