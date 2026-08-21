@@ -247,12 +247,16 @@ separate one.
       two-seat/voting/ranking assumptions don't become inseparable from
       "what a room is" once Roulette/Spotlight/Group Stage exist. Those
       three formats are documented, not built.
-- [x] Video-first room shell (issue #20) — video-dominant base layer that
+- [ ] Video-first room shell (issue #20) — video-dominant base layer that
       stays geometrically stable across focus changes, a scrim/overlay
       compositing primitive (opacity/transform only, never resizing the
       video element itself), a fixed self-preview slot, a structural
       (inert) speaker divider, and removal of issue #15's diagnostics
-      panel from normal UI (kept dev-only).
+      panel from normal UI (kept dev-only). Merged and deployed; **not
+      checked off** until the user confirms the deployed experience on a
+      real iPhone — automated/server-side verification alone isn't the
+      bar for a change that specifically touches the mobile room
+      experience. See SESSION_LOG.md.
 - [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
       drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
       and voting-focus, tap always available independent of the gesture,

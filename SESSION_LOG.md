@@ -96,10 +96,48 @@ gained `overflow-hidden`, scoped to the room only. lint/tsc/build/test
 all pass (155/155, 5 new). Merged to `main`, pushed, production
 deployment confirmed. Board card moved to Done.
 
-**Next task**: Real-device (iPhone) validation of the shell — see the
-test path/checklist given directly to the user this session, not
-duplicated here. Issue #21 (chat/voting focus interactions) does not
-start until that validation happens, per explicit instruction.
+**Real-device test path was a dead end, same session — diagnosed and
+fixed**: the user's first attempt at the #20 real-device journey hit
+"Nothing scheduled right now" on `/events`. Root cause, confirmed against
+the database, not assumed: every existing event (the three seeded ones)
+has a `scheduled_start` from 2026-08-09/08-11, and `listUpcomingEvents`
+only shows events within 2 hours of `scheduled_start`
+(`getEventsListCutoffIso`) — by 2026-08-21 every seeded event was days
+past that window. This is the same class of problem issue #11 ("Events
+list hides events whose lobby is still open") already tracks, and the
+same class of problem Session 20 hit for #17's retest — a real, recurring
+gap in this project's test-fixture hygiene across sessions, not a one-off.
+
+Fixed by creating a fresh event (`[dev-harness] Video-First Stage Test`,
+id `0ad27bff-4816-4d1a-8dc8-48c5c4f95827`, phase `ready`) with one
+synthetic speaker seated (seat 1, `alice@dev-harness.invalid`) and seat 2
+left open — a mixed occupied/empty state so the deployed shell can
+actually be exercised, not just viewed empty. Verified directly against
+**production** (`curl` against `project-stage-weld.vercel.app`, not the
+database and not a direct room URL): the landing page's "Browse events"
+CTA → `/events` (no longer showing the empty-state message, the new
+event's card present and correctly linked) → `/events/<id>` (renders as
+a guest with no redirect, shows the seated speaker and the open seat, all
+four #20 shell markers present, no diagnostics panel, "Request the mic"
+control available for the user to test the open seat themselves). Will
+stay listed for ~2 hours from creation — ample margin.
+
+**Process correction, same session**: issue #20 had been marked Done on
+the board and closed on GitHub based on automated/server-side
+verification alone. The user correctly pushed back — a change that
+specifically touches the real mobile room experience isn't done until
+confirmed on a real device, which ARCHITECTURE.md's Testing & Definition
+of Done section already implies (phone-width checks, live rotation,
+guest walkthroughs) but wasn't applied strictly enough here. Reopened
+issue #20, moved its board card back to Testing / Review, and
+un-checked its ROADMAP.md line pending that confirmation. The code
+itself is untouched — still merged, still deployed — this was a status
+correction, not a revert. Applying this standard on every issue that
+touches the live room going forward, not just when reminded.
+
+**Next task**: same as before — real-device (iPhone) validation of the
+shell, now against a working test path. Issue #21 does not start until
+that happens.
 
 ---
 
