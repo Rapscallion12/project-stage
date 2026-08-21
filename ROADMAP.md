@@ -247,7 +247,7 @@ separate one.
       two-seat/voting/ranking assumptions don't become inseparable from
       "what a room is" once Roulette/Spotlight/Group Stage exist. Those
       three formats are documented, not built.
-- [ ] Video-first room shell (issue #20) — video-dominant base layer that
+- [x] Video-first room shell (issue #20) — video-dominant base layer that
       stays geometrically stable across focus changes, a scrim/overlay
       compositing primitive (opacity/transform only, never resizing the
       video element itself), a fixed self-preview slot, a structural

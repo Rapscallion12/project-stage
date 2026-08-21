@@ -64,8 +64,42 @@ lint/tsc/build/test all pass (150/150). Merged to `main`, pushed. Board
 card moved to Done. No new checkpoint tag — this is incremental,
 not a new verified-stable milestone.
 
-**Next task**: Issue #20 (video-first room shell) — not started per the
-user's explicit instruction to stop after #19.
+**Issue #26 recorded, same session**: "Join Live Audience fast path" — a
+landing-page direct-to-room entry point (distinct copy from "Join Now" to
+avoid reading as account creation/signup/speaker join), routing straight
+into the best currently-live/participatory room as an audience member,
+no intermediate screens, no automatic mic/camera/mic activation. Room
+selection deliberately simple (prefer an active room, else the best
+enterable one, graceful empty-state) — no recommendation/matchmaking
+infrastructure. Scoped to stay compatible with the format seam (#19)
+without building any new format. Created as issue #26, added to the
+board in Backlog, not implemented — independent of the #20–#25 sequence,
+did not interrupt it.
+
+**Issue #20 implemented, same session**: re-read fresh before starting —
+confirmed unchanged from the approved architecture. `feature/video-first-
+room-shell`: `SpeakerStage` restructured to fill essentially all space
+below the header (full-bleed tiles, stacked in portrait/side-by-side in
+landscape, no more `aspect-video`/gap/per-tile rounding), with controls
+and a compact, height-constrained chat strip (the same `ChatPanel`
+instance, not a placeholder) below it instead of chat filling the page.
+Added three inert structural anchors: a speaker divider (plain
+`aria-hidden` div, not a button yet — a non-functional button is worse
+for assistive tech than no button), an empty self-preview slot, and a
+scrim (`opacity-0`/`pointer-events-none` by default — verified this
+matters now, not just later: without `pointer-events-none` it would
+block taps on a tile underneath). `RoomDiagnostics` gated behind
+`isDevToolsAvailable()` — verified directly against a real production
+build/server that it's absent from a live room page's HTML while the
+four new shell markers render correctly. `EventRoom`'s root containers
+gained `overflow-hidden`, scoped to the room only. lint/tsc/build/test
+all pass (155/155, 5 new). Merged to `main`, pushed, production
+deployment confirmed. Board card moved to Done.
+
+**Next task**: Real-device (iPhone) validation of the shell — see the
+test path/checklist given directly to the user this session, not
+duplicated here. Issue #21 (chat/voting focus interactions) does not
+start until that validation happens, per explicit instruction.
 
 ---
 

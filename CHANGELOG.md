@@ -33,6 +33,28 @@ separate release cadence to track here.
 
 ### Added
 
+- **Video-first room shell** (issue #20) — replaces the room's stacked
+  header/speaker-grid/controls/chat blocks with a video-dominant layout:
+  `SpeakerStage` now fills essentially all remaining space below the
+  header (full-bleed, no `aspect-video` constraint, no gap, no per-tile
+  rounding), stacked top/bottom in portrait and side-by-side in
+  landscape, with controls and a compact (height-constrained, not
+  page-filling) chat strip in a small footer below it — the same
+  `ChatPanel` instance used there as before, just visually smaller, so a
+  later issue can make it expandable without ever remounting it. Adds
+  three inert structural anchors for upcoming issues to attach real
+  behavior to: a speaker divider (#25), an empty self-preview slot (#22),
+  and a scrim spanning the stage (#21) — `opacity-0`/`pointer-events-none`
+  by default, which is load-bearing today, not just a placeholder default:
+  without it this layer would block taps on a tile underneath (e.g. issue
+  #15's "tap to enable camera & mic" control). `RoomDiagnostics` (issue
+  #15's temporary panel) no longer mounts in the normal room UI at all —
+  gated behind `isDevToolsAvailable()`, the same guard `/dev` uses —
+  verified directly against a real production build/server, not just
+  asserted. `EventRoom`'s root containers gained `overflow-hidden`,
+  scoped to the room only (`layout.tsx`'s body-level scroll is untouched,
+  since other routes still need it). Second of seven issues (#19–#25)
+  from the video-first room redesign.
 - **Room format seam** (issue #19) — `events.format`, an additive text
   column defaulted and CHECK-constrained to `'main_stage'` (migration
   `00000000000014`), so Main Stage's two-seat/voting/ranking assumptions
