@@ -1,18 +1,14 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RoomControls } from "./room-controls";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 
-const { leaveSpeakerSeat, withdrawSpeakerRequest, claimOpenSeat } = vi.hoisted(() => ({
+const { leaveSpeakerSeat } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
-  withdrawSpeakerRequest: vi.fn(),
-  claimOpenSeat: vi.fn(),
 }));
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
   leaveSpeakerSeat,
-  withdrawSpeakerRequest,
-  claimOpenSeat,
 }));
 
 /** A speaker who's already fully connected and publishing — the common case for the non-media-focused tests below. */
@@ -28,17 +24,11 @@ const readyMediaProps = {
   countdownText: null as string | null,
 };
 
+const notPromoting = { promotionCountdown: null, onCancelPromotion: vi.fn() };
+
 describe("RoomControls", () => {
   it("shows 'Leave the stage' for an active speaker", () => {
-    render(
-      <RoomControls
-        eventId="e1"
-        isSpeaker
-        hasPendingRequest={false}
-        onHasPendingRequestChange={vi.fn()}
-        {...readyMediaProps}
-      />,
-    );
+    render(<RoomControls eventId="e1" isSpeaker hasPendingRequest={false} {...notPromoting} {...readyMediaProps} />);
     expect(screen.getByRole("button", { name: "Leave the stage" })).toBeInTheDocument();
   });
 
@@ -49,72 +39,75 @@ describe("RoomControls", () => {
   // to show for a plain audience member with no pending request.
   it("renders nothing for a plain audience member with no pending request — the request entry points live elsewhere now", () => {
     const { container } = render(
-      <RoomControls
-        eventId="e1"
-        isSpeaker={false}
-        hasPendingRequest={false}
-        onHasPendingRequestChange={vi.fn()}
-        {...readyMediaProps}
-      />,
+      <RoomControls eventId="e1" isSpeaker={false} hasPendingRequest={false} {...notPromoting} {...readyMediaProps} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows a server rejection inline without changing state when claiming fails", async () => {
-    claimOpenSeat.mockResolvedValue({ error: "Other requests currently have more support than yours." });
-    render(
-      <RoomControls
-        eventId="e1"
-        isSpeaker={false}
-        hasPendingRequest={true}
-        onHasPendingRequestChange={vi.fn()}
-        {...readyMediaProps}
-      />,
-    );
+  // Issue #23: no more manual "Claim your seat" button at all — a
+  // pending requester either sees the plain waiting state or the
+  // automatic-promotion countdown, never a button that claims anything
+  // itself. See use-automatic-promotion.test.ts for the countdown/claim
+  // state machine itself.
+  describe("waiting for automatic promotion (issue #23 — replaces manual claiming)", () => {
+    it("never shows a 'Claim your seat' button, in any state", () => {
+      render(
+        <RoomControls eventId="e1" isSpeaker={false} hasPendingRequest={true} {...notPromoting} {...readyMediaProps} />,
+      );
+      expect(screen.queryByRole("button", { name: "Claim your seat" })).not.toBeInTheDocument();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Claim your seat" }));
+    it("explains that going live happens automatically while just waiting", () => {
+      render(
+        <RoomControls eventId="e1" isSpeaker={false} hasPendingRequest={true} {...notPromoting} {...readyMediaProps} />,
+      );
+      expect(screen.getByText(/you'll go live automatically when it's your turn/i)).toBeInTheDocument();
+    });
 
-    await waitFor(() =>
-      expect(screen.getByText("Other requests currently have more support than yours.")).toBeInTheDocument(),
-    );
-    // Still in the pending state — a rejected claim doesn't withdraw the request.
-    expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
-  });
+    it("shows the 'You're up next' countdown once promotionCountdown is set, instead of the plain waiting text", () => {
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          promotionCountdown={3}
+          onCancelPromotion={vi.fn()}
+          {...readyMediaProps}
+        />,
+      );
+      expect(screen.getByText("You're up next")).toBeInTheDocument();
+      expect(screen.getByText("Going live in 3…")).toBeInTheDocument();
+      expect(screen.queryByText(/you'll go live automatically/i)).not.toBeInTheDocument();
+    });
 
-  it("withdrawing calls onHasPendingRequestChange(false), the same lifted-state signal the composer's successful submission also drives", async () => {
-    withdrawSpeakerRequest.mockResolvedValue({ ok: true });
-    const onHasPendingRequestChange = vi.fn();
-    render(
-      <RoomControls
-        eventId="e1"
-        isSpeaker={false}
-        hasPendingRequest={true}
-        onHasPendingRequestChange={onHasPendingRequestChange}
-        {...readyMediaProps}
-      />,
-    );
+    it("'Cancel' during the countdown and 'Withdraw' while waiting both call onCancelPromotion — the same action either way", () => {
+      const onCancelPromotion = vi.fn();
+      const { rerender } = render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          promotionCountdown={null}
+          onCancelPromotion={onCancelPromotion}
+          {...readyMediaProps}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
-
-    await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(false));
-  });
-
-  it("claiming successfully calls onHasPendingRequestChange(false) too", async () => {
-    claimOpenSeat.mockResolvedValue({ ok: true });
-    const onHasPendingRequestChange = vi.fn();
-    render(
-      <RoomControls
-        eventId="e1"
-        isSpeaker={false}
-        hasPendingRequest={true}
-        onHasPendingRequestChange={onHasPendingRequestChange}
-        {...readyMediaProps}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Claim your seat" }));
-
-    await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(false));
+      rerender(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          promotionCountdown={2}
+          onCancelPromotion={onCancelPromotion}
+          {...readyMediaProps}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("camera/mic activation and error states (issue #15)", () => {
@@ -125,7 +118,7 @@ describe("RoomControls", () => {
           eventId="e1"
           isSpeaker
           hasPendingRequest={false}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           needsMediaActivation
           activateMedia={activateMedia}
@@ -139,13 +132,7 @@ describe("RoomControls", () => {
 
     it("never shows the activation button once media is already active", () => {
       render(
-        <RoomControls
-          eventId="e1"
-          isSpeaker
-          hasPendingRequest={false}
-          onHasPendingRequestChange={vi.fn()}
-          {...readyMediaProps}
-        />,
+        <RoomControls eventId="e1" isSpeaker hasPendingRequest={false} {...notPromoting} {...readyMediaProps} />,
       );
       expect(screen.queryByRole("button", { name: "Enable camera & mic" })).not.toBeInTheDocument();
     });
@@ -156,7 +143,7 @@ describe("RoomControls", () => {
           eventId="e1"
           isSpeaker
           hasPendingRequest={false}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           mediaError={{ source: "camera", reason: "permission-denied" }}
         />,
@@ -170,7 +157,7 @@ describe("RoomControls", () => {
           eventId="e1"
           isSpeaker
           hasPendingRequest={false}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           mediaError={{ source: "microphone", reason: "no-device" }}
         />,
@@ -184,7 +171,7 @@ describe("RoomControls", () => {
           eventId="e1"
           isSpeaker
           hasPendingRequest={false}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           canPublish={false}
           needsMediaActivation={false}
@@ -199,7 +186,7 @@ describe("RoomControls", () => {
           eventId="e1"
           isSpeaker
           hasPendingRequest={false}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           canPublish={false}
           needsMediaActivation={false}
@@ -210,38 +197,39 @@ describe("RoomControls", () => {
     });
   });
 
-  describe("claiming a seat is gated to phase === \"ready\" (issue #17)", () => {
-    it("hides the 'Claim your seat' button pre-show, showing a countdown-aware explanation instead", () => {
+  describe("phase-aware waiting copy (issue #17)", () => {
+    it("mentions the pre-show countdown while waiting, pre-show", () => {
       render(
         <RoomControls
           eventId="e1"
           isSpeaker={false}
           hasPendingRequest={true}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           phase="lobby_open"
           countdownText="Live in 2h 15m"
         />,
       );
-      expect(screen.queryByRole("button", { name: "Claim your seat" })).not.toBeInTheDocument();
-      expect(screen.getByText(/you can claim a seat once the conversation starts \(live in 2h 15m\)/i)).toBeInTheDocument();
-      // Withdraw must still work pre-show — only claiming is phase-gated.
+      expect(
+        screen.getByText(/you'll go live automatically once the conversation starts \(live in 2h 15m\)/i),
+      ).toBeInTheDocument();
+      // Withdraw must still work pre-show.
       expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
     });
 
-    it("shows the real 'Claim your seat' button once phase is ready", () => {
+    it("drops the pre-show phrasing once phase is ready", () => {
       render(
         <RoomControls
           eventId="e1"
           isSpeaker={false}
           hasPendingRequest={true}
-          onHasPendingRequestChange={vi.fn()}
+          {...notPromoting}
           {...readyMediaProps}
           phase="ready"
           countdownText={null}
         />,
       );
-      expect(screen.getByRole("button", { name: "Claim your seat" })).toBeInTheDocument();
+      expect(screen.getByText(/you'll go live automatically when it's your turn/i)).toBeInTheDocument();
       expect(screen.queryByText(/hasn't started yet/i)).not.toBeInTheDocument();
     });
   });

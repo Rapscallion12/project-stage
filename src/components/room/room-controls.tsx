@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { claimOpenSeat, leaveSpeakerSeat, withdrawSpeakerRequest } from "@/app/events/[id]/room/actions";
+import { leaveSpeakerSeat } from "@/app/events/[id]/room/actions";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import type { EventPhase } from "@/lib/events";
 
@@ -22,32 +22,37 @@ function mediaErrorMessage(error: NonNullable<MediaError>): string {
 }
 
 /**
- * The room's speaker-facing controls (issues #13/#3's "Leave the stage",
- * and issue #14's withdraw/claim for a *contested* seat's queue). Always
- * rendered — which of three states it shows depends on `isSpeaker` and
- * whether the caller currently has a pending request; renders nothing at
- * all for a plain audience member with neither.
+ * The room's speaker-facing controls (issue #13/#3's "Leave the stage").
+ * Always rendered — which of three states it shows depends on
+ * `isSpeaker` and whether the caller currently has a pending request;
+ * renders nothing at all for a plain audience member with neither.
  *
  * Issue #27 removed this component's fourth state (a standalone
  * "Request the mic" button + justification form) — that entry point is
  * now the composer's own 🎤 mode (see `ChatPanel`) and, for a genuinely
  * uncontested seat, tapping the empty tile directly (see `SpeakerTile`).
- * This component no longer creates a request at all, only reacts to one
- * that already exists — `hasPendingRequest` is a controlled prop now
- * (lifted to `EventRoom`), not local state, since the composer is what
- * sets it true on a successful submission and this component only reads
- * it to decide what to show.
  *
- * The "Claim your seat"/"Withdraw" pair below is unchanged from issue
- * #14 — a ranked requester's self-service claim once eligible for a
- * *contested* seat. Automatic promotion (removing this manual step) is
- * issue #23's job, not touched here.
+ * Issue #23 removed the manual "Claim your seat" button too — a pending
+ * requester now sees an automatic "You're up next" countdown
+ * (`promotionCountdown`, driven by `useAutomaticPromotion` in
+ * `EventRoom`, not by anything in this component) once the server
+ * determines they're eligible, and the actual seat claim happens on its
+ * own at the end of it. This component no longer *creates or claims*
+ * anything — only reacts to state that already exists.
+ * `hasPendingRequest`/`promotionCountdown` are controlled props (lifted
+ * to `EventRoom`), not local state, since the composer and the
+ * automatic-promotion hook are what actually drive them.
+ *
+ * "Withdraw" (waiting) and "Cancel" (mid-countdown) both call the same
+ * `onCancelPromotion` — semantically identical, "stop trying to get a
+ * seat," whether or not a countdown happens to be running right now.
  */
 export function RoomControls({
   eventId,
   isSpeaker,
   hasPendingRequest,
-  onHasPendingRequestChange,
+  promotionCountdown,
+  onCancelPromotion,
   canPublish,
   needsMediaActivation,
   activateMedia,
@@ -59,13 +64,14 @@ export function RoomControls({
   eventId: string;
   isSpeaker: boolean;
   hasPendingRequest: boolean;
-  onHasPendingRequestChange: (value: boolean) => void;
+  promotionCountdown: number | null;
+  onCancelPromotion: () => void;
   canPublish: boolean;
   needsMediaActivation: boolean;
   activateMedia: () => Promise<void>;
   mediaError: MediaError;
   connectionStatus: ConnectionStatus;
-  /** Issue #17: requesting the mic works from lobby_open onward, but claiming a seat (going live) is still gated to "ready" — enforced server-side in claimOpenSeat, not just here. */
+  /** Issue #17: requesting the mic works from lobby_open onward, but going live is still gated to "ready" — enforced server-side (checkPromotionEligibility/claimOpenSeat), not just here. */
   phase: EventPhase;
   countdownText: string | null;
 }) {
@@ -77,33 +83,6 @@ export function RoomControls({
     startTransition(async () => {
       const result = await leaveSpeakerSeat(eventId);
       if ("error" in result) setError(result.error);
-    });
-  }
-
-  function handleWithdraw() {
-    setError(null);
-    startTransition(async () => {
-      const result = await withdrawSpeakerRequest(eventId);
-      if ("error" in result) {
-        setError(result.error);
-        return;
-      }
-      onHasPendingRequestChange(false);
-    });
-  }
-
-  function handleClaim() {
-    setError(null);
-    startTransition(async () => {
-      const result = await claimOpenSeat(eventId);
-      if ("error" in result) {
-        setError(result.error);
-        return;
-      }
-      // useActiveSpeakers' own Realtime subscription picks up the new
-      // event_speakers row and this component's `isSpeaker` prop flips
-      // on its own from there — nothing else to update locally.
-      onHasPendingRequestChange(false);
     });
   }
 
@@ -149,31 +128,35 @@ export function RoomControls({
   }
 
   if (hasPendingRequest) {
+    if (promotionCountdown !== null) {
+      return (
+        <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">You&apos;re up next</p>
+              <p className="text-xs text-muted">Going live in {promotionCountdown}…</p>
+            </div>
+            <Button variant="ghost" onClick={onCancelPromotion}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
     const canClaimNow = phase === "ready";
     return (
       <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-muted">
             {canClaimNow
-              ? "Your request is live in chat."
-              : `Your request is live in chat — you can claim a seat once the conversation starts${countdownText ? ` (${countdownText.toLowerCase()})` : ""}.`}
+              ? "Your request is live in chat — you'll go live automatically when it's your turn."
+              : `Your request is live in chat — you'll go live automatically once the conversation starts${countdownText ? ` (${countdownText.toLowerCase()})` : ""}.`}
           </p>
-          <div className="flex gap-2">
-            {canClaimNow && (
-              <Button onClick={handleClaim} disabled={isPending}>
-                {isPending ? "Claiming…" : "Claim your seat"}
-              </Button>
-            )}
-            <Button variant="ghost" onClick={handleWithdraw} disabled={isPending}>
-              Withdraw
-            </Button>
-          </div>
+          <Button variant="ghost" onClick={onCancelPromotion}>
+            Withdraw
+          </Button>
         </div>
-        {error && (
-          <p className="text-xs text-red-500" role="alert">
-            {error}
-          </p>
-        )}
       </div>
     );
   }

@@ -26,6 +26,8 @@ export function LandscapeRoom({
   isSpeaker,
   hasPendingRequest,
   onHasPendingRequestChange,
+  promotionCountdown,
+  onCancelPromotion,
   micRequestMode,
   onMicRequestModeChange,
   onTapEmptySeat,
@@ -73,7 +75,8 @@ export function LandscapeRoom({
           eventId={event.id}
           isSpeaker={isSpeaker}
           hasPendingRequest={hasPendingRequest}
-          onHasPendingRequestChange={onHasPendingRequestChange}
+          promotionCountdown={promotionCountdown}
+          onCancelPromotion={onCancelPromotion}
           canPublish={canPublish}
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}

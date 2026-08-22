@@ -8,7 +8,6 @@ import type { Event } from "@/lib/repositories/events";
 vi.mock("@/app/events/[id]/room/actions", () => ({
   leaveSpeakerSeat: vi.fn(),
   withdrawSpeakerRequest: vi.fn(),
-  claimOpenSeat: vi.fn(),
   submitSpeakerRequest: vi.fn(),
 }));
 
@@ -45,6 +44,8 @@ const baseProps: RoomLayoutProps = {
   isSpeaker: false,
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
+  promotionCountdown: null,
+  onCancelPromotion: vi.fn(),
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
   onTapEmptySeat: vi.fn(),

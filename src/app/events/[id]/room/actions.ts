@@ -11,6 +11,7 @@ import {
   leaveSpeakerSeatAsGuest,
   listActiveSpeakers,
 } from "@/lib/repositories/event-speakers";
+import type { SeatIdentity } from "@/lib/repositories/event-speakers";
 import { findOpenSeat } from "@/lib/speaker-queue";
 import {
   getPendingRequestForIdentity,
@@ -23,7 +24,7 @@ import {
 } from "@/lib/repositories/speaker-requests";
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
-import { decideClaimEligibility } from "@/lib/speaker-queue";
+import { decideClaimEligibility, type ClaimDecision } from "@/lib/speaker-queue";
 
 export type GetLiveKitTokenResult = { token: string } | { error: string };
 
@@ -154,14 +155,50 @@ const CLAIM_REJECTION_MESSAGES = {
 } as const;
 
 /**
+ * The actual authorization decision, shared by `claimOpenSeat` (which
+ * acts on it) and `checkPromotionEligibility` (issue #23, read-only —
+ * the automatic-promotion countdown's "should I even start counting
+ * down" check). Fetches current state and hands it to
+ * `decideClaimEligibility` (the pure, unit-tested decision — see
+ * lib/speaker-queue.ts for the top-3-not-top-1 reasoning). Extracted so
+ * the eligibility *check* the countdown polls and the eligibility
+ * *enforcement* the actual claim performs can never drift apart into two
+ * separately-maintained copies of the same rule.
+ */
+async function resolveClaimDecision(
+  eventId: string,
+  identity: SeatIdentity,
+): Promise<{ decision: ClaimDecision; myRequestId: string | null }> {
+  const [myRequest, activeSpeakers, ranked] = await Promise.all([
+    getPendingRequestForIdentity(eventId, identity),
+    listActiveSpeakers(eventId),
+    rankPendingSpeakerRequests(eventId),
+  ]);
+
+  const decision = decideClaimEligibility({
+    identity,
+    hasPendingRequest: myRequest !== null,
+    activeSpeakers,
+    rankedRequests: ranked,
+  });
+
+  return { decision, myRequestId: myRequest?.id ?? null };
+}
+
+/**
  * The actual authorization gate issues #13 and #3 both deferred to
- * "whatever Phase 3 builds" (issue #14), extended by issue #16 to guests.
- * Fetches current state, hands it to `decideClaimEligibility` (the
- * actual, unit-tested decision — see lib/speaker-queue.ts for the
- * top-3-not-top-1 reasoning), and only on a favorable decision calls
+ * "whatever Phase 3 builds" (issue #14), extended by issue #16 to
+ * guests. Issue #23 removed this function's only remaining caller being
+ * a manual "Claim your seat" click — it's now called automatically, at
+ * the end of the automatic-promotion countdown (`useAutomaticPromotion`),
+ * never by the user tapping anything. The authorization logic itself is
+ * completely unchanged: only on a favorable decision does this call
  * `claimSpeakerSeat` (service client) on the caller's own behalf and
- * marks their request granted. The client never sees ranking data; it
- * only ever gets a pass/fail from attempting this.
+ * mark their request granted. The client never sees ranking data; it
+ * only ever gets a pass/fail from attempting this — and per issue #23's
+ * explicit requirement, the countdown that leads up to this call is not
+ * itself an eligibility mechanism, just client-side UX; this is still
+ * the one and only place eligibility is actually decided and enforced.
  *
  * Not re-checking seat availability a second time immediately before
  * `claimSpeakerSeat` — `claim_speaker_seat`'s own unique-index race
@@ -190,18 +227,7 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
     return { error: "The conversation hasn't started yet — hang tight." };
   }
 
-  const [myRequest, activeSpeakers, ranked] = await Promise.all([
-    getPendingRequestForIdentity(eventId, identity),
-    listActiveSpeakers(eventId),
-    rankPendingSpeakerRequests(eventId),
-  ]);
-
-  const decision = decideClaimEligibility({
-    identity,
-    hasPendingRequest: myRequest !== null,
-    activeSpeakers,
-    rankedRequests: ranked,
-  });
+  const { decision, myRequestId } = await resolveClaimDecision(eventId, identity);
 
   if (!decision.eligible) {
     return { error: CLAIM_REJECTION_MESSAGES[decision.reason] };
@@ -214,12 +240,41 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
   }
 
   // decision.eligible implies hasPendingRequest was true, which implies
-  // myRequest is non-null — decideClaimEligibility only sees the boolean,
-  // not the row itself, so TypeScript can't correlate the two on its own.
-  await markSpeakerRequestGranted(myRequest!.id);
+  // myRequestId is non-null — decideClaimEligibility only sees the
+  // boolean, not the row itself, so TypeScript can't correlate the two
+  // on its own.
+  await markSpeakerRequestGranted(myRequestId!);
   await syncPublishPermission({ eventId, identity, canPublish: true });
 
   return { ok: true };
+}
+
+export type PromotionEligibilityResult = { eligible: boolean };
+
+/**
+ * Issue #23: read-only — never claims anything, never mutates state.
+ * `useAutomaticPromotion` polls this while a candidate has a pending
+ * request, to decide whether to start the "You're up next" countdown.
+ * Explicitly *not* an eligibility mechanism itself (the countdown that
+ * follows a `true` result is pure client-side UX) — this just answers
+ * the same question `claimOpenSeat` independently re-answers for real at
+ * the end of that countdown, via the exact same shared decision
+ * (`resolveClaimDecision`), so the two can never disagree about what
+ * "eligible" means, only about *when* each happens to ask.
+ */
+export async function checkPromotionEligibility(eventId: string): Promise<PromotionEligibilityResult> {
+  const identity = await resolveIdentity();
+  if (identity.type !== "profile" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
+    return { eligible: false };
+  }
+
+  const event = await getEventById(eventId);
+  if (!event || getEventPhase(event) !== "ready") {
+    return { eligible: false };
+  }
+
+  const { decision } = await resolveClaimDecision(eventId, identity);
+  return { eligible: decision.eligible };
 }
 
 export type JoinOpenSeatResult =

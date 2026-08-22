@@ -35,6 +35,18 @@ export type RoomLayoutProps = {
    */
   hasPendingRequest: boolean;
   onHasPendingRequestChange: (value: boolean) => void;
+  /**
+   * Issue #23: seconds remaining in the automatic-promotion "You're up
+   * next" countdown, or `null` when not currently counting down (either
+   * still waiting, or nothing to wait for). Replaces the manual "Claim
+   * your seat" button entirely — owned by `useAutomaticPromotion`
+   * (called from `EventRoom`), not `RoomControls` itself, since the
+   * countdown must keep running/surviving a rotation the same way every
+   * other piece of live room state does.
+   */
+  promotionCountdown: number | null;
+  /** Cancels an in-progress countdown (if any) and withdraws the pending request — the same action whether triggered from the countdown's "Cancel" or the plain waiting state's "Withdraw", since both mean "stop trying to get a seat." */
+  onCancelPromotion: () => void;
   /** Issue #27: whether the composer is in speaker-request mode — set directly by its own 🎤 toggle, or by tapping an empty seat that turns out to have a queue (see onTapEmptySeat). */
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;

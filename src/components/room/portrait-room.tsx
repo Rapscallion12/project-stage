@@ -52,6 +52,8 @@ export function PortraitRoom({
   isSpeaker,
   hasPendingRequest,
   onHasPendingRequestChange,
+  promotionCountdown,
+  onCancelPromotion,
   micRequestMode,
   onMicRequestModeChange,
   onTapEmptySeat,
@@ -103,7 +105,8 @@ export function PortraitRoom({
             eventId={event.id}
             isSpeaker={isSpeaker}
             hasPendingRequest={hasPendingRequest}
-            onHasPendingRequestChange={onHasPendingRequestChange}
+            promotionCountdown={promotionCountdown}
+            onCancelPromotion={onCancelPromotion}
             canPublish={canPublish}
             needsMediaActivation={needsMediaActivation}
             activateMedia={activateMedia}

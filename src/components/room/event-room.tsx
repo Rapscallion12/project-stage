@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useActiveSpeakers } from "@/hooks/use-active-speakers";
+import { useAutomaticPromotion } from "@/hooks/use-automatic-promotion";
 import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
@@ -113,6 +114,22 @@ export function EventRoom({
     identity.type === "profile" ? s.profile_id === identity.id : s.guest_id === identity.id,
   );
 
+  // Issue #23: replaces the manual "Claim your seat" button. Called
+  // unconditionally here (above the phase==="upcoming" early return
+  // below), same discipline as every other piece of live state in this
+  // component — must survive rotation, and RoomControls (which renders
+  // the countdown UI) is a presentation-only descendant, not where this
+  // can live.
+  const { countdown: promotionCountdown, cancel: cancelPromotion } = useAutomaticPromotion({
+    eventId: event.id,
+    hasPendingRequest,
+    isSpeaker,
+    phase,
+    needsMediaActivation: connection.needsMediaActivation,
+    mediaError: connection.mediaError,
+    onHasPendingRequestChange: setHasPendingRequest,
+  });
+
   if (phase === "upcoming") {
     const now = nowMs === null ? null : new Date(nowMs);
     return (
@@ -148,6 +165,8 @@ export function EventRoom({
     isSpeaker,
     hasPendingRequest,
     onHasPendingRequestChange: setHasPendingRequest,
+    promotionCountdown,
+    onCancelPromotion: cancelPromotion,
     micRequestMode,
     onMicRequestModeChange: setMicRequestMode,
     onTapEmptySeat: handleTapEmptySeat,
