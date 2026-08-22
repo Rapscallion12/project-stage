@@ -33,6 +33,23 @@ separate release cadence to track here.
 
 ### Added
 
+- **Permanent, always-discoverable test room** — real-device testing
+  repeatedly hit "Nothing scheduled right now" on the deployed Browse
+  Events page (a dev-harness fixture aged past the list's 2-hour
+  visibility cutoff, or a reset deleted it between sessions). Migration
+  `00000000000015` adds `events.is_permanent_test` and inserts one
+  fixed-id row, "[DEV] Always-On Test Room" — enforced to be at most one
+  by a partial unique index, verified directly (a second insert
+  correctly raises a unique-constraint violation). `listUpcomingEvents`
+  exempts it from the events list's time-based cutoff and sorts it
+  first; `scheduled_start` is pinned to migration-apply time and needs
+  no special-casing to stay "ready" forever, since `getEventPhase`
+  already treats any past `scheduled_start` that way. Both reset paths
+  (`scripts/dev-harness.mts`'s `resetHarness`, the `/dev` page's
+  `resetDevDemoEvents`) now explicitly exclude it — verified with new
+  integration tests against the real linked project. New `clear-sandbox`
+  command clears its chat/speaker state without deleting the row. See
+  README.md's Development test harness section and DECISIONS.md.
 - **Video-first room shell, corrective pass** (issue #20) — the first
   pass (below) shipped a compact-but-still-separate footer below the
   video; real-device testing found that didn't meet the issue's own bar

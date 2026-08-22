@@ -3,6 +3,72 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-21 — Permanent test room: a database-level guarantee, not a workflow habit
+
+**Problem**: real-device testing hit "Nothing scheduled right now" on
+Browse Events three times across sessions (Session 20, and twice in this
+one) — a dev-harness fixture's `scheduled_start` aged past the events
+list's 2-hour visibility cutoff, or a `reset` (this session's or an
+unknown prior one's) deleted the one event a session depended on. The
+user was explicit this was no longer acceptable: the deployed app must
+always have at least one testable room reachable through the real
+Browse Events → tap → room journey, with zero commands run first, and
+the guarantee must survive resets and the passage of time between
+sessions — not just "the last person to test remembered to leave one."
+
+**Alternatives considered**:
+- A cron job that periodically bumps a fixture's `scheduled_start`
+  forward. Rejected: this project's deployment tier (Vercel Hobby, see
+  README's Deployment section) only supports daily-granularity cron
+  without a paid upgrade — the same constraint already hit and rejected
+  for issue #25's voting-window evaluation — and it's real new
+  infrastructure for a problem that doesn't need a timer at all (see
+  below).
+- A session-start checklist ("always verify/recreate the fixture before
+  asking the user to test"). This is necessary discipline regardless
+  (see the `feedback_real_device_verification` memory) but isn't
+  sufficient on its own — it depends on remembering, every session,
+  forever, which is exactly the class of failure that already happened
+  twice. A durable fix shouldn't depend on procedural memory.
+
+**Decision**: one permanent database row, not a periodically-refreshed
+one. `events.is_permanent_test` (migration `00000000000015`), enforced
+to be at most one by a partial unique index — a real invariant, not a
+convention (verified: a second insert attempt raises a genuine
+unique-constraint violation). Its `scheduled_start` is pinned once, at
+migration-apply time, and never needs to change again:
+`getEventPhase` (`lib/events.ts`) already treats any *past*
+`scheduled_start` as `"ready"` forever — the row doesn't need to be kept
+"fresh," it needs to be *exempted from the query that hides old things*.
+`listUpcomingEvents` now does exactly that (`.or()`-ing the permanent
+flag in alongside the normal cutoff, sorted first) — zero changes to
+phase/countdown logic anywhere else in the app. Both reset paths
+(`dev-harness.mts`, the `/dev` page's action) explicitly exclude
+`is_permanent_test` rows, verified with new integration tests against
+the real linked project — not just asserted from the title convention
+already making them structurally unlikely to match.
+
+**Reason this is the *smallest* reliable solution, not just *a*
+solution**: it required touching exactly one query's filter/sort clause,
+two reset functions' `WHERE` clauses, and one migration — no new
+infrastructure (no cron, no scheduled function, no new service), no
+special-casing of any existing time-computation logic
+(`getEventPhase`/`EventCountdown`/`formatCountdown` are all completely
+unchanged), and no new authorization surface (RLS on `events` already
+allows public SELECT unconditionally, so no policy change was needed
+either).
+
+**Tradeoffs**: the card's displayed date (`formatEventDateTime`) will
+show the day the migration was applied, indefinitely — not updated to
+look "current." Accepted deliberately: this room is unmistakably labeled
+`[DEV] Always-On Test Room`, and building special-case display logic
+just to make a test fixture's timestamp look fresher isn't worth the
+added surface area for a prototype-phase tool. `clear-sandbox` (new
+`dev-harness.mts` command) exists specifically so its *content* doesn't
+need to look stale either, without deleting the row itself.
+
+---
+
 ## 2026-08-20 — Video-first room redesign finalized, issues #19–#25 created
 
 **Problem**: Session 21's participation-friction design work (queue/mic-request/

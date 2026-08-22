@@ -215,6 +215,29 @@ site before the user is asked to test again.
 pass. Stop for real-device confirmation — do not continue into #22
 automatically.
 
+**Test-room disappearance escalated to a permanent fix, same session**:
+after the #20 corrective pass verification, the user hit the exact same
+"Nothing scheduled right now" dead end a third time (Session 20's
+retest, and twice already this session). They were explicit this could
+no longer be a one-off fixture recreated per-session — the deployed app
+needed a durable, database-level guarantee. Built and shipped: a
+permanent `is_permanent_test` event row ("[DEV] Always-On Test Room",
+migration `00000000000015`), enforced to be at most one by a partial
+unique index, exempted from the events list's time-based visibility
+cutoff, and excluded from both reset paths
+(`dev-harness.mts`/`resetDevDemoEvents`) — full reasoning, including the
+rejected cron-based alternative, in DECISIONS.md. New `clear-sandbox`
+command tidies its transient state without deleting it. Verified with
+two new integration tests against the real linked project (survives a
+real `resetHarness` call; `clear-sandbox` removes chat/speaker rows but
+not the event itself), plus direct verification against the deployed
+production site (Browse Events → the room → unified room, no commands
+run). lint/tsc/build/test all pass (160/160).
+
+**Next task**: real-device confirmation of #20's corrective pass, now
+against a permanently working test path — this problem should not
+recur. Do not continue into #21/#22 until that confirmation happens.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work
