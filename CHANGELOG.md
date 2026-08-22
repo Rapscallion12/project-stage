@@ -33,6 +33,20 @@ separate release cadence to track here.
 
 ### Added
 
+- **"Join Live Audience" one-click fast path** (issue #26) — a prominent
+  landing-page CTA (not "Join Now," which reads as signup/registration/
+  speaker-join) links to `/join`, a plain GET redirect with nothing to
+  render: no confirmation screen, no account requirement, exactly one
+  tap from the landing page into a room. `findJoinableEvent`
+  (`lib/repositories/events.ts`) prefers a joinable room with active
+  speakers, falls back to any joinable room (the permanent test room
+  guarantees this tier is normally never empty during development), and
+  falls back to Browse Events if genuinely nothing is joinable — no
+  recommendation/matchmaking/scoring. Lands with the same guest identity
+  and audience-by-default state as tapping an `EventCard` does; `/join`
+  only chooses which room, never touches mic/camera/seat state. Not
+  marked Done pending the user's own real-device confirmation. See
+  issue #26 and SESSION_LOG.md.
 - **Permanent, always-discoverable test room** — real-device testing
   repeatedly hit "Nothing scheduled right now" on the deployed Browse
   Events page (a dev-harness fixture aged past the list's 2-hour

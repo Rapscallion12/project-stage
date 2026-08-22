@@ -238,6 +238,36 @@ run). lint/tsc/build/test all pass (160/160).
 against a permanently working test path — this problem should not
 recur. Do not continue into #21/#22 until that confirmation happens.
 
+**Redirected mid-session, same session**: the user paused the #20–#27
+roadmap sequence entirely to solve one interaction at a time, starting
+with issue #26 ("Join Live Audience"). Re-read #26 fresh — its body
+already matched the requirements restated in the redirect exactly, no
+drift, no update needed. Implemented: `findJoinableEvent`
+(`lib/repositories/events.ts`) — prefers a joinable event with active
+speakers, falls back to any joinable event (ordering reused from
+`listUpcomingEvents`, no new scoring), falls back to `null` (→ Browse
+Events) if nothing qualifies; `listEventIdsWithActiveSpeakers`
+(`lib/repositories/event-speakers.ts`), the one new query; `/join`
+(`src/app/join/route.ts`), a plain GET redirect, no page; the landing
+page's `Hero` gained the "Join Live Audience" CTA (prominent) alongside
+"Browse events" (secondary) and "See how it works" (demoted to tertiary,
+its own line). No dedicated unit test — `findJoinableEvent` depends on
+the cookie-based server client, which throws outside a real Next.js
+request, the same reason no test file has ever existed for
+`listUpcomingEvents`/`getEventById` either; verified instead via a local
+production build/server (`/join` correctly 307-redirected to a real
+room) before merging. lint/tsc/build/test all pass (160/160, no
+regressions). Merged, pushed, production deployment confirmed, and the
+real production journey (landing → Join Live Audience → room) verified
+directly against the deployed site.
+
+**Next task**: stop for the user's own real-device confirmation of the
+Join Live Audience path specifically — landing page obviousness, one-tap
+behavior, no Browse Events step, no login/signup, lands as audience, no
+unexpected camera/mic, destination room works. Do not begin #20's
+real-device confirmation or any other feature until this one is
+confirmed — the user was explicit about doing one interaction at a time.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

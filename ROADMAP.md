@@ -37,6 +37,14 @@ Supabase call scattered into a page or action.
 - [x] `profiles` table + auto-provisioning trigger
 - [x] Landing page (guest-first — no signup/login funneling as the primary
       call to action; see DECISIONS.md for the correction that drove this)
+- [ ] "Join Live Audience" one-click fast path (issue #26) — `/join`
+      redirects straight into the best currently-joinable room (prefers
+      one with active speakers, falls back to any joinable room, falls
+      back to Browse Events if genuinely nothing is joinable), no
+      intermediate screen, lands as audience with the same guest identity
+      any other entry point uses. **Not checked off as fully done** —
+      pending the user's own real-device confirmation from the actual
+      landing page. See SESSION_LOG.md.
 - [x] Authentication, as an **optional account upgrade** (sign up, log in,
       log out) — not an entry gate. No route redirects an unauthenticated
       visitor away.
