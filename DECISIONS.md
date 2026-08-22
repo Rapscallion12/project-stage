@@ -3,6 +3,57 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Speaker divider fixed by CSS stacking containment, not z-index escalation
+
+**Problem**: real-device screenshots showed the speaker divider (and its
+decorative center dot) painting on top of "Claim your seat"/"Withdraw",
+the composer, and other foreground controls — a genuinely broken-looking
+interface, not a cosmetic nitpick. The user explicitly ruled out the
+obvious quick fix (raising every foreground button's z-index until it
+happened to outrank the divider), correctly identifying that as a hack
+that treats the symptom per-element instead of the actual cause.
+
+**Root cause, confirmed by inspection, not guessed**: `SpeakerStage`'s
+root div was `className="relative h-full w-full ..."` — `position:
+relative` with an implicit `z-index: auto`. A stacking context requires
+*both* a position value and a non-`auto` z-index; with only the former,
+the divider's own `z-index: 10` did not stay scoped inside the stage —
+it escaped to whichever ancestor actually established a stacking
+context, landing it in direct competition with `stage-bottom-overlay`
+(the chat/controls layer in `portrait-room.tsx`), which had no z-index
+at all. `10 > auto`, so the divider won, regardless of DOM order or
+which element was "supposed" to be on top.
+
+**Decision**: fix containment at the source. `SpeakerStage`'s root
+becomes `relative z-0` — `0` is a real value (unlike `auto`), so this
+now genuinely establishes its own stacking context, and everything
+nested inside it is permanently confined to comparing z-index only
+against its own siblings within that context, never against anything
+outside `SpeakerStage` again. `stage-bottom-overlay` gets an explicit
+`z-10` to make the outer ordering self-documenting rather than an
+implicit DOM-order tiebreak. With the stage now contained, the divider
+itself no longer needs a z-index at all — it never overlapped the tiles
+it sits between, so the `z-10`/`relative` on it were removed entirely,
+netting *less* code, not more.
+
+**Reason this generalizes rather than being a one-off patch**: any
+z-index #21 or #25 later add *inside* `SpeakerStage` (a drag handle, a
+voting-active highlight) is now automatically contained by the same
+`z-0` root — there is no way for a future change inside the stage to
+reintroduce this bug without deliberately breaking the containment
+itself.
+
+**Also removed**: the divider's circular center dot. It had no
+user-facing function yet (#21/#25 haven't landed), and was itself part
+of the visual clutter flagged — kept only the divider bar, the actual
+structural anchor those issues need.
+
+**Tradeoffs**: none — this is pure layering/paint-order correction, zero
+behavior change to LiveKit, video geometry, Join Live Audience, the
+always-on test room, tap-to-join, or the mic-mode composer.
+
+---
+
 ## 2026-08-22 — Speaker-entry friction removed; verification tiers codified in AGENTS.md
 
 **Problem**: real-device testing of the room found the standalone

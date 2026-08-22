@@ -31,6 +31,23 @@ separate release cadence to track here.
   prerelease. Issues #15/#16/#17 remain open — this checkpoint doesn't
   close them.
 
+### Fixed
+
+- **Speaker divider bleeding across chat/controls** — root cause:
+  `SpeakerStage`'s root was `relative` with no explicit `z-index`, which
+  does not establish a CSS stacking context; the divider's own
+  `z-index: 10` escaped past it to compete directly against
+  `stage-bottom-overlay` (which had none), painting on top regardless of
+  DOM order. Fixed by containment (`relative z-0` on the stage's root,
+  a real value so it actually creates its own stacking context) rather
+  than raising individual foreground controls' z-index to outrank it —
+  everything inside the stage, now and whatever #21/#25 add later, is
+  permanently contained and can't escape again. `stage-bottom-overlay`
+  gets an explicit `z-10` for the same reason, not a value chosen to
+  just barely win. The divider's decorative center dot (no function
+  until #21/#25) is removed; the bar itself is unchanged. See
+  DECISIONS.md.
+
 ### Added
 
 - **Speaker-entry friction removed** (issues #22 partial + #27 full) —

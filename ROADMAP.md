@@ -284,9 +284,14 @@ different dependencies. Current order:
       now a true bottom overlay over the video (portrait) with an
       always-on legibility gradient (distinct from the still-inert
       `room-scrim`, still #21's job), self-preview slot moved to the
-      top-right. **Still not checked off** — stays in Testing/Review
-      until confirmed on a real iPhone against the original gut-check
-      bar. See SESSION_LOG.md and DECISIONS.md.
+      top-right. Third pass: fixed the divider bleeding across chat/
+      controls (a missing CSS stacking context on the stage's own root —
+      `relative` alone doesn't establish one, `relative z-0` does), and
+      removed the divider's decorative center dot (no function until
+      #21/#25, was contributing to visual clutter). **Still not checked
+      off** — stays in Testing/Review until confirmed on a real iPhone
+      against the original gut-check bar. See SESSION_LOG.md and
+      DECISIONS.md.
 - [ ] Composer mic-request + candidate readiness/self-preview (issue
       #22) — **composer-integrated request shipped** (🎤 toggle in the
       existing chat composer, replacing the standalone "Request the mic"

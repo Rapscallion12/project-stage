@@ -321,6 +321,36 @@ interaction specifically (see this turn's response for the exact
 checklist). Do not begin #21, #23, #24, #25, or any other feature until
 confirmed.
 
+**Direct tap-to-join confirmed real-device verified by the user, same
+session** — the first item to reach that bar. Immediately redirected to
+a new problem from the same real-device pass: the speaker divider (and
+its center dot) visibly painting on top of "Claim your seat"/"Withdraw"/
+composer/chat in real screenshots.
+
+**Root cause inspected before any code change**, per instruction:
+`SpeakerStage`'s root was `relative` with no explicit `z-index` — which
+does not establish a CSS stacking context (that needs position *and* a
+non-`auto` z-index together). Without one, the divider's `z-index: 10`
+escaped past the stage entirely to compete directly against
+`stage-bottom-overlay` (no z-index of its own) at an ancestor stacking
+level, and `10 > auto` put it on top regardless of DOM order. Fixed by
+containment, not per-element z-index escalation (explicitly ruled out):
+`SpeakerStage`'s root is now `relative z-0`, permanently confining
+everything inside it; `stage-bottom-overlay` gets an explicit `z-10` for
+an unambiguous outer ordering. The divider itself needed no z-index at
+all once properly contained — removed along with its decorative center
+dot (no function until #21/#25, part of the flagged clutter). Full
+reasoning in DECISIONS.md.
+
+lint/tsc/build/test all pass (180/180, 4 new regression tests). Merged,
+pushed, production deployment confirmed. Zero behavior change to
+LiveKit/video geometry/Join Live Audience/the test room/tap-to-join/
+mic-mode composer — pure layering fix.
+
+**Next task**: stop for the user's own real-device visual confirmation
+that no divider/dot/decoration crosses foreground UI anywhere. Do not
+begin #21, #23, #24, #25, or any other feature until confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work
