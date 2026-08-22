@@ -36,6 +36,38 @@ describe("SpeakerTile", () => {
     expect(screen.queryByTestId("speaker-tile")).not.toBeInTheDocument();
   });
 
+  describe("direct empty-seat join (issue #27)", () => {
+    it("is a plain, non-interactive placeholder when no onTapEmptySeat is given", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} />);
+      expect(screen.getByTestId("empty-seat").tagName).toBe("DIV");
+    });
+
+    it("becomes a real tappable button when onTapEmptySeat is provided, calling it directly from the click handler", () => {
+      const onTapEmptySeat = vi.fn();
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("BUTTON");
+      fireEvent.click(tile);
+      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a 'Joining…' state and disables the tile while a join attempt is in flight", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerTile
+          speaker={null}
+          participant={undefined}
+          isLocal={false}
+          onTapEmptySeat={onTapEmptySeat}
+          isJoiningSeat={true}
+        />,
+      );
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile).toHaveTextContent("Joining…");
+      expect(tile).toBeDisabled();
+    });
+  });
+
   it("shows the speaker's name (from the DB) even with no LiveKit participant connected yet", () => {
     render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
     expect(screen.getByTestId("speaker-tile")).toHaveTextContent("Jamie Rivera");

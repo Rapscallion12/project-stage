@@ -1,25 +1,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RoomControls } from "./room-controls";
-import type { Identity } from "@/lib/identity";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 
-const { leaveSpeakerSeat, requestToSpeak, withdrawSpeakerRequest, claimOpenSeat } = vi.hoisted(() => ({
+const { leaveSpeakerSeat, withdrawSpeakerRequest, claimOpenSeat } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
-  requestToSpeak: vi.fn(),
   withdrawSpeakerRequest: vi.fn(),
   claimOpenSeat: vi.fn(),
 }));
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
   leaveSpeakerSeat,
-  requestToSpeak,
   withdrawSpeakerRequest,
   claimOpenSeat,
 }));
-
-const profileIdentity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
-const guestIdentity: Identity = { type: "guest", id: "g1", displayName: "Curious Fox" };
 
 /** A speaker who's already fully connected and publishing — the common case for the non-media-focused tests below. */
 const readyMediaProps = {
@@ -35,60 +29,35 @@ const readyMediaProps = {
 };
 
 describe("RoomControls", () => {
-  it("shows 'Leave the stage' for an active speaker, never the request controls", () => {
+  it("shows 'Leave the stage' for an active speaker", () => {
     render(
       <RoomControls
         eventId="e1"
         isSpeaker
-        identity={profileIdentity}
         hasPendingRequest={false}
+        onHasPendingRequestChange={vi.fn()}
         {...readyMediaProps}
       />,
     );
     expect(screen.getByRole("button", { name: "Leave the stage" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Request the mic" })).not.toBeInTheDocument();
   });
 
-  it("lets a guest proceed to the request form, same as an account holder — guest participation is enabled by default (issue #16)", () => {
-    render(
+  // Issue #27: the standalone "Request the mic" control (and its
+  // justification form) is gone — that entry point is now the composer's
+  // own 🎤 mode (see chat-panel.test.tsx) and tapping an empty seat
+  // directly (see speaker-tile.test.tsx). RoomControls has nothing left
+  // to show for a plain audience member with no pending request.
+  it("renders nothing for a plain audience member with no pending request — the request entry points live elsewhere now", () => {
+    const { container } = render(
       <RoomControls
         eventId="e1"
         isSpeaker={false}
-        identity={guestIdentity}
         hasPendingRequest={false}
+        onHasPendingRequestChange={vi.fn()}
         {...readyMediaProps}
       />,
     );
-    expect(screen.queryByText(/Create an account/)).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Request the mic" }));
-
-    expect(screen.queryByText("Create an account to request the mic.")).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Why should you get the mic?")).toBeInTheDocument();
-  });
-
-  it("an account holder can open the request form and submit, moving to the pending state", async () => {
-    requestToSpeak.mockResolvedValue({ ok: true });
-    render(
-      <RoomControls
-        eventId="e1"
-        isSpeaker={false}
-        identity={profileIdentity}
-        hasPendingRequest={false}
-        {...readyMediaProps}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Request the mic" }));
-    fireEvent.change(screen.getByPlaceholderText("Why should you get the mic?"), {
-      target: { value: "I have thoughts." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-
-    await waitFor(() => expect(screen.getByText("Your request is live in chat.")).toBeInTheDocument());
-    expect(requestToSpeak).toHaveBeenCalledWith("e1", "I have thoughts.");
-    expect(screen.getByRole("button", { name: "Claim your seat" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows a server rejection inline without changing state when claiming fails", async () => {
@@ -97,8 +66,8 @@ describe("RoomControls", () => {
       <RoomControls
         eventId="e1"
         isSpeaker={false}
-        identity={profileIdentity}
         hasPendingRequest={true}
+        onHasPendingRequestChange={vi.fn()}
         {...readyMediaProps}
       />,
     );
@@ -112,21 +81,40 @@ describe("RoomControls", () => {
     expect(screen.getByRole("button", { name: "Withdraw" })).toBeInTheDocument();
   });
 
-  it("withdrawing returns to the 'Request the mic' state", async () => {
+  it("withdrawing calls onHasPendingRequestChange(false), the same lifted-state signal the composer's successful submission also drives", async () => {
     withdrawSpeakerRequest.mockResolvedValue({ ok: true });
+    const onHasPendingRequestChange = vi.fn();
     render(
       <RoomControls
         eventId="e1"
         isSpeaker={false}
-        identity={profileIdentity}
         hasPendingRequest={true}
+        onHasPendingRequestChange={onHasPendingRequestChange}
         {...readyMediaProps}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Withdraw" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Request the mic" })).toBeInTheDocument());
+    await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(false));
+  });
+
+  it("claiming successfully calls onHasPendingRequestChange(false) too", async () => {
+    claimOpenSeat.mockResolvedValue({ ok: true });
+    const onHasPendingRequestChange = vi.fn();
+    render(
+      <RoomControls
+        eventId="e1"
+        isSpeaker={false}
+        hasPendingRequest={true}
+        onHasPendingRequestChange={onHasPendingRequestChange}
+        {...readyMediaProps}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Claim your seat" }));
+
+    await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(false));
   });
 
   describe("camera/mic activation and error states (issue #15)", () => {
@@ -136,8 +124,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker
-          identity={profileIdentity}
           hasPendingRequest={false}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           needsMediaActivation
           activateMedia={activateMedia}
@@ -154,8 +142,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker
-          identity={profileIdentity}
           hasPendingRequest={false}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
         />,
       );
@@ -167,8 +155,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker
-          identity={profileIdentity}
           hasPendingRequest={false}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           mediaError={{ source: "camera", reason: "permission-denied" }}
         />,
@@ -181,8 +169,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker
-          identity={profileIdentity}
           hasPendingRequest={false}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           mediaError={{ source: "microphone", reason: "no-device" }}
         />,
@@ -195,8 +183,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker
-          identity={profileIdentity}
           hasPendingRequest={false}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           canPublish={false}
           needsMediaActivation={false}
@@ -210,8 +198,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker
-          identity={profileIdentity}
           hasPendingRequest={false}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           canPublish={false}
           needsMediaActivation={false}
@@ -222,42 +210,14 @@ describe("RoomControls", () => {
     });
   });
 
-  describe("guest participation disabled (issue #16's flag turned off)", () => {
-    // A separate module registry, not the file's top-level RoomControls
-    // import — PROTOTYPE_CONFIG is mocked to its pre-#16 value only for
-    // this dynamically re-imported instance, so every other test in this
-    // file keeps exercising the real, default-on config.
-    it("still shows the account prompt when PROTOTYPE_CONFIG.guestParticipationEnabled is false", async () => {
-      vi.resetModules();
-      vi.doMock("@/lib/config", () => ({ PROTOTYPE_CONFIG: { guestParticipationEnabled: false } }));
-      const { RoomControls: RoomControlsWithGuestsDisabled } = await import("./room-controls");
-
-      render(
-        <RoomControlsWithGuestsDisabled
-          eventId="e1"
-          isSpeaker={false}
-          identity={guestIdentity}
-          hasPendingRequest={false}
-          {...readyMediaProps}
-        />,
-      );
-
-      fireEvent.click(screen.getByRole("button", { name: "Request the mic" }));
-      expect(screen.getByText("Create an account to request the mic.")).toBeInTheDocument();
-
-      vi.doUnmock("@/lib/config");
-      vi.resetModules();
-    });
-  });
-
   describe("claiming a seat is gated to phase === \"ready\" (issue #17)", () => {
     it("hides the 'Claim your seat' button pre-show, showing a countdown-aware explanation instead", () => {
       render(
         <RoomControls
           eventId="e1"
           isSpeaker={false}
-          identity={profileIdentity}
           hasPendingRequest={true}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           phase="lobby_open"
           countdownText="Live in 2h 15m"
@@ -274,8 +234,8 @@ describe("RoomControls", () => {
         <RoomControls
           eventId="e1"
           isSpeaker={false}
-          identity={profileIdentity}
           hasPendingRequest={true}
+          onHasPendingRequestChange={vi.fn()}
           {...readyMediaProps}
           phase="ready"
           countdownText={null}

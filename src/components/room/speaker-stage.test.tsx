@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SpeakerStage } from "./speaker-stage";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -24,6 +24,8 @@ const baseProps = {
   needsMediaActivation: false,
   activateMedia: vi.fn(async () => {}),
   mediaError: null,
+  onTapEmptySeat: vi.fn(),
+  isJoiningSeat: false,
 };
 
 describe("SpeakerStage", () => {
@@ -71,5 +73,33 @@ describe("SpeakerStage", () => {
     expect(scrim).toBeInTheDocument();
     expect(scrim.className).toMatch(/\bopacity-0\b/);
     expect(scrim.className).toMatch(/\bpointer-events-none\b/);
+  });
+
+  describe("direct empty-seat join (issue #27)", () => {
+    it("wires onTapEmptySeat into an empty tile's tap handler when the viewer isn't already speaking", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+      const [firstSeat] = screen.getAllByTestId("empty-seat");
+      expect(firstSeat.tagName).toBe("BUTTON");
+
+      fireEvent.click(firstSeat);
+      expect(baseProps.onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("never offers the tap-to-join affordance on a viewer who already holds the other seat", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          onTapEmptySeat={onTapEmptySeat}
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.tagName).toBe("DIV");
+      fireEvent.click(emptySeat);
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+    });
   });
 });

@@ -44,6 +44,12 @@ export function PortraitRoom({
   identity,
   isSpeaker,
   hasPendingRequest,
+  onHasPendingRequestChange,
+  micRequestMode,
+  onMicRequestModeChange,
+  onTapEmptySeat,
+  isJoiningSeat,
+  joinSeatMessage,
   getParticipant,
   participantCount,
   connectionStatus,
@@ -72,17 +78,25 @@ export function PortraitRoom({
           activateMedia={activateMedia}
           mediaError={mediaError}
           orientation="portrait"
+          onTapEmptySeat={onTapEmptySeat}
+          isJoiningSeat={isJoiningSeat}
         />
         <div
           data-testid="stage-bottom-overlay"
           className="stage-overlay absolute inset-x-0 bottom-0 flex flex-col gap-1 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pt-14 pb-3"
         >
           {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
+          {/* Issue #27: feedback for a failed empty-seat tap (e.g. the guest account-prompt) — a queue-exists result never lands here, it switches the composer to request mode instead. */}
+          {joinSeatMessage && (
+            <p className="text-xs text-red-500" role="alert">
+              {joinSeatMessage}
+            </p>
+          )}
           <RoomControls
             eventId={event.id}
             isSpeaker={isSpeaker}
-            identity={identity}
             hasPendingRequest={hasPendingRequest}
+            onHasPendingRequestChange={onHasPendingRequestChange}
             canPublish={canPublish}
             needsMediaActivation={needsMediaActivation}
             activateMedia={activateMedia}
@@ -92,7 +106,15 @@ export function PortraitRoom({
             countdownText={countdownText}
           />
           <div className="h-40 min-h-0">
-            <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="h-full" />
+            <RoomChatPanel
+              eventId={event.id}
+              messages={messages}
+              reactions={reactions}
+              micRequestMode={micRequestMode}
+              onMicRequestModeChange={onMicRequestModeChange}
+              onHasPendingRequestChange={onHasPendingRequestChange}
+              className="h-full"
+            />
           </div>
         </div>
       </div>

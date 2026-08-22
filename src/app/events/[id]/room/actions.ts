@@ -11,6 +11,7 @@ import {
   leaveSpeakerSeatAsGuest,
   listActiveSpeakers,
 } from "@/lib/repositories/event-speakers";
+import { findOpenSeat } from "@/lib/speaker-queue";
 import {
   getPendingRequestForIdentity,
   markSpeakerRequestGranted,
@@ -219,4 +220,97 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
   await syncPublishPermission({ eventId, identity, canPublish: true });
 
   return { ok: true };
+}
+
+export type JoinOpenSeatResult =
+  | { ok: true }
+  | { ok: false; reason: "queue-exists" }
+  | { ok: false; reason: "error"; error: string };
+
+/**
+ * Issue #27: tapping a visibly empty seat tile when nobody is queued for
+ * it. Deliberately a *different* entry point from `claimOpenSeat` above,
+ * not a variant of it — that one exists specifically for a requester who
+ * already went through ranking; this one exists specifically for when
+ * there's no ranking to go through. No request message, no separate
+ * claim step: one tap, one round-trip.
+ *
+ * Queue protection is the actual point of this function, checked here
+ * server-side (never trusted from the client): if *any* pending
+ * `speaker_requests` exist for the event, this refuses outright and
+ * returns `"queue-exists"` — the caller (the empty tile's tap handler)
+ * is expected to fall back to the composer's mic-request mode instead,
+ * but even a client that skipped that fallback and called this directly
+ * would still be refused here, since the check happens before any seat
+ * is touched.
+ *
+ * Reuses `claimSpeakerSeat` exactly as `claimOpenSeat` does — no new
+ * database-level primitive. Two simultaneous taps on the same genuinely
+ * empty seat still resolve to exactly one winner via
+ * `event_speakers_active_seat_uniq` (migration 00000000000005), the same
+ * partial unique index every other seat-claim path already relies on;
+ * the loser's `claimSpeakerSeat` call throws and this returns a plain
+ * "try again" error, never a silent overwrite.
+ */
+export async function joinOpenSeat(eventId: string): Promise<JoinOpenSeatResult> {
+  const identity = await resolveIdentity();
+  if (identity.type !== "profile" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
+    return { ok: false, reason: "error", error: "Create an account to join as a speaker." };
+  }
+
+  const event = await getEventById(eventId);
+  if (!event || getEventPhase(event) !== "ready") {
+    return { ok: false, reason: "error", error: "The conversation hasn't started yet — hang tight." };
+  }
+
+  const alreadySeated = await getActiveSeatForIdentity(eventId, identity);
+  if (alreadySeated) {
+    return { ok: false, reason: "error", error: "You're already speaking." };
+  }
+
+  const [activeSpeakers, ranked] = await Promise.all([
+    listActiveSpeakers(eventId),
+    rankPendingSpeakerRequests(eventId),
+  ]);
+
+  // The actual queue-protection check — see this function's own doc
+  // comment. Checked before touching any seat, not after.
+  if (ranked.length > 0) {
+    return { ok: false, reason: "queue-exists" };
+  }
+
+  const seatNumber = findOpenSeat(activeSpeakers);
+  if (seatNumber === null) {
+    return { ok: false, reason: "error", error: "Both seats are currently full." };
+  }
+
+  try {
+    await claimSpeakerSeat(eventId, identity, seatNumber, identity.displayName);
+  } catch {
+    return { ok: false, reason: "error", error: "That seat was just taken — try again." };
+  }
+
+  await syncPublishPermission({ eventId, identity, canPublish: true });
+  return { ok: true };
+}
+
+export type ComposerRequestState = { error: string } | undefined;
+
+/**
+ * Thin `useActionState`-shaped adapter over `requestToSpeak` above — same
+ * business logic, same authoritative path (`request_to_speak`/
+ * `request_to_speak_as_guest`), just matching the `(prevState, formData)`
+ * calling convention the composer's mic-request mode needs, the same way
+ * `sendMessage` (lobby/actions.ts) already does for normal chat. No logic
+ * duplicated here; this only unwraps a `FormData` and re-shapes the
+ * result.
+ */
+export async function submitSpeakerRequest(
+  eventId: string,
+  _prevState: ComposerRequestState,
+  formData: FormData,
+): Promise<ComposerRequestState> {
+  const body = String(formData.get("body") ?? "");
+  const result = await requestToSpeak(eventId, body);
+  return "error" in result ? { error: result.error } : undefined;
 }

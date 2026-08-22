@@ -18,19 +18,32 @@ export function RoomChatPanel({
   eventId,
   messages,
   reactions,
+  micRequestMode,
+  onMicRequestModeChange,
+  onHasPendingRequestChange,
   featuredSlot,
   className,
 }: {
   eventId: string;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  micRequestMode: boolean;
+  onMicRequestModeChange: (value: boolean) => void;
+  onHasPendingRequestChange: (value: boolean) => void;
   featuredSlot?: React.ReactNode;
   className?: string;
 }) {
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
       {featuredSlot}
-      <ChatPanel eventId={eventId} messages={messages} reactions={reactions} />
+      <ChatPanel
+        eventId={eventId}
+        messages={messages}
+        reactions={reactions}
+        micRequestMode={micRequestMode}
+        onMicRequestModeChange={onMicRequestModeChange}
+        onHasPendingRequestChange={onHasPendingRequestChange}
+      />
     </div>
   );
 }

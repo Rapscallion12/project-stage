@@ -2,37 +2,88 @@
 
 import { useActionState, useEffect, useRef } from "react";
 import { sendMessage } from "@/app/events/[id]/lobby/actions";
+import { submitSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { MessageItem } from "@/components/lobby/message-item";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 
 const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
 
+/**
+ * One composer, two modes (issue #27) — never a second form elsewhere in
+ * the room. Normal mode posts a chat message (`sendMessage`, unchanged);
+ * activating 🎤 switches the *same* input/button pair into speaker-
+ * request mode (`submitSpeakerRequest`, a thin adapter over the existing
+ * authoritative `requestToSpeak` — see room/actions.ts), which both
+ * posts the request's badged chat message and creates its
+ * `speaker_requests` row atomically, exactly as the removed standalone
+ * "Request the mic" form already did. Two separate `useActionState`
+ * hooks (one per action, `useActionState` only ever binds one action
+ * each) rather than one, but only one input/button pair is ever
+ * rendered — the mode decides which hook's state/action/pending governs
+ * it, not which component is mounted.
+ *
+ * `micRequestMode` is a controlled prop, not local state — tapping an
+ * empty seat that turns out to have a queue (see `SpeakerTile`/
+ * `EventRoom`) needs to switch this *same* composer into request mode
+ * from outside it, which only works if something above both can set it.
+ */
 export function ChatPanel({
   eventId,
   messages,
   reactions,
+  micRequestMode,
+  onMicRequestModeChange,
+  onHasPendingRequestChange,
 }: {
   eventId: string;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  micRequestMode: boolean;
+  onMicRequestModeChange: (value: boolean) => void;
+  onHasPendingRequestChange: (value: boolean) => void;
 }) {
-  const [state, formAction, pending] = useActionState(sendMessage.bind(null, eventId), undefined);
+  const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
+  const [requestState, requestFormAction, requestPending] = useActionState(
+    submitSpeakerRequest.bind(null, eventId),
+    undefined,
+  );
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const wasPending = useRef(false);
 
-  // Clear the input and refocus once a send completes successfully (no
-  // error in state). Doesn't fire on initial mount since wasPending only
-  // flips true after a real submission.
+  const pending = micRequestMode ? requestPending : sendPending;
+  const error = micRequestMode ? requestState?.error : sendState?.error;
+
+  // Clear the input and refocus once a submission completes successfully
+  // (no error from whichever mode was actually active — not both raw
+  // states, since a stale error from the *other* mode's last attempt
+  // must never block this one) — covers both modes, since only one is
+  // ever pending at a time. A successful request also flips
+  // hasPendingRequest and drops back to normal mode, the same way a
+  // granted claim already updates RoomControls elsewhere.
   useEffect(() => {
-    if (wasPending.current && !pending && !state?.error && inputRef.current) {
-      inputRef.current.value = "";
-      inputRef.current.focus();
+    if (wasPending.current && !pending) {
+      if (!error) {
+        if (inputRef.current) {
+          inputRef.current.value = "";
+          inputRef.current.focus();
+        }
+        if (micRequestMode) {
+          onHasPendingRequestChange(true);
+          onMicRequestModeChange(false);
+        }
+      }
     }
     wasPending.current = pending;
-  }, [pending, state]);
+    // Deliberately not depending on the callbacks themselves — this
+    // effect only cares about the pending->settled transition, the same
+    // "did the transition just happen" check the original single-mode
+    // version used.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, error]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -74,23 +125,38 @@ export function ChatPanel({
             </button>
           ))}
         </div>
-        <form action={formAction} className="flex gap-2">
+        <form action={micRequestMode ? requestFormAction : sendFormAction} className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onMicRequestModeChange(!micRequestMode)}
+            disabled={pending}
+            aria-pressed={micRequestMode}
+            aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
+            className={cn(
+              "flex min-h-11 w-11 shrink-0 items-center justify-center rounded-full border text-base transition-colors disabled:opacity-50",
+              micRequestMode
+                ? "border-accent bg-accent/15 text-accent"
+                : "border-border text-muted hover:bg-foreground/5",
+            )}
+          >
+            🎤
+          </button>
           <Input
             ref={inputRef}
             name="body"
-            placeholder="Say something…"
+            placeholder={micRequestMode ? "What do you want to talk about?" : "Say something…"}
             autoComplete="off"
             maxLength={500}
             required
             className="flex-1"
           />
           <Button type="submit" disabled={pending}>
-            Send
+            {micRequestMode ? (pending ? "Requesting…" : "Request") : pending ? "Sending…" : "Send"}
           </Button>
         </form>
-        {state?.error && (
+        {error && (
           <p className="mt-1.5 text-xs text-red-500" role="alert">
-            {state.error}
+            {error}
           </p>
         )}
       </div>

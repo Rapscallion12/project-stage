@@ -25,6 +25,12 @@ export function LandscapeRoom({
   identity,
   isSpeaker,
   hasPendingRequest,
+  onHasPendingRequestChange,
+  micRequestMode,
+  onMicRequestModeChange,
+  onTapEmptySeat,
+  isJoiningSeat,
+  joinSeatMessage,
   getParticipant,
   participantCount,
   connectionStatus,
@@ -54,13 +60,20 @@ export function LandscapeRoom({
             activateMedia={activateMedia}
             mediaError={mediaError}
             orientation="landscape"
+            onTapEmptySeat={onTapEmptySeat}
+            isJoiningSeat={isJoiningSeat}
           />
         </div>
+        {joinSeatMessage && (
+          <p className="px-4 pt-2 text-xs text-red-500" role="alert">
+            {joinSeatMessage}
+          </p>
+        )}
         <RoomControls
           eventId={event.id}
           isSpeaker={isSpeaker}
-          identity={identity}
           hasPendingRequest={hasPendingRequest}
+          onHasPendingRequestChange={onHasPendingRequestChange}
           canPublish={canPublish}
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
@@ -76,7 +89,15 @@ export function LandscapeRoom({
             <GuestNameEditor initialName={identity.displayName} />
           </div>
         )}
-        <RoomChatPanel eventId={event.id} messages={messages} reactions={reactions} className="min-h-0 flex-1" />
+        <RoomChatPanel
+          eventId={event.id}
+          messages={messages}
+          reactions={reactions}
+          micRequestMode={micRequestMode}
+          onMicRequestModeChange={onMicRequestModeChange}
+          onHasPendingRequestChange={onHasPendingRequestChange}
+          className="min-h-0 flex-1"
+        />
       </div>
     </div>
   );

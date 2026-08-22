@@ -44,6 +44,8 @@ export function SpeakerStage({
   activateMedia,
   mediaError,
   orientation,
+  onTapEmptySeat,
+  isJoiningSeat,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -52,8 +54,17 @@ export function SpeakerStage({
   activateMedia: () => Promise<void>;
   mediaError: MediaError;
   orientation: Orientation;
+  /** Issue #27: tapping either empty seat tile — omitted entirely (not just disabled) when the viewer already holds a seat, since a seated speaker has no use for it. */
+  onTapEmptySeat: () => void;
+  isJoiningSeat: boolean;
 }) {
   const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
+  const viewerIsSpeaking = speakers.some((s) => {
+    const identity = getParticipantIdentity(
+      s.profile_id ? { type: "profile", id: s.profile_id } : { type: "guest", id: s.guest_id! },
+    );
+    return identity === myIdentity;
+  });
 
   function renderTile(seatNumber: 1 | 2) {
     const seat = bySeat(seatNumber);
@@ -74,6 +85,8 @@ export function SpeakerStage({
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
           mediaError={mediaError}
+          onTapEmptySeat={viewerIsSpeaking ? undefined : onTapEmptySeat}
+          isJoiningSeat={isJoiningSeat}
         />
       </div>
     );

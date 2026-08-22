@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -7,9 +7,9 @@ import type { Event } from "@/lib/repositories/events";
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
   leaveSpeakerSeat: vi.fn(),
-  requestToSpeak: vi.fn(),
   withdrawSpeakerRequest: vi.fn(),
   claimOpenSeat: vi.fn(),
+  submitSpeakerRequest: vi.fn(),
 }));
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({
@@ -44,6 +44,12 @@ const baseProps: RoomLayoutProps = {
   identity,
   isSpeaker: false,
   hasPendingRequest: false,
+  onHasPendingRequestChange: vi.fn(),
+  micRequestMode: false,
+  onMicRequestModeChange: vi.fn(),
+  onTapEmptySeat: vi.fn(),
+  isJoiningSeat: false,
+  joinSeatMessage: null,
   getParticipant: () => undefined,
   participantCount: 3,
   connectionStatus: "connected",
@@ -71,5 +77,36 @@ describe("PortraitRoom", () => {
   it("re-scopes the overlay to a fixed dark theme so chat stays legible over live video regardless of the visitor's own light/dark preference", () => {
     render(<PortraitRoom {...baseProps} />);
     expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bstage-overlay\b/);
+  });
+
+  describe("speaker-entry friction removal (issue #27)", () => {
+    it("has no standalone 'Request the mic' control anywhere in the room", () => {
+      render(<PortraitRoom {...baseProps} />);
+      expect(screen.queryByRole("button", { name: /request the mic/i })).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/why should you get the mic/i)).not.toBeInTheDocument();
+    });
+
+    it("has exactly one text composer in the room", () => {
+      render(<PortraitRoom {...baseProps} />);
+      expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    });
+
+    it("tapping an empty seat tile calls onTapEmptySeat", () => {
+      const onTapEmptySeat = vi.fn();
+      render(<PortraitRoom {...baseProps} onTapEmptySeat={onTapEmptySeat} />);
+      fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
+      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a failed join attempt's message near the composer, not silently", () => {
+      render(<PortraitRoom {...baseProps} joinSeatMessage="Create an account to join as a speaker." />);
+      expect(screen.getByText("Create an account to join as a speaker.")).toBeInTheDocument();
+    });
+
+    it("the composer's 🎤 toggle switches it into speaker-request mode", () => {
+      render(<PortraitRoom {...baseProps} micRequestMode={true} />);
+      expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Request" })).toBeInTheDocument();
+    });
   });
 });

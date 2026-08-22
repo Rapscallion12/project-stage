@@ -40,6 +40,8 @@ export function SpeakerTile({
   needsMediaActivation = false,
   activateMedia,
   mediaError = null,
+  onTapEmptySeat,
+  isJoiningSeat = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -49,6 +51,9 @@ export function SpeakerTile({
   /** Must be invoked directly from this tile's own onClick — see useLiveRoomConnection's activateMedia doc comment for why. */
   activateMedia?: () => Promise<void>;
   mediaError?: MediaError;
+  /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
+  onTapEmptySeat?: () => void;
+  isJoiningSeat?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -79,7 +84,24 @@ export function SpeakerTile({
   }, [isLocal, microphonePublication?.track, microphonePublication?.isMuted]);
 
   if (!speaker) {
-    return (
+    // Issue #27: the empty area itself is the entry point now, not a
+    // separate "Request the mic" control elsewhere in the room. Tapping
+    // it attempts to join directly if the seat is genuinely uncontested;
+    // the server decides that (see joinOpenSeat), never this component —
+    // a queue existing falls back to the composer's request mode instead
+    // of anything shown here.
+    return onTapEmptySeat ? (
+      <button
+        type="button"
+        data-testid="empty-seat"
+        onClick={onTapEmptySeat}
+        disabled={isJoiningSeat}
+        className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted transition-colors hover:bg-accent/5 hover:text-accent disabled:opacity-60"
+      >
+        <p className="text-sm font-medium">{isJoiningSeat ? "Joining…" : "Seat open"}</p>
+        {!isJoiningSeat && <p className="text-xs">Tap to join</p>}
+      </button>
+    ) : (
       <div
         data-testid="empty-seat"
         className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted"

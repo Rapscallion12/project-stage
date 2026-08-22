@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import { useActiveSpeakers } from "@/hooks/use-active-speakers";
 import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
@@ -12,6 +13,7 @@ import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { formatCountdown, getEventPhase, type EventPhase } from "@/lib/events";
 import { isDevToolsAvailable } from "@/lib/dev-demo";
+import { joinOpenSeat } from "@/app/events/[id]/room/actions";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -55,6 +57,37 @@ export function EventRoom({
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
   const { speakers, roomStatus } = useActiveSpeakers(event.id, initialSpeakers);
+
+  // Issue #27: lifted above the orientation branch — like every other
+  // piece of state here, this must survive a rotation, and RoomControls/
+  // the composer/the empty-seat tiles are siblings under the branch, not
+  // parent/child, so none of them can own this alone anymore.
+  const [hasPendingRequest, setHasPendingRequest] = useState(initialHasPendingRequest);
+  const [micRequestMode, setMicRequestMode] = useState(false);
+  const [joinSeatMessage, setJoinSeatMessage] = useState<string | null>(null);
+  const [isJoiningSeat, startJoiningSeat] = useTransition();
+
+  function handleTapEmptySeat() {
+    setJoinSeatMessage(null);
+    startJoiningSeat(async () => {
+      const result = await joinOpenSeat(event.id);
+      if (result.ok) {
+        // useActiveSpeakers' own Realtime subscription picks up the new
+        // event_speakers row and isSpeaker flips on its own from there —
+        // nothing else to update locally, same as claimOpenSeat today.
+        return;
+      }
+      if (result.reason === "queue-exists") {
+        // Issue #27's explicit queue-protection UX: a bystander tapping
+        // an empty tile when a real queue exists falls back to the
+        // normal request flow instead of being told "no" and left
+        // stranded — this is that fallback, not an error.
+        setMicRequestMode(true);
+        return;
+      }
+      setJoinSeatMessage(result.error);
+    });
+  }
 
   const nowMs = useNow();
   const phase = nowMs === null ? initialPhase : getEventPhase(event, new Date(nowMs));
@@ -113,7 +146,13 @@ export function EventRoom({
     myIdentity,
     identity,
     isSpeaker,
-    hasPendingRequest: initialHasPendingRequest,
+    hasPendingRequest,
+    onHasPendingRequestChange: setHasPendingRequest,
+    micRequestMode,
+    onMicRequestModeChange: setMicRequestMode,
+    onTapEmptySeat: handleTapEmptySeat,
+    isJoiningSeat,
+    joinSeatMessage,
     getParticipant: connection.getParticipant,
     participantCount: connection.participantCount,
     connectionStatus: connection.status,

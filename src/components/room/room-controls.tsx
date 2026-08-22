@@ -2,17 +2,9 @@
 
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  claimOpenSeat,
-  leaveSpeakerSeat,
-  requestToSpeak,
-  withdrawSpeakerRequest,
-} from "@/app/events/[id]/room/actions";
+import { claimOpenSeat, leaveSpeakerSeat, withdrawSpeakerRequest } from "@/app/events/[id]/room/actions";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
-import { PROTOTYPE_CONFIG } from "@/lib/config";
 import type { EventPhase } from "@/lib/events";
-import type { Identity } from "@/lib/identity";
 
 /** Specific, named copy per failure reason — see MediaErrorReason's doc comment for why these are distinguished instead of a generic "camera off". */
 function mediaErrorMessage(error: NonNullable<MediaError>): string {
@@ -30,37 +22,32 @@ function mediaErrorMessage(error: NonNullable<MediaError>): string {
 }
 
 /**
- * The room's speaker-facing and request-facing controls (issues #13/#3's
- * "Leave the stage", and issue #14's request/withdraw/claim). Always
- * rendered (not gated behind `isSpeaker` the way it was before issue
- * #14) — which of four states it shows depends on `isSpeaker`,
- * `identity.type`, and whether the caller currently has a pending
- * request. No dedicated queue screen: everything here is a small control
- * strip, and the request itself shows up as a normal, badged message in
- * the existing chat feed (see MessageItem), not a separate view.
+ * The room's speaker-facing controls (issues #13/#3's "Leave the stage",
+ * and issue #14's withdraw/claim for a *contested* seat's queue). Always
+ * rendered — which of three states it shows depends on `isSpeaker` and
+ * whether the caller currently has a pending request; renders nothing at
+ * all for a plain audience member with neither.
  *
- * `hasPendingRequest` is local state seeded from a server-fetched prop
- * and updated optimistically after each action's result — there's no
- * realtime subscription for "my own request status" in this issue
- * (speaker_requests is in the Realtime publication for future use, see
- * migration 00000000000011, but nothing subscribes to it yet).
+ * Issue #27 removed this component's fourth state (a standalone
+ * "Request the mic" button + justification form) — that entry point is
+ * now the composer's own 🎤 mode (see `ChatPanel`) and, for a genuinely
+ * uncontested seat, tapping the empty tile directly (see `SpeakerTile`).
+ * This component no longer creates a request at all, only reacts to one
+ * that already exists — `hasPendingRequest` is a controlled prop now
+ * (lifted to `EventRoom`), not local state, since the composer is what
+ * sets it true on a successful submission and this component only reads
+ * it to decide what to show.
  *
- * Guests see the exact same "Request the mic" button everyone else does.
- * With `PROTOTYPE_CONFIG.guestParticipationEnabled` off (its state before
- * issue #16), clicking it is the "action that genuinely requires an
- * account" PRODUCT.md's progressive authentication model describes, and
- * that's the moment the account prompt appears, inline — never a
- * separate, permanently-visible "you can't do this" banner, since
- * PRODUCT.md is explicit that guests should never be interrupted
- * speculatively. With the flag on (issue #16's explicit, reversible
- * prototype-testing exception), a guest proceeds through the exact same
- * request/claim flow an account holder does instead.
+ * The "Claim your seat"/"Withdraw" pair below is unchanged from issue
+ * #14 — a ranked requester's self-service claim once eligible for a
+ * *contested* seat. Automatic promotion (removing this manual step) is
+ * issue #23's job, not touched here.
  */
 export function RoomControls({
   eventId,
   isSpeaker,
-  identity,
-  hasPendingRequest: initialHasPendingRequest,
+  hasPendingRequest,
+  onHasPendingRequestChange,
   canPublish,
   needsMediaActivation,
   activateMedia,
@@ -71,8 +58,8 @@ export function RoomControls({
 }: {
   eventId: string;
   isSpeaker: boolean;
-  identity: Identity;
   hasPendingRequest: boolean;
+  onHasPendingRequestChange: (value: boolean) => void;
   canPublish: boolean;
   needsMediaActivation: boolean;
   activateMedia: () => Promise<void>;
@@ -84,42 +71,12 @@ export function RoomControls({
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [hasPendingRequest, setHasPendingRequest] = useState(initialHasPendingRequest);
-  const [showRequestForm, setShowRequestForm] = useState(false);
-  const [requestBody, setRequestBody] = useState("");
 
   function handleLeave() {
     setError(null);
     startTransition(async () => {
       const result = await leaveSpeakerSeat(eventId);
       if ("error" in result) setError(result.error);
-    });
-  }
-
-  function handleRequestClick() {
-    // Issue #16: guest speaking is an explicit, reversible prototype-
-    // testing exception (PRODUCT.md/DECISIONS.md) — with the flag on, a
-    // guest gets the exact same request form an account holder does;
-    // with it off, this is unchanged from before #16.
-    if (identity.type === "guest" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
-      setError("Create an account to request the mic.");
-      return;
-    }
-    setError(null);
-    setShowRequestForm(true);
-  }
-
-  function handleSubmitRequest() {
-    setError(null);
-    startTransition(async () => {
-      const result = await requestToSpeak(eventId, requestBody);
-      if ("error" in result) {
-        setError(result.error);
-        return;
-      }
-      setHasPendingRequest(true);
-      setShowRequestForm(false);
-      setRequestBody("");
     });
   }
 
@@ -131,7 +88,7 @@ export function RoomControls({
         setError(result.error);
         return;
       }
-      setHasPendingRequest(false);
+      onHasPendingRequestChange(false);
     });
   }
 
@@ -146,7 +103,7 @@ export function RoomControls({
       // useActiveSpeakers' own Realtime subscription picks up the new
       // event_speakers row and this component's `isSpeaker` prop flips
       // on its own from there — nothing else to update locally.
-      setHasPendingRequest(false);
+      onHasPendingRequestChange(false);
     });
   }
 
@@ -221,34 +178,9 @@ export function RoomControls({
     );
   }
 
-  return (
-    <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
-      {showRequestForm ? (
-        <div className="flex gap-2">
-          <Input
-            value={requestBody}
-            onChange={(event) => setRequestBody(event.target.value)}
-            placeholder="Why should you get the mic?"
-            maxLength={500}
-            className="flex-1"
-          />
-          <Button onClick={handleSubmitRequest} disabled={isPending || !requestBody.trim()}>
-            {isPending ? "Submitting…" : "Submit"}
-          </Button>
-          <Button variant="ghost" onClick={() => setShowRequestForm(false)} disabled={isPending}>
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <Button variant="secondary" onClick={handleRequestClick}>
-          Request the mic
-        </Button>
-      )}
-      {error && (
-        <p className="text-xs text-red-500" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  );
+  // Plain audience, no pending request — nothing to show. The entry
+  // points now live elsewhere: the composer's 🎤 mode, or tapping an
+  // empty seat directly (see SpeakerTile) — see this component's own doc
+  // comment for why (issue #27).
+  return null;
 }
