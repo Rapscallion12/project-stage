@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  clearSandbox,
   createHarnessEvent,
   getServiceClient,
   listHarnessState,
@@ -134,5 +135,57 @@ describe.skipIf(!hasServiceCredentials)("dev harness — end-to-end safety bound
 
     const { data: usersAfter } = await client.auth.admin.listUsers({ perPage: 1000 });
     expect(usersAfter.users.some((u) => u.id === realUserId)).toBe(true);
+  });
+
+  it("reset never deletes the permanent test room (migration 00000000000015) — the whole point of excluding it", async () => {
+    const { data: sandboxBefore } = await client.from("events").select("id").eq("is_permanent_test", true).maybeSingle();
+    expect(sandboxBefore).not.toBeNull();
+
+    await resetHarness(client);
+
+    const { data: sandboxAfter } = await client.from("events").select("id").eq("is_permanent_test", true).maybeSingle();
+    expect(sandboxAfter?.id).toBe(sandboxBefore!.id);
+  });
+
+  it("clear-sandbox removes the permanent test room's transient state without deleting the room itself", async () => {
+    const { data: sandbox, error: sandboxError } = await client
+      .from("events")
+      .select("id")
+      .eq("is_permanent_test", true)
+      .single();
+    if (sandboxError || !sandbox) throw new Error(sandboxError?.message ?? "permanent test room not found");
+
+    // Guest-authored fixtures — no real account needed, matching how a
+    // real anonymous visitor would leave state behind in this room.
+    const { error: messageError } = await client.from("event_chat_messages").insert({
+      event_id: sandbox.id,
+      author_guest_id: crypto.randomUUID(),
+      author_display_name: "clear-sandbox test guest",
+      body: "left behind by a test run — clear-sandbox should remove this",
+    });
+    if (messageError) throw new Error(messageError.message);
+
+    const { error: speakerError } = await client.from("event_speakers").insert({
+      event_id: sandbox.id,
+      guest_id: crypto.randomUUID(),
+      seat_number: 2,
+      display_name: "clear-sandbox test guest",
+    });
+    if (speakerError) throw new Error(speakerError.message);
+
+    const result = await clearSandbox(client);
+    expect(result.eventId).toBe(sandbox.id);
+    expect(result.messagesDeleted).toBeGreaterThan(0);
+    expect(result.speakersDeleted).toBeGreaterThan(0);
+
+    const { data: messagesAfter } = await client.from("event_chat_messages").select("id").eq("event_id", sandbox.id);
+    expect(messagesAfter).toEqual([]);
+
+    const { data: speakersAfter } = await client.from("event_speakers").select("id").eq("event_id", sandbox.id);
+    expect(speakersAfter).toEqual([]);
+
+    // The room itself must still exist — that's the entire point.
+    const { data: sandboxStillThere } = await client.from("events").select("id").eq("id", sandbox.id).maybeSingle();
+    expect(sandboxStillThere?.id).toBe(sandbox.id);
   });
 });

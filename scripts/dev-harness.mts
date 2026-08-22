@@ -21,6 +21,7 @@
 //           seat <email-or-label> <1|2> [eventId]
 //           list
 //           reset
+//           clear-sandbox
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { pathToFileURL } from "node:url";
@@ -192,10 +193,16 @@ export async function listHarnessState(client: Client) {
 }
 
 export async function resetHarness(client: Client) {
+  // `is_permanent_test` rows (migration 00000000000015 — the always-on
+  // fixture Browse Events must never end up empty) wouldn't match the
+  // `[dev-harness] ` title prefix anyway, but this explicit exclusion is
+  // a second, independent guard, not just a title convention someone
+  // could accidentally break later.
   const { data: events, error: eventsReadError } = await client
     .from("events")
     .select("id")
-    .ilike("title", `${HARNESS_EVENT_PREFIX}%`);
+    .ilike("title", `${HARNESS_EVENT_PREFIX}%`)
+    .eq("is_permanent_test", false);
   if (eventsReadError) throw new Error(eventsReadError.message);
 
   let eventsDeleted = 0;
@@ -223,6 +230,44 @@ export async function resetHarness(client: Client) {
   }
 
   return { eventsDeleted, usersDeleted };
+}
+
+/**
+ * Clears the permanent test room's transient state (chat, reactions,
+ * pending requests, seated speakers) *without deleting the room itself*
+ * — the room is excluded from `reset` on purpose (see above), so this is
+ * the safe way to tidy it up between test sessions instead. Deleting
+ * `event_chat_messages` cascades to `event_chat_message_reactions` and
+ * `speaker_requests` (both reference it `on delete cascade` — see
+ * migrations 00000000000003/00000000000011); `event_speakers` is cleared
+ * separately since it isn't tied to any message.
+ */
+export async function clearSandbox(client: Client) {
+  const { data: sandbox, error: sandboxError } = await client
+    .from("events")
+    .select("id")
+    .eq("is_permanent_test", true)
+    .maybeSingle();
+  if (sandboxError) throw new Error(sandboxError.message);
+  if (!sandbox) {
+    throw new Error(
+      "No permanent test room exists — migration 00000000000015 may not be applied to this project.",
+    );
+  }
+
+  const { error: messagesError, count: messagesDeleted } = await client
+    .from("event_chat_messages")
+    .delete({ count: "exact" })
+    .eq("event_id", sandbox.id);
+  if (messagesError) throw new Error(messagesError.message);
+
+  const { error: speakersError, count: speakersDeleted } = await client
+    .from("event_speakers")
+    .delete({ count: "exact" })
+    .eq("event_id", sandbox.id);
+  if (speakersError) throw new Error(speakersError.message);
+
+  return { eventId: sandbox.id, messagesDeleted: messagesDeleted ?? 0, speakersDeleted: speakersDeleted ?? 0 };
 }
 
 // ---------------------------------------------------------------------
@@ -304,6 +349,14 @@ async function main() {
     return;
   }
 
+  if (command === "clear-sandbox") {
+    const { eventId, messagesDeleted, speakersDeleted } = await clearSandbox(client);
+    console.log(`Cleared the permanent test room (${eventId}) without deleting it:`);
+    console.log(`  ${messagesDeleted} chat message(s) removed`);
+    console.log(`  ${speakersDeleted} speaker seat(s) cleared`);
+    return;
+  }
+
   console.log(
     [
       "Usage: npm run dev:harness -- <command> [...args]",
@@ -312,6 +365,7 @@ async function main() {
       "  seat <email-or-label> <1|2> [eventId]",
       "  list",
       "  reset",
+      "  clear-sandbox",
     ].join("\n"),
   );
   process.exitCode = command ? 1 : 0;

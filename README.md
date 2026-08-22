@@ -204,6 +204,33 @@ Both tag what they create identically (`[dev-harness] ` event titles,
 `@dev-harness.invalid` test accounts), so either one's reset/cleanup
 finds what the other created.
 
+### The permanent test room — always available, no setup required
+
+**Browse Events on the deployed app always has at least one testable
+room**: **"[DEV] Always-On Test Room"**. This is a single, permanent
+database row (migration `00000000000015`, `events.is_permanent_test`),
+not something either tool above creates or can delete — it exists to
+guarantee the real production journey (landing page → Browse events →
+tap a room → unified room) always has *something* to test, without
+running any command first. This was a real, repeated failure mode before
+it existed: a dev-harness event's `scheduled_start` aged past the list's
+2-hour visibility window, or a `reset` deleted the one fixture a session
+was relying on, leaving Browse Events empty — see DECISIONS.md.
+
+- **Always discoverable**: exempted from the events list's normal
+  time-based cutoff (`lib/repositories/events.ts`'s `listUpcomingEvents`)
+  and sorted first, regardless of how old everything else is.
+- **Can't be deleted by cleanup**: excluded by both `dev-harness reset`
+  and the `/dev` page's "Reset all demo events" — enforced twice: its
+  title doesn't match the `[dev-harness] ` prefix either tool's reset
+  query looks for, *and* both explicitly filter out
+  `is_permanent_test` rows regardless of title. A database-level partial
+  unique index also guarantees at most one such row can ever exist.
+- **Safe to tidy up without deleting it**: `npm run dev:harness --
+  clear-sandbox` clears its chat messages/reactions/pending
+  requests/seated speakers, leaving the room itself intact — use this
+  instead of `reset` when its accumulated test chatter gets in the way.
+
 ### `/dev` — browser UI, no CLI required
 
 Start the dev server (`npm run dev`) and open **http://localhost:3000/dev**

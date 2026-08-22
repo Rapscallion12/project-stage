@@ -70,10 +70,16 @@ export async function listActiveSpeakersForDevEvent(eventId: string): Promise<Ev
 
 export async function resetDevDemoEvents(): Promise<{ eventsDeleted: number }> {
   const supabase = createServiceClient();
+  // `is_permanent_test` rows (migration 00000000000015 — the always-on
+  // fixture Browse Events must never end up empty) wouldn't match this
+  // tool's own `[dev-harness] ` title prefix anyway, but the explicit
+  // exclusion is a second, independent guard against ever deleting it,
+  // not just a title convention someone could accidentally break later.
   const { data: events, error: readError } = await supabase
     .from("events")
     .select("id")
-    .ilike("title", `${DEV_EVENT_PREFIX}%`);
+    .ilike("title", `${DEV_EVENT_PREFIX}%`)
+    .eq("is_permanent_test", false);
   if (readError) throw new Error(readError.message);
   if (!events || events.length === 0) return { eventsDeleted: 0 };
 

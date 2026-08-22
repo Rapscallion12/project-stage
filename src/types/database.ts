@@ -186,6 +186,7 @@ export type Database = {
           description: string
           format: string
           id: string
+          is_permanent_test: boolean
           lobby_opens_at: string
           scheduled_start: string
           title: string
@@ -195,6 +196,7 @@ export type Database = {
           description?: string
           format?: string
           id?: string
+          is_permanent_test?: boolean
           lobby_opens_at: string
           scheduled_start: string
           title: string
@@ -204,6 +206,7 @@ export type Database = {
           description?: string
           format?: string
           id?: string
+          is_permanent_test?: boolean
           lobby_opens_at?: string
           scheduled_start?: string
           title?: string
