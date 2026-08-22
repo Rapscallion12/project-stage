@@ -75,6 +75,23 @@ describe("SpeakerStage", () => {
     expect(scrim.className).toMatch(/\bpointer-events-none\b/);
   });
 
+  describe("layering (real-device fix: the divider was bleeding across chat/controls)", () => {
+    it("gives the stage its own contained stacking context (z-0, not just relative) so nothing inside it can escape to paint over a sibling overlay", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+      expect(screen.getByTestId("room-stage").className).toMatch(/\bz-0\b/);
+    });
+
+    it("the divider carries no z-index of its own — it doesn't overlap the tiles, and the stage's own containment is what keeps it from crossing foreground UI, not a z-index race", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+      expect(screen.getByTestId("speaker-divider").className).not.toMatch(/\bz-\d/);
+    });
+
+    it("the divider's center dot/handle is not rendered — no user-facing function yet, and it was part of the visual clutter real-device testing flagged", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+      expect(screen.getByTestId("speaker-divider")).toBeEmptyDOMElement();
+    });
+  });
+
   describe("direct empty-seat join (issue #27)", () => {
     it("wires onTapEmptySeat into an empty tile's tap handler when the viewer isn't already speaking", () => {
       render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);

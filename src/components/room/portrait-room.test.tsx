@@ -74,6 +74,12 @@ describe("PortraitRoom", () => {
     expect(stageWrapper?.className).toMatch(/\brelative\b/);
   });
 
+  it("explicitly ranks the overlay above the stage (z-10 vs the stage's own z-0) — real-device testing found the speaker divider bleeding across this overlay before this fix", () => {
+    render(<PortraitRoom {...baseProps} />);
+    expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bz-10\b/);
+    expect(screen.getByTestId("room-stage").className).toMatch(/\bz-0\b/);
+  });
+
   it("re-scopes the overlay to a fixed dark theme so chat stays legible over live video regardless of the visitor's own light/dark preference", () => {
     render(<PortraitRoom {...baseProps} />);
     expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bstage-overlay\b/);

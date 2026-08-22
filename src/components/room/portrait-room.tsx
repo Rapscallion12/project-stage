@@ -29,6 +29,13 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * of the always-visible compact chat, not something a later issue
  * animates.
  *
+ * `z-10` here, `z-0` on `SpeakerStage`'s own root — an explicit,
+ * unambiguous "the interface overlay is always above the stage" rule,
+ * not left to depend on DOM order being the tiebreak. See
+ * `SpeakerStage`'s own doc comment for why the stage needs its own
+ * contained stacking context regardless (real-device testing found the
+ * speaker divider bleeding across this exact overlay before that fix).
+ *
  * Still zero gesture/drag/expand logic — the same `ChatPanel` instance
  * used here (via `RoomChatPanel`) is what issue #21 will later make
  * expandable via a drag handle, without ever swapping which component is
@@ -83,7 +90,7 @@ export function PortraitRoom({
         />
         <div
           data-testid="stage-bottom-overlay"
-          className="stage-overlay absolute inset-x-0 bottom-0 flex flex-col gap-1 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pt-14 pb-3"
+          className="stage-overlay absolute inset-x-0 bottom-0 z-10 flex flex-col gap-1 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pt-14 pb-3"
         >
           {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
           {/* Issue #27: feedback for a failed empty-seat tap (e.g. the guest account-prompt) — a queue-exists result never lands here, it switches the composer to request mode instead. */}

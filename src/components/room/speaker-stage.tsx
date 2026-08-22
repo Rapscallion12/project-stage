@@ -13,12 +13,35 @@ import type { Orientation } from "@/hooks/use-orientation";
  * renders `SpeakerTile`'s own placeholder rather than being omitted, so
  * the two-seat framing never collapses to one column.
  *
+ * **Layering model** (fixed after real-device testing found the divider
+ * bleeding across chat/controls): this root is `relative z-0`, not just
+ * `relative` — `z-0` (a real value, not `auto`) is what actually makes a
+ * positioned element establish its own CSS stacking context. Without it,
+ * a descendant's `z-index` doesn't stay scoped to this subtree; it
+ * escapes to compete in whichever ancestor stacking context it lands in
+ * instead — which is exactly what was happening: the divider's old
+ * `z-10` was being compared against `stage-bottom-overlay`'s (portrait-
+ * room.tsx) stacking level, not contained in here at all, so `10 >
+ * auto` put it on top regardless of DOM order. With this root properly
+ * containing its own stacking context, nothing inside this component —
+ * now or whatever #21/#25 add later — can ever again paint above a
+ * sibling layer like the chat/controls overlay. The fix is structural
+ * containment, not raising every foreground control's own z-index to
+ * outrank the divider one at a time.
+ *
  * Three more pieces live in this same container, all currently inert —
  * each is a fixed structural anchor a later issue attaches real behavior
  * to, not a placeholder to be swapped out:
- * - The **divider**, between the two tiles — #25 (retention voting)
- *   makes it tappable; not a `<button>` yet because it has no function to
- *   expose to assistive tech until then.
+ * - The **divider**, between the two tiles — a plain, unpositioned flex
+ *   sibling today (no `z-index` of its own needed: it doesn't overlap
+ *   the tiles, and the stage-level containment above is what keeps it
+ *   from ever crossing anything outside this component). #25 (retention
+ *   voting) makes it tappable; not a `<button>` yet because it has no
+ *   function to expose to assistive tech until then. Its center
+ *   dot/handle is deliberately not rendered yet — it has no user-facing
+ *   function until #21/#25 exist, and an inert decoration was part of
+ *   the visual clutter real-device testing flagged; the bar itself
+ *   (the actual structural anchor those issues need) stays.
  * - The **self-preview slot**, a fixed corner position — #22 renders the
  *   local participant's persistent camera preview into it. Kept
  *   *outside* the flex row/col below (a sibling, absolutely positioned
@@ -93,20 +116,14 @@ export function SpeakerStage({
   }
 
   return (
-    <div data-testid="room-stage" className="relative h-full w-full overflow-hidden bg-black">
+    <div data-testid="room-stage" className="relative z-0 h-full w-full overflow-hidden bg-black">
       <div className={orientation === "landscape" ? "flex h-full w-full flex-row" : "flex h-full w-full flex-col"}>
         {renderTile(1)}
         <div
           data-testid="speaker-divider"
           aria-hidden="true"
-          className={
-            orientation === "landscape"
-              ? "relative z-10 w-2 shrink-0 bg-border"
-              : "relative z-10 h-2 shrink-0 bg-border"
-          }
-        >
-          <span className="absolute top-1/2 left-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border ring-2 ring-black/20" />
-        </div>
+          className={orientation === "landscape" ? "w-2 shrink-0 bg-border" : "h-2 shrink-0 bg-border"}
+        />
         {renderTile(2)}
       </div>
 
