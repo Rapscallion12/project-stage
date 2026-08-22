@@ -288,18 +288,27 @@ different dependencies. Current order:
       until confirmed on a real iPhone against the original gut-check
       bar. See SESSION_LOG.md and DECISIONS.md.
 - [ ] Composer mic-request + candidate readiness/self-preview (issue
-      #22) — mic-mode toggle built into the chat composer (no separate
-      "Request the mic" control), local media acquired once via
-      `createLocalTracks()` at request time, a persistent spatially-stable
-      self-preview that morphs (not remounts) from candidate to active
-      speaker, and promotion via `publishTrack()` on the already-held
-      tracks — no second `getUserMedia()` call.
+      #22) — **composer-integrated request shipped** (🎤 toggle in the
+      existing chat composer, replacing the standalone "Request the mic"
+      control entirely). Remaining, narrowed scope: local media acquired
+      once via `createLocalTracks()` at request time, a persistent
+      spatially-stable self-preview that morphs (not remounts) from
+      candidate to active speaker, and promotion via `publishTrack()` on
+      the already-held tracks — no second `getUserMedia()` call. Today,
+      camera/mic activation is still a separate second tap once seated
+      (issue #15's existing flow) — a known, accepted gap pending this
+      remaining scope, not an oversight. Stays in Testing/Review pending
+      real-device confirmation. See SESSION_LOG.md.
 - [ ] Direct join on an uncontested empty seat (issue #27) — split from
       #23 after real-device testing: with a seat open and no pending
-      requests, the tile itself should say "Join the conversation" and
-      one tap should occupy it — no request message, no separate Claim
-      button. Falls back to the normal request flow if a queue exists.
-      No dependency on #22.
+      requests, tapping the tile directly attempts to join it — no
+      request message, no separate Claim button. Falls back to the
+      composer's mic-request mode if a queue exists, checked
+      server-side (never trusted from the client). Reuses
+      `claim_speaker_seat`'s existing race safety, no new DB primitive.
+      **Not checked off as fully confirmed** — real-device confirmation
+      of the actual tap/queue-protection/guest-gating behavior is still
+      pending; see SESSION_LOG.md.
 - [ ] Automatic ranked promotion for contested seats (issue #23,
       narrowed) — when a seat with a real queue opens, the highest-ranked
       eligible *ready* candidate is auto-promoted server-side, no manual

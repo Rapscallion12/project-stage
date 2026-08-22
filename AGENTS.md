@@ -48,6 +48,48 @@ A few rules that are easy to violate by defaulting to generic habits:
   components stay presentation-only. See PRODUCT.md's mobile orientation
   behavior and ARCHITECTURE.md's mobile orientation implementation section
   before writing the live room's layout code.
+- **Never claim an interaction is verified using a weaker test than the
+  interaction itself requires.** This project has repeatedly shipped
+  changes that passed every automated check while still failing the
+  actual user journey on a real phone (issue #20's first pass; the
+  Browse Events dead end hit in Sessions 20 and 21) — automated checks
+  and real UX are different questions, and reporting one as if it
+  answered the other is the recurring root cause, not any single bug.
+  Distinguish three tiers explicitly, every time, and never round one up
+  to the next:
+  1. **Automated** — `npm run lint`, `npx tsc --noEmit`, `npm test`,
+     `npm run build`. Verifies implementation health (it compiles, types
+     check, existing behavior isn't broken). Says nothing about whether
+     the UX works.
+  2. **Production interaction** — things you *actually exercised*
+     against the real deployed app (fetching pages, following real
+     redirects, confirming rendered output) — not local dev, not a
+     database query, not a direct `/events/[id]` URL standing in for
+     navigation, not "the element exists in the DOM." If a feature's
+     point is discoverability or navigation (a new entry point, a new
+     link, a redirect), the test must *start from the normal public
+     entry point* (e.g. the landing page) — bypassing it with a direct
+     internal URL doesn't test the thing the feature actually changed.
+     Fetching rendered HTML can confirm a control is *present*; it
+     cannot confirm tapping it *works* — don't conflate the two in how
+     you report it.
+  3. **Real-device** — anything requiring an actual touchscreen tap,
+     camera/microphone permission and hardware, mobile Safari
+     specifically, device rotation, or a subjective feel/UX judgment.
+     Nothing in this environment can exercise these. Report them
+     explicitly as **"UNVERIFIED — requires real-device testing,"** with
+     a short concrete checklist of what to check — never as "verified,"
+     "confirmed working," or similar, even when the code clearly should
+     work. "Camera/mic work on mobile Safari" is only ever true once
+     someone has actually exercised a real camera/mic on real mobile
+     Safari, not because `getUserMedia` is called correctly.
+
+  Structure every handoff after a UI/UX-affecting change around these
+  three categories explicitly (label them), so the user can tell at a
+  glance what's actually been established versus what still needs their
+  own device. Keep an issue in **Testing / Review**, not **Done**, until
+  they confirm tier 3 themselves — see DECISIONS.md's entries on issues
+  #19–#20 for the corrections that established this.
 - **Never build a feature that isn't in PRODUCT.md's MVP scope** (or a
   future session's explicit instruction) — check the out-of-scope list
   before adding anything that smells like a "nice to have."

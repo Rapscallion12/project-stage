@@ -33,6 +33,30 @@ separate release cadence to track here.
 
 ### Added
 
+- **Speaker-entry friction removed** (issues #22 partial + #27 full) —
+  two convergent entry points replace the standalone "Request the mic"
+  control entirely, both server-authoritative. Tapping a visibly empty
+  seat tile now attempts to join directly (new `joinOpenSeat` action) —
+  checks for any pending `speaker_requests` server-side first (never
+  trusted from the client) and falls back to the composer's request mode
+  if a queue exists, so a bystander can never cut ahead of a real queue;
+  reuses `claim_speaker_seat`'s existing race safety
+  (`event_speakers_active_seat_uniq`), no new database primitive. The
+  chat composer gained a 🎤 toggle switching the same input/button pair
+  into speaker-request mode, submitting through the existing
+  `requestToSpeak` path (new `submitSpeakerRequest`, a thin
+  `useActionState` adapter, no logic duplicated) — `micRequestMode` and
+  `hasPendingRequest` are now controlled state lifted to `EventRoom` so
+  the composer and an empty-seat tap can both drive them. `RoomControls`
+  lost its fourth state (the standalone button + justification form)
+  entirely; the "Claim your seat"/"Withdraw" pair for an already-
+  contested queue is unchanged (still issue #23's job to automate).
+  Camera/mic activation remains a separate second tap once seated (issue
+  #15's existing flow, unchanged) — collapsing that into one gesture is
+  #22's remaining scope, not done here. Not marked Done pending the
+  user's own real-device confirmation. See DECISIONS.md, SESSION_LOG.md,
+  and AGENTS.md's new verification-tier rule (added this session after
+  repeated automated-pass/real-UX-fail incidents).
 - **"Join Live Audience" one-click fast path** (issue #26) — a prominent
   landing-page CTA (not "Join Now," which reads as signup/registration/
   speaker-join) links to `/join`, a plain GET redirect with nothing to

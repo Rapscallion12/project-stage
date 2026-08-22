@@ -3,6 +3,61 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Speaker-entry friction removed; verification tiers codified in AGENTS.md
+
+**Problem**: real-device testing of the room found the standalone
+"Request the mic" control consuming valuable video space and creating a
+mandatory request→justify→submit→claim sequence even for a literally
+uncontested empty seat — friction the project had already identified
+(issues #22, #27) but not yet implemented. Fixing it meant touching a
+component that's used by two structurally different situations (an
+open seat with nobody waiting vs. one with a real queue behind it), and
+getting the queue-protection boundary wrong would mean a bystander could
+cut a real requester's place.
+
+**Decision**: two entry points, one server-authoritative boundary.
+Tapping an empty seat calls a new `joinOpenSeat` action that checks for
+*any* pending `speaker_requests` on the event before touching a seat at
+all — if none exist, it reuses `claim_speaker_seat` exactly as the
+existing contested-claim path already does (same partial unique index,
+same race safety, verified by nothing new); if any exist, it refuses
+with a distinguishable `"queue-exists"` result, and the tap handler
+falls back to the chat composer's new 🎤 request mode instead of showing
+an error. The composer's request mode is a controlled prop (lifted to
+`EventRoom`), not local state, specifically because tapping an empty
+seat needs to be able to switch it from outside itself.
+
+**Reason this reuses existing primitives rather than adding new ones**:
+`claim_speaker_seat`'s own UPDATE-then-INSERT-under-a-partial-unique-
+index pattern was already the correct, already-verified concurrency
+primitive for "resolve competing seat claims safely" — the actual new
+problem here was authorization (should this attempt be allowed at all),
+not concurrency, and authorization is a plain read (`rankPendingSpeakerRequests(eventId).length > 0`) checked before the existing claim path runs, not a new database mechanism.
+
+**Verification-tier rule, same session**: this was the third time a
+change passed every automated check while still failing the real user
+journey (issue #20's first pass; the Browse Events dead end hit twice).
+The pattern each time was the same — "the code should work" standing in
+for "this was actually exercised" — so the fix this time is process, not
+another one-off correction: AGENTS.md now codifies three explicit
+verification tiers (automated / production-interaction / real-device)
+and requires every handoff on a UI/UX-affecting change to report against
+all three by name, with real-device items marked "UNVERIFIED — requires
+real-device testing" rather than silently rounded up to "verified." Also
+codifies that a discoverability/navigation feature must be tested from
+its real public entry point (the landing page, Browse Events), not a
+direct `/events/[id]` URL standing in for the journey it's supposed to
+shorten.
+
+**Tradeoffs**: `joinOpenSeat` does not (yet) acquire camera/mic —
+promotion still goes through the existing separate "tap to enable
+camera & mic" gesture once seated. This is #22's remaining, explicitly
+narrowed scope (readiness pre-acquisition, self-preview, promotion
+without reacquiring), not an oversight of this pass — see issue #22's
+amended body.
+
+---
+
 ## 2026-08-21 — Permanent test room: a database-level guarantee, not a workflow habit
 
 **Problem**: real-device testing hit "Nothing scheduled right now" on

@@ -268,6 +268,59 @@ unexpected camera/mic, destination room works. Do not begin #20's
 real-device confirmation or any other feature until this one is
 confirmed — the user was explicit about doing one interaction at a time.
 
+**Speaker-entry friction removed, same session (issues #22 partial +
+#27 full)**: before coding, inspected the current implementation
+(`RoomControls`, `SpeakerTile`, `ChatPanel`, `claim_speaker_seat`'s
+actual concurrency mechanism) and re-read #22/#27/#23 fresh, mapping
+each part of the requested change to the issue that owns it. Implemented
+both together in one coordinated change (they share the same composer
+and interact directly — a queue-exists result from tapping an empty
+seat activates the composer's request mode), but scoped strictly to
+#27 in full plus only #22's "composer-integrated request" design bullet
+— none of #22's readiness/self-preview/promotion-without-reacquiring.
+
+New `joinOpenSeat` server action: refuses if any pending
+`speaker_requests` exist for the event (checked server-side, the actual
+queue-protection boundary), otherwise reuses `claim_speaker_seat`
+exactly as the existing `claimOpenSeat` does — confirmed via
+`event_speakers_active_seat_uniq` (migration 00000000000005) that two
+simultaneous taps on a genuinely empty seat still resolve to exactly one
+winner, no new concurrency primitive needed. `ChatPanel` gained a 🎤
+toggle switching the same input/button pair into request mode
+(`submitSpeakerRequest`, a thin adapter over the existing
+`requestToSpeak`); `micRequestMode`/`hasPendingRequest` lifted to
+`EventRoom` as controlled state, since the composer and an empty-seat
+tap are siblings that both need to drive them, and state that must
+survive rotation can't live inside either alone. `RoomControls` lost its
+standalone request-button state entirely — renders nothing for a plain
+audience member now. 15 new/updated tests; lint/tsc/build/test all pass
+(176/176).
+
+**Verification-tier rule added to AGENTS.md, same session**: this was
+the third time a change passed automated checks while still failing the
+real journey. Added a permanent rule distinguishing automated /
+production-interaction / real-device verification, requiring every
+UI/UX handoff to report against all three explicitly rather than
+rounding real-device items up to "verified." Full reasoning in
+DECISIONS.md.
+
+**Verification performed this session**: automated — full pass (see
+above). Production interaction — the real landing→Join Live
+Audience→room journey re-verified against the deployed site after this
+change, plus structural confirmation (via fetched, server-rendered HTML)
+that the standalone request button is gone, empty seats render as real
+`<button>` elements, exactly one composer `<input name="body">` exists,
+and the 🎤 toggle is present. Explicitly not claimed as verified: actually
+tapping the empty seat, the queue-protection fallback with two real
+users, guest-gated messaging, mic-mode toggling visually, or camera/mic
+on real mobile Safari — all real-device territory, listed for the user
+in this turn's response, not duplicated here.
+
+**Next task**: stop for the user's own real-device confirmation of this
+interaction specifically (see this turn's response for the exact
+checklist). Do not begin #21, #23, #24, #25, or any other feature until
+confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work
