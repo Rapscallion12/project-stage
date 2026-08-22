@@ -7,6 +7,36 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Three room compositions instead of two: mobile portrait, mobile
+  landscape, and desktop are no longer conflated by orientation alone**
+  — real-device testing found rotating a phone into landscape landed on
+  the same dashboard-style layout (permanent 320px chat sidebar, video
+  reduced to a strip, full site header) a desktop browser window also
+  got, since `orientation: landscape` matches both. New
+  `useIsDesktopViewport()` hook (`min-width: 1024px`, same
+  `matchMedia`/`useSyncExternalStore` shape as the existing
+  `useOrientation`) adds device-class as an independent axis from
+  orientation — deliberately width-based, never `width > height`, so an
+  iPhone in landscape stays classified as mobile. `EventRoom` now
+  branches three ways: `DesktopRoom` (renamed from `LandscapeRoom`,
+  internals otherwise unchanged — its sidebar structure was always
+  correct for desktop, just wrongly reachable from mobile too), new
+  `MobileLandscapeRoom` (the same video-first/overlay philosophy
+  `PortraitRoom` already has, adapted for a wide-short box: side-by-side
+  seats, a shorter/more compact chat overlay, a compact room header),
+  or `PortraitRoom` (unchanged). `StageOverlayShell` extracted from
+  `PortraitRoom`'s overlay markup now that `MobileLandscapeRoom` needed
+  the identical click-through-outer/interactive-inner structure. The
+  site-wide `SiteHeader` also compacts specifically on a short
+  mobile-landscape viewport while inside a room — a `document.body`
+  class (`room-active`, toggled by `EventRoom`) plus a
+  `(orientation: landscape) and (max-height: 500px)` media query
+  (globals.css) do this entirely without converting the header to a
+  client component; only padding changes, no navigation is removed. See
+  ARCHITECTURE.md and DECISIONS.md.
+
 ### Fixed
 
 - **Direct join now acquires media readiness the same way as requesting

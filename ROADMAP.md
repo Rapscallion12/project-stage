@@ -319,11 +319,24 @@ different dependencies. Current order:
       **Remaining, narrowed further**: literal asymmetric grid sizing
       (the *other* speaker's tile visually enlarged, not just
       decluttered — deliberately deferred, possibly #18) and a mic
-      activity indicator. Landscape's dashboard-style drift found in an
-      earlier real-device pass is recorded as a constraint in
-      ARCHITECTURE.md, not fixed — #18's job. Stays in Testing/Review
-      pending real-device confirmation. See SESSION_LOG.md and
-      DECISIONS.md.
+      activity indicator. Stays in Testing/Review pending real-device
+      confirmation. See SESSION_LOG.md and DECISIONS.md.
+- [ ] Three room compositions by form factor, not two by orientation
+      (2026-08-22, real-device follow-up to #20's video-first shell) —
+      mobile landscape's dashboard-style drift (recorded as a constraint
+      in ARCHITECTURE.md during the previous pass) is now fixed: new
+      `useIsDesktopViewport()` (width-based, never `width > height`)
+      makes device class an axis independent from `useOrientation`, so
+      `EventRoom` picks `DesktopRoom` (renamed from `LandscapeRoom`, real
+      sidebar, unchanged internals), `MobileLandscapeRoom` (new — same
+      video-first/overlay philosophy as `PortraitRoom`, adapted for a
+      wide-short box via a shared `StageOverlayShell`), or `PortraitRoom`
+      (unchanged). The site-wide header also compacts on a short
+      mobile-landscape viewport specifically while inside a room (CSS
+      media query + a route-scoping body class, no navigation removed).
+      **Not checked off** — pending real-device confirmation across
+      iPhone portrait, iPhone landscape, and a desktop browser. See
+      ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
 - [ ] Direct join on an uncontested empty seat (issue #27) — split from
       #23 after real-device testing: with a seat open and no pending
       requests, tapping the tile directly attempts to join it — no

@@ -570,6 +570,76 @@ pushed, deployment confirmed via the GitHub deployments API.
 fixes — do not begin #18, #21, #24, #25, or any other issue until
 confirmed.
 
+**Real-device confirmation came back fully positive, same session — the
+responsive-room correction was requested next**: direct open-seat join,
+media readiness, self-preview, publishing, and the reachable open seat
+all confirmed working on iPhone. Before any further feature work, the
+user asked for the responsive-room layout to be fixed — landscape's
+dashboard-style drift (recorded as a constraint in ARCHITECTURE.md two
+passes ago) needed to actually be built, with an explicit governing
+rule: same product model, different composition by form factor. Mobile
+portrait and mobile landscape must share the video-first philosophy;
+desktop is allowed — expected — to differ, since it has real width to
+spare. Explicit constraint: never infer desktop from `width > height`;
+an iPhone in landscape is still mobile.
+
+Investigated before changing anything, per instruction. Root cause:
+`EventRoom` picked between `PortraitRoom`/`LandscapeRoom` purely on
+`useOrientation()` — but `orientation: landscape` matches a desktop
+browser window exactly the same as a phone rotated sideways, so both
+got the identical sidebar-dashboard composition. No width-based signal
+existed anywhere in the room's structural branching. Confirmed CSS
+media queries are sufficient for *styling* decisions within a
+composition, but only JS can decide *which component tree* mounts —
+same reasoning `useOrientation` itself was already built on.
+
+Implemented: new `useIsDesktopViewport()` (`min-width: 1024px`, the
+same `matchMedia`/`useSyncExternalStore` shape as `useOrientation` —
+deliberately width-based, never `width > height`, so an iPhone in
+landscape stays classified as mobile regardless of aspect ratio).
+`EventRoom` now branches three ways. `LandscapeRoom` renamed to
+`DesktopRoom` — its sidebar structure was never wrong for desktop, only
+wrong when reachable from mobile landscape too; internals otherwise
+unchanged. New `MobileLandscapeRoom` reuses `PortraitRoom`'s
+video-first/overlay philosophy (never a permanent sidebar) adapted for
+a wide-short box: `SpeakerStage` gets `orientation="landscape"`
+(side-by-side seats), a compact `RoomHeader` (new optional `compact`
+prop — every piece of information, including connection-lost warnings,
+stays, only the size shrinks), and a shorter `h-24` chat panel vs.
+portrait's `h-40`. `StageOverlayShell` extracted from `PortraitRoom`'s
+existing overlay markup (the prior pass's click-through-outer/
+interactive-inner fix) once `MobileLandscapeRoom` needed the identical
+structure. The site-wide `SiteHeader` (root layout, can't read route or
+viewport state on its own — it's a server component) compacts on a
+short mobile-landscape viewport specifically while inside a room via a
+`document.body` class (`room-active`, toggled by `EventRoom` for its
+mount lifetime) combined with a `(orientation: landscape) and
+(max-height: 500px)` media query in globals.css — padding only, no
+navigation removed, no client-component conversion needed. The room's
+own `RoomHeader` deliberately stays in normal document flow (not also
+`position: fixed`) to avoid a new collision risk with the site header —
+noted as the next lever to pull if real-device testing finds this
+insufficient, not built defensively now.
+
+Self-preview stability, no-track-reacquisition, and the no-duplicate-
+self-video fix are all inherited for free — `SpeakerStage`/`SpeakerTile`
+are reused unchanged by all three room compositions, so role-specific
+presentation rules didn't need any new code this pass.
+
+17 new/changed tests across 6 files (`use-desktop-viewport.test.ts`,
+new `mobile-landscape-room.test.tsx`/`desktop-room.test.tsx`/
+`stage-overlay-shell.test.tsx`, `room-header.test.tsx`'s compact-mode
+cases). lint/tsc/build/test all pass (237/237). Cleared stale test-room
+seat occupancy again (unrelated to this change, same `dev:harness
+clear-sandbox` command as the prior two times this session) before the
+suite went green. Merged to `main`, pushed, deployment confirmed via the
+GitHub deployments API, structural production check against the
+deployed test room confirmed no regressions.
+
+**Next task**: stop for the user's own real-device confirmation —
+iPhone portrait, iPhone landscape, and a desktop browser specifically.
+Do not begin #18, #21, #24, #25, or any other issue until confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

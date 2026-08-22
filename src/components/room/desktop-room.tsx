@@ -6,16 +6,23 @@ import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * Video-first (issue #20), landscape variant: the stage fills the left
- * column edge to edge (no more centered/max-width/padded box around it —
- * side by side already gives video most of the width, so it should
- * actually use it), with the side panel narrow by comparison rather than
- * needing further compacting the way portrait's chat strip does. Used
- * for landscape phones and desktop browsers alike (see ARCHITECTURE.md's
- * responsive implementation notes). Presentation only, same as
- * PortraitRoom.
+ * Desktop-only (renamed from `LandscapeRoom`, real-device finding,
+ * 2026-08-22): stage left, a real dedicated chat sidebar right — a
+ * classic video-call/live-chat structure, not an overlay, because
+ * desktop genuinely has the width to spare for both without covering the
+ * speakers. This used to render for *any* landscape-oriented viewport,
+ * phone included — a real-device test rotating a phone found that
+ * wrong: a 320px sidebar eats most of a phone's width, squeezing video
+ * to a strip and turning the room into a cramped dashboard instead of
+ * staying video-first. `EventRoom` now only mounts this when
+ * `useIsDesktopViewport()` is true (a width threshold, not orientation —
+ * an iPhone in landscape stays classified as mobile and gets
+ * `MobileLandscapeRoom` instead, which keeps the overlay philosophy
+ * `PortraitRoom` already uses). Presentation only, same discipline as
+ * every other room composition — all live state still lives in
+ * `EventRoom`, above this branch.
  */
-export function LandscapeRoom({
+export function DesktopRoom({
   event,
   phase,
   countdownText,

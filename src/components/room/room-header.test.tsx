@@ -61,4 +61,26 @@ describe("RoomHeader", () => {
     );
     expect(screen.getByText("Live")).toBeInTheDocument();
   });
+
+  describe("compact mode (real-device finding: mobile landscape has little vertical room to spare)", () => {
+    it("shrinks the title/status text without removing any of the information", () => {
+      render(
+        <RoomHeader
+          eventTitle="Late Night Debate"
+          roomStatus="live"
+          participantCount={42}
+          connectionStatus="reconnecting"
+          compact
+        />,
+      );
+      expect(screen.getByRole("heading", { name: "Late Night Debate" }).className).toMatch(/\btext-sm\b/);
+      expect(screen.getByText(/Live/)).toHaveTextContent("Reconnecting");
+      expect(screen.getByText("42")).toBeInTheDocument();
+    });
+
+    it("defaults to the full (non-compact) size when the prop is omitted", () => {
+      render(<RoomHeader eventTitle="E" roomStatus="live" participantCount={0} connectionStatus="connected" />);
+      expect(screen.getByRole("heading", { name: "E" }).className).toMatch(/\btext-base\b/);
+    });
+  });
 });

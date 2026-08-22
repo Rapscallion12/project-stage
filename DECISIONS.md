@@ -3,6 +3,154 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Three room compositions, not two: form factor and orientation are independent axes
+
+**Problem**: `EventRoom` picked between `PortraitRoom` and `LandscapeRoom`
+purely on `useOrientation()`. That media query (`orientation: landscape`)
+is about aspect ratio, not device class — a desktop browser window
+matches it exactly the same as a phone rotated sideways — so both got
+the identical composition: a real 320px chat sidebar, a small stage
+strip, and the full site header. Real-device testing confirmed this
+reads as a jump into a different, dashboard-style application on
+rotation, not the same room changing aspect ratio — the opposite of this
+project's video-first principle, and explicitly not what was wanted for
+a phone.
+
+**Governing rule the user set**: same product model, different
+composition by form factor. Mobile portrait and mobile landscape must
+share the video-first/overlay philosophy; desktop gets a real sidebar
+because it has the width to spare without covering the speakers.
+Orientation alone must never stand in for device class — an iPhone in
+landscape stays mobile.
+
+**Investigation** (per instruction, before changing anything):
+
+1. `useOrientation()` (`orientation: landscape`) was the sole signal
+   `EventRoom` used to pick `LandscapeRoom` — nothing distinguished a
+   wide *phone* from a wide *window*.
+2. No width-based breakpoint existed anywhere in the room's structural
+   branching (Tailwind `sm:`/`lg:` classes exist elsewhere for ordinary
+   responsive *styling*, never for swapping which component tree
+   mounts).
+3. Two independent axes, not one three-way enum: `useOrientation`
+   (unchanged) decides portrait vs. landscape *within* mobile; a new
+   `useIsDesktopViewport()` decides mobile vs. desktop by **width**
+   (`min-width: 1024px`, Tailwind's own `lg` breakpoint) — deliberately
+   not `width > height`, since the user explicitly ruled that out and an
+   iPhone in landscape (max ~950px wide) sits comfortably under 1024px
+   regardless of aspect ratio.
+4. CSS media queries are sufficient for *styling* decisions (the site
+   header's own compaction, the two mobile compositions' internal
+   layout) — but swapping *which component tree* mounts is something
+   only JS can decide, so `useIsDesktopViewport` mirrors
+   `useOrientation`'s exact `useSyncExternalStore`/`matchMedia` shape
+   (same established pattern, not a new kind of signal) rather than
+   trying to fake component-branching with CSS visibility toggles (which
+   would mean rendering two full DOM trees, including duplicate video
+   elements, simultaneously — rejected as wasteful and a bigger change
+   in kind, not degree).
+5. The layout can change without remounting LiveKit because it already
+   does, for the existing portrait↔landscape swap — `useLiveRoomConnection`
+   is called once in `EventRoom`, above all three presentation branches,
+   unchanged by this pass. Swapping which of the three room components
+   mounts recreates their DOM (a genuine unmount/remount of the
+   presentation layer, same as today's rotation already does), but the
+   live connection/tracks/speakers/chat state underneath is untouched —
+   nothing new here, just extended to a third branch.
+6. Self-preview stays "spatially stable" in the sense already proven
+   acceptable for rotation: always anchored to the same corner
+   (top-right) across all three compositions, via the same
+   `localVideoTrack` object — the `<video>` DOM node itself gets
+   recreated on a branch swap (same as today), but reattaches the same
+   live track instantly, not a real reacquisition.
+7. Room header/nav: **two separate headers contribute chrome** — the
+   room's own `RoomHeader` (inside whichever composition mounts) and the
+   site-wide `SiteHeader` (root layout, rendered above every route,
+   including the room). Only `RoomHeader` could get JS-driven
+   conditional treatment for free (it's already conditionally
+   mounted per composition); `SiteHeader` needed a different mechanism
+   since it renders identically regardless of route.
+8. Deferred to #18 (unchanged): role-specific composition differences
+   beyond what already existed (the no-duplicate-self-video fix from the
+   prior pass already satisfies "don't show me a giant duplicate of
+   myself," inherited for free since `SpeakerStage`/`SpeakerTile` are
+   reused unchanged by all three new room shells) — no new role-specific
+   logic was needed or built in this pass.
+
+**Decision**:
+
+- New `useIsDesktopViewport()` hook (`min-width: 1024px`), same shape as
+  `useOrientation`. `EventRoom` now branches three ways:
+  `isDesktopViewport → DesktopRoom`, else `orientation === "landscape" →
+  MobileLandscapeRoom`, else `PortraitRoom`.
+- `LandscapeRoom` renamed to `DesktopRoom` (file and export) — its
+  existing sidebar structure was never wrong for desktop, only wrong
+  when applied to mobile landscape too. Internals essentially unchanged;
+  only its scope narrowed to the viewports it was actually designed for.
+- New `MobileLandscapeRoom`: the video-first/overlay philosophy, adapted
+  for a wide-short box instead of `PortraitRoom`'s tall-narrow one —
+  `SpeakerStage` gets `orientation="landscape"` (side-by-side tiles),
+  and the overlay's own footprint is trimmed (`RoomHeader compact`, a
+  shorter `h-24` chat panel vs. portrait's `h-40`, less top gradient
+  padding) since a phone in landscape has meaningfully less vertical
+  room than portrait.
+- `StageOverlayShell` extracted from `PortraitRoom`'s existing overlay
+  markup (click-through outer layer, interactive inner wrapper — the
+  prior pass's pointer-events fix) now that `MobileLandscapeRoom` needed
+  the identical structure — an existing duplication once the second
+  caller existed, not a speculative abstraction. Parameterized only by
+  `topClassName` (how much decorative top padding) and `children` (each
+  caller keeps full control of its own content composition, avoiding a
+  large prop-drilling wrapper).
+- `RoomHeader` gained an optional `compact` prop (tighter padding/type;
+  every piece of information — including connection-lost warnings —
+  stays, only the size shrinks) so `MobileLandscapeRoom` can use it
+  without duplicating the component.
+- `SiteHeader`'s own compaction is CSS-only, deliberately not converted
+  to a client component: `EventRoom` toggles a `document.body`
+  class (`room-active`) for exactly as long as a room is mounted — the
+  minimum JS needed to give a route-agnostic, server-rendered header a
+  route-scoped signal — and a `(orientation: landscape) and (max-height:
+  500px)` media query (globals.css) does the actual viewport decision
+  in pure CSS. Only padding changes; every link/button in the header is
+  untouched, so nothing is removed, just compacted — the more invasive
+  alternatives (moving `SiteHeader` out of the root layout into
+  route-group-specific layouts, or converting it to a client component
+  with `usePathname`/viewport hooks) were rejected as materially more
+  architectural churn for the same visual outcome. The room's own
+  `RoomHeader` stays in normal document flow rather than also becoming
+  `position: fixed` — an overlay treatment there risked visually
+  colliding with the site header floating at the same screen position,
+  a new collision surface not worth the risk in a pass this size; the
+  `compact` prop's padding/type reduction is the safer lever.
+
+**Alternatives considered**: (1) inferring desktop from
+`width > height` — explicitly rejected per instruction; also incorrect
+in practice (many desktop windows are taller than wide). (2) A single
+new three-state hook (`"mobile-portrait" | "mobile-landscape" |
+"desktop"`) instead of two independent booleans — rejected: orientation
+and form-factor are genuinely different axes with different underlying
+media queries, and collapsing them into one enum would make a future
+"desktop portrait" case (an unusual but real window shape) ambiguous to
+express; two hooks compose naturally, matching how `useOrientation`
+already exists as its own independent concern. (3) Height-clamping the
+mobile-landscape overlay further, or building a chat-collapse
+affordance, to squeeze more stage height — deferred; the user was
+explicit this pass is the layout correction, not #21's gesture system.
+
+**Tradeoffs**: recorded, not built — the "translucent overlay header"
+direction the user offered as one option would reclaim more vertical
+space than the compact-in-flow approach taken here (a fixed/absolute
+site header costs zero document-flow height instead of a reduced but
+nonzero amount), at the cost of needing to solve the header-collision
+risk noted above. If real-device testing finds the current compaction
+insufficient, that's the next lever to pull, not a sign this approach
+was wrong. Separately, cleared again (second time this session, unrelated
+to this change): a stale `event_speakers_active_seat_uniq` conflict in
+`scripts/dev-harness.test.ts` from more leftover real-device-testing
+occupancy in the permanent test room — via the same `dev:harness
+clear-sandbox` command as before.
+
 ## 2026-08-22 — Direct join converges onto #22's readiness path; the open seat gets visual priority over the chat overlay
 
 **Problem**: two real-device findings from the dominant-video pass below.

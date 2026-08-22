@@ -1191,25 +1191,26 @@ so whoever builds it doesn't default to the naive approach:
 
 - **The failure mode to design against**: conditionally rendering an
   entirely different component tree per orientation (`isPortrait ?
-  <PortraitRoom /> : <LandscapeRoom />`) is the obvious way to build this,
-  and it's wrong by default — if the LiveKit connection, chat subscription,
-  vote/reaction state, or timers are owned *inside* either branch, React
-  unmounts that branch's hooks (and their cleanup — dropping the call,
-  closing the channel) the instant orientation flips, then mounts the other
-  branch fresh. That's exactly the reload-equivalent PRODUCT.md forbids,
-  just without an actual page reload.
+  <PortraitRoom /> : <MobileLandscapeRoom />`) is the obvious way to build
+  this, and it's wrong by default — if the LiveKit connection, chat
+  subscription, vote/reaction state, or timers are owned *inside* either
+  branch, React unmounts that branch's hooks (and their cleanup — dropping
+  the call, closing the channel) the instant orientation flips, then
+  mounts the other branch fresh. That's exactly the reload-equivalent
+  PRODUCT.md forbids, just without an actual page reload.
 - **The rule**: anything stateful and live — the LiveKit room/track
   subscriptions, the chat channel subscription, vote/reaction state, timer
   intervals — must be owned by a hook/context in a component that renders
   unconditionally (above the orientation branch), never inside
-  `PortraitRoom`/`LandscapeRoom` themselves. Those two components should be
-  close to pure presentation: given the same live state and the same
-  callbacks, they just arrange it differently. This is the same "shared
-  logic, split presentation" pattern already established above for
-  breakpoints — orientation is a second axis of the same rule, not a new
-  one, but it's called out explicitly here because getting it wrong doesn't
-  just look bad (as a breakpoint mistake would), it drops the user's live
-  connection.
+  `PortraitRoom`/`MobileLandscapeRoom`/`DesktopRoom` themselves. Those
+  three components should be close to pure presentation: given the same
+  live state and the same callbacks, they just arrange it differently.
+  This is the same "shared logic, split presentation" pattern already
+  established above for breakpoints — orientation (and, since issue #22's
+  responsive-room pass, form factor — see below) is a second axis of the
+  same rule, not a new one, but it's called out explicitly here because
+  getting it wrong doesn't just look bad (as a breakpoint mistake would),
+  it drops the user's live connection.
 - **Detecting orientation**: use `window.matchMedia('(orientation:
   portrait)')` with a change listener (wrapped in a small hook, e.g.
   `useOrientation()`), not viewport-width breakpoints — orientation and
@@ -1231,58 +1232,66 @@ and landscape-phone for a countdown; the real difference is phone vs.
 desktop width, handled with ordinary Tailwind breakpoints. This is also
 *why* that view is safe to render without the orientation-state-ownership
 rule above ever coming into play for it specifically — `useOrientation()`
-is still called unconditionally in `EventRoom` (same as every other live
-hook), it just isn't read by this particular branch. **From
-`lobby_open` onward**, the same room layout used once live
-(`PortraitRoom`/`LandscapeRoom`) is already in effect — issue #17 didn't
+and `useIsDesktopViewport()` are still called unconditionally in
+`EventRoom` (same as every other live hook), they just aren't read by
+this particular branch. **From `lobby_open` onward**, the same three-way
+room layout used once live is already in effect — issue #17 didn't
 change this section's rule, it just made that layout, and the
 orientation-safety it already had, reachable earlier than `ready`.
 
-### Landscape must stay video-first too — a real-device finding, not yet fixed
+### Form factor is a second, independent axis from orientation
 
-Real-device testing during issue #22's dominant-video corrective pass
-(2026-08-22) found that the state-survival rule above is necessary but
-not sufficient: rotation currently survives *without dropping state*
-exactly as designed, but it lands on a presentation that abandons the
-video-first philosophy entirely — `LandscapeRoom` shrinks the stage to a
-horizontal strip, turns `RoomChatPanel` into a permanent side panel
-(`w-80 shrink-0`), and the full site header still consumes its normal
-share of vertical space. That reads as switching into a different,
-desktop/dashboard-style information architecture on rotation, not "the
-same live session redecorated" — the opposite of this section's own
-smoothness goal above.
+Issue #22's responsive-room pass (2026-08-22) added a second signal
+alongside `useOrientation`: `useIsDesktopViewport()` (`min-width:
+1024px`, same `useSyncExternalStore`/`matchMedia` shape as
+`useOrientation` — see that hook's own doc comment). This exists because
+orientation alone conflated two genuinely different questions — "is the
+device tall or wide" and "is there enough width for a permanent
+sidebar" — and a desktop browser window happens to answer the first one
+the same way a phone in landscape does (`orientation: landscape`
+matches both) while answering the second one completely differently. A
+real-device test rotating a phone into landscape found exactly this:
+it landed on the *desktop* composition (a permanent 320px chat sidebar,
+the stage reduced to a strip), reading as a jump into a different
+application rather than the same room changing aspect ratio.
 
-**This is not fixed yet** — recorded here as a constraint for whichever
-issue does the work (most likely #18, "Role-based room UI," which
-already scopes a landscape treatment), not implemented in the #22 pass
-that found it (explicitly out of scope for that pass — see
-DECISIONS.md). The constraint for that future work:
+**The rule now**: `useIsDesktopViewport()` decides mobile vs. desktop
+as a device-class axis, always by **width**, never by `width > height`
+— an iPhone in landscape (at most ~950px wide) stays classified as
+mobile regardless of aspect ratio, a genuine desktop/laptop window
+(reliably ≥1024px) doesn't. `useOrientation()` then decides portrait vs.
+landscape *within* mobile, exactly as it always did. `EventRoom` branches
+three ways, not two: `DesktopRoom` (isDesktopViewport), else
+`MobileLandscapeRoom` or `PortraitRoom` (orientation). All three share
+the same video-first product model — same speaker/self-preview/chat
+mechanics underneath — differing only in composition:
+`PortraitRoom`/`MobileLandscapeRoom` both layer chat/controls *over* the
+stage via a shared `StageOverlayShell` (never a permanent sidebar);
+`DesktopRoom` alone gets a real sidebar, because desktop genuinely has
+the width to spare for one without covering the speakers — see
+DECISIONS.md for the full investigation and reasoning, including why
+CSS media queries alone couldn't do the component-tree branching here
+(only the *styling* decisions within a given composition, like
+`SiteHeader`'s compaction on a short mobile-landscape viewport, stayed
+CSS-only) and why the room's own `RoomHeader` and the root layout's
+`SiteHeader` needed two different compaction mechanisms (the former is
+already conditionally rendered per composition; the latter is
+route-agnostic, so `EventRoom` toggles a `document.body` class purely to
+give it a route-scoped signal, with the actual viewport decision still
+made in CSS).
 
-- Rotation changes the stage's available aspect ratio, not the room's
-  information architecture — video-first in portrait, video-first in
-  landscape, not "video-first in portrait, dashboard in landscape."
-- Overlays stay overlays in both orientations. Chat must not graduate to
-  a permanent, always-visible side panel merely because the phone
-  rotated — if it's collapsible/overlay-based in portrait, it should be
-  the equivalent in landscape too.
-- The self-preview stays in its stable corner in both orientations —
-  this doesn't change what #22 already built, just constrains how #18
-  arranges the rest of the stage around it.
-- Avoid moving/recreating video elements across the rotation boundary
-  where avoidable — `SpeakerTile`/`SelfPreview`'s `.attach()`-based
-  design already tolerates a remount (rotation swaps
-  `PortraitRoom`/`LandscapeRoom`, unmounting everything beneath), but a
-  layout that *needs* to move a video element to a structurally
-  different position for the redesign below should still prefer
-  restyling a stable element over relocating it in the tree where
-  practical.
-- The room header/nav will need to become substantially smaller,
-  translucent, collapsible, or otherwise less intrusive in immersive
-  room mode — today's full header is sized for a non-video page.
-- Audience and active-speaker interfaces are allowed, and expected, to
-  differ in controls and presentation priority — this isn't a call for
-  one universal layout, just for both orientations of *whichever* layout
-  a given role gets to share the same video-first philosophy.
+Constraints this satisfies, carried over from before this was
+implemented: overlays stay overlays in both mobile orientations (never a
+permanent side panel); the self-preview stays anchored to the same
+corner across all three compositions (the `<video>` DOM node itself
+still gets recreated on a composition swap, same tolerated
+attach-not-reacquire behavior rotation already relied on); video-element
+relocation across a composition swap is avoided where practical.
+**Deferred, not built here**: literal asymmetric "make the other
+speaker's tile visually dominant" grid sizing, a mic activity indicator,
+and any further landscape/header polish beyond what real-device testing
+shows is actually needed — still #18's territory, or a follow-up pass on
+this one.
 
 ## Testing & Definition of Done
 

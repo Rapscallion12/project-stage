@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useActiveSpeakers } from "@/hooks/use-active-speakers";
 import { useAutomaticPromotion } from "@/hooks/use-automatic-promotion";
+import { useIsDesktopViewport } from "@/hooks/use-desktop-viewport";
 import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
 import { PortraitRoom } from "@/components/room/portrait-room";
-import { LandscapeRoom } from "@/components/room/landscape-room";
+import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
+import { DesktopRoom } from "@/components/room/desktop-room";
 import { RoomDiagnostics } from "@/components/room/room-diagnostics";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { getParticipantIdentity } from "@/lib/livekit/token";
@@ -25,15 +27,44 @@ const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
  * The one persistent event experience (issue #17) — replaces the old
  * three-route event→lobby→room split. This is the single place
  * useActiveSpeakers, useLiveRoomConnection, useLobbyRealtime,
- * useOrientation, and (new in #17) the event-phase clock are called.
- * Everything below it (the pre-lobby countdown view, and
- * PortraitRoom/LandscapeRoom for lobby_open/ready) is presentation only,
- * reading from this component's state. This is what makes the
+ * useOrientation, useIsDesktopViewport, and (new in #17) the event-phase
+ * clock are called. Everything below it (the pre-lobby countdown view,
+ * and the three room compositions for lobby_open/ready) is presentation
+ * only, reading from this component's state. This is what makes the
  * lobby→live transition genuine — not a redirect that tears down and
  * rebuilds chat/speakers/LiveKit, but the same mounted hooks simply
  * being fed a new `phase` value, the same way rotation already worked:
  * see ARCHITECTURE.md's mobile orientation implementation notes for the
  * precedent this follows (hooks live above the branch, never inside it).
+ *
+ * **Three compositions, not two** (real-device finding, 2026-08-22):
+ * `orientation` alone used to pick between `PortraitRoom` and
+ * `LandscapeRoom`, which meant a desktop browser window (also
+ * `orientation: landscape`, since that media query is about aspect
+ * ratio, not device class) and a phone rotated sideways got the *same*
+ * component — a real-device test found that wrong: rotating a phone
+ * jumped straight into a permanent-sidebar, dashboard-style layout that
+ * abandoned the video-first philosophy portrait already had. Same
+ * product model, different composition by form factor now: `orientation`
+ * (existing) still decides portrait vs. landscape *within* mobile;
+ * `useIsDesktopViewport()` (new, a width threshold — deliberately not
+ * `width > height`, see that hook's own doc comment) decides mobile vs.
+ * desktop as an independent axis. `PortraitRoom` and
+ * `MobileLandscapeRoom` share the same overlay-over-stage philosophy
+ * (literally share `StageOverlayShell`); `DesktopRoom` (renamed from
+ * `LandscapeRoom`) is the one composition with a real sidebar, reserved
+ * for viewports that genuinely have the width to spare for one.
+ *
+ * **`room-active` body class**: toggled here for the site-wide
+ * `SiteHeader` (root layout, outside this component's own tree — see
+ * globals.css) to shrink itself specifically on a short mobile-landscape
+ * viewport while inside a room. Scoping *which* pages get that
+ * treatment needs a signal `SiteHeader` (a route-agnostic server
+ * component) can't derive on its own; the actual viewport decision still
+ * happens entirely in CSS (a `(orientation: landscape) and (max-height:
+ * …)` media query), this class only marks "currently inside a room" for
+ * that CSS to key off. Added on mount, removed on unmount — never left
+ * stuck on after navigating away.
  */
 export function EventRoom({
   event,
@@ -121,6 +152,15 @@ export function EventRoom({
   const connection = useLiveRoomConnection(canConnect ? { livekitUrl: LIVEKIT_URL!, token: initialToken! } : null);
 
   const orientation = useOrientation();
+  const isDesktopViewport = useIsDesktopViewport();
+
+  // See this component's own doc comment ("room-active body class").
+  useEffect(() => {
+    document.body.classList.add("room-active");
+    return () => {
+      document.body.classList.remove("room-active");
+    };
+  }, []);
 
   const myIdentity = getParticipantIdentity(
     identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
@@ -218,7 +258,13 @@ export function EventRoom({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1">
-        {orientation === "landscape" ? <LandscapeRoom {...layoutProps} /> : <PortraitRoom {...layoutProps} />}
+        {isDesktopViewport ? (
+          <DesktopRoom {...layoutProps} />
+        ) : orientation === "landscape" ? (
+          <MobileLandscapeRoom {...layoutProps} />
+        ) : (
+          <PortraitRoom {...layoutProps} />
+        )}
       </div>
       {/*
        * Issue #20: pulled out of the normal room UI entirely — it was

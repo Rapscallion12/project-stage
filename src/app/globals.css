@@ -56,3 +56,27 @@ body {
   color: var(--foreground);
   color-scheme: dark;
 }
+
+/*
+ * Real-device finding (2026-08-22): on a phone in landscape, the
+ * site-wide header (SiteHeader, root layout) was consuming a fixed,
+ * generous share of an already-short viewport, on top of the room's own
+ * chrome. `body.room-active` is toggled by EventRoom for exactly as
+ * long as a live room is mounted (see its own doc comment) — combined
+ * with a height-based media query (not `orientation` alone, and
+ * deliberately not a width check either — see use-desktop-viewport.ts's
+ * own comment on why width>height is the wrong signal for "desktop")
+ * this targets short landscape viewports specifically. Real phones in
+ * landscape sit well under 500px of CSS height even accounting for
+ * browser chrome; real desktop windows are reliably taller than that
+ * even when narrow, so this doesn't accidentally shrink the header on a
+ * merely-narrow desktop browser. Padding only — the header's own
+ * content/links are untouched, so nothing here removes navigation, it
+ * just reserves less permanent space for it.
+ */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.room-active > header {
+    padding-top: 0.375rem;
+    padding-bottom: 0.375rem;
+  }
+}
