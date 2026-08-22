@@ -640,6 +640,94 @@ deployed test room confirmed no regressions.
 iPhone portrait, iPhone landscape, and a desktop browser specifically.
 Do not begin #18, #21, #24, #25, or any other issue until confirmed.
 
+**Full responsive-room confirmation came back positive, same session —
+fourth checkpoint tagged, then #21's first slice implemented**: portrait,
+landscape, and desktop all confirmed on real devices, including
+everything built across the whole session (direct join readiness,
+open-seat reachability, no-duplicate-self-video, the three-way
+responsive split). Before starting the next pass, per explicit
+instruction: re-read #18/#20/#21/#22/#23/#24/#25/#27's current bodies,
+AGENTS.md, ARCHITECTURE.md, DECISIONS.md, and the commits since the
+three-composition split — and tag a rollback checkpoint on the confirmed
+state *before* editing anything. Process note: the checkpoint instruction
+was re-read carefully only after implementation had already started
+(files written, nothing yet committed) — since `main` was still
+untouched, tagging `ff540b0` at that point remained exactly equivalent
+to tagging it first; recorded transparently rather than treated as
+already having been done correctly.
+
+`prototype-responsive-mobile-landscape-stable` tagged on `ff540b0` (two
+independent checks: matches `origin/main` and the latest successful
+Vercel deployment), GitHub Release created marked prerelease.
+
+**Problem for this pass**: mobile landscape's chat/composer overlay,
+though it never resized the stage, was still visually dominant at rest,
+and the room's own header plus the site-wide header together still cost
+real document-flow height on an already-short viewport. Governing rule
+set explicitly before implementation: video geometry is stable — the
+comments-focus interaction changes only what's layered *over* the live
+video, never the video's own size.
+
+Investigated per instruction, 8 specific questions answered in full in
+this turn's response (not duplicated here — see DECISIONS.md for the
+complete write-up): confirmed `StageOverlayShell` was already 100%
+overlay (zero stage-shrinking contribution) and the *only* document-flow
+space above the stage came from `SiteHeader`/`RoomHeader`; confirmed #20
+already built exactly the primitives #21 needed (`room-scrim`, inert
+since #20, and a *separate* always-on legibility gradient — the two
+never conflated); confirmed no existing #21 gesture infrastructure to
+duplicate (this is the actual first implementation); confirmed the
+transition could be built entirely via scrim opacity + one existing
+wrapper `<div>`'s height, with zero LiveKit/track remounting.
+
+Implemented: new `useCommentsFocus()` hook (dead-zone + commit-threshold
+drag math via a pure, directly-unit-tested `computeDragProgress`
+function; a `draggedRef` flag so tap and drag can't double-toggle each
+other) drives `SpeakerStage`'s now-controllable `scrimOpacity`/
+`scrimInstant` props (both optional, default `0`/`false` — zero change
+for `PortraitRoom`/`DesktopRoom`) and one wrapper `<div>`'s height inside
+`MobileLandscapeRoom`'s existing `StageOverlayShell` — collapsed state
+is byte-identical to the pre-pass height (zero regression at rest),
+expanded state reveals meaningfully more chat history for free
+(`ChatPanel`'s own scroll region already adapts). The gesture handle is
+a small, dedicated `<button>` (`touch-action: none`, `setPointerCapture`)
+— never the message list, so scrolling chat and the collapse gesture
+never compete, and normal taps elsewhere in the room never trigger it.
+`RoomHeader` moves from a document-flow sibling to an absolutely-
+positioned top overlay, `MobileLandscapeRoom`-only, reclaiming its
+footprint for the stage — `PortraitRoom` completely untouched, matching
+the explicit no-regression requirement. `RoomControls` left unchanged in
+both states (real functional info, not decoration — not worth the size-
+reduction risk).
+
+**Desktop anti-squashing**: investigated and fixed with one isolated
+CSS class — a fixed 320px sidebar left the two tiles pathologically
+narrow right at the 1024px desktop threshold; `w-64 xl:w-80` on
+`DesktopRoom`'s sidebar fixes the cramped zone, nothing else touched.
+
+**Deliberately not built**: the second-level "full comments view" with
+genuinely compressed video (an architectural seam is left via the same
+hook, per instruction not to prematurely build it); wiring this
+interaction into `PortraitRoom` (scoped to mobile landscape only this
+pass); the divider's voting-focus direction (#25, still fully inert);
+any #18/#24/#25/voting work.
+
+22 new/changed tests across 5 files (`use-comments-focus.test.ts` — 11
+for the pure drag-math function and the hook's tap/drag/no-double-toggle
+behavior; `speaker-stage.test.tsx`'s scrim-opacity describe block;
+`mobile-landscape-room.test.tsx`'s header-overlay and comments-focus
+describe blocks; `desktop-room.test.tsx`'s sidebar-width test).
+lint/tsc/build/test all pass (259/259). Merged to `main`, pushed,
+deployment confirmed via the GitHub deployments API, structural
+production check against the deployed test room confirmed no
+regressions.
+
+**Next task**: stop for the user's own real-device confirmation —
+iPhone portrait (no regression), iPhone landscape (the new comments-
+focus interaction and reduced chrome), and desktop (unchanged, plus the
+anti-squashing fix at a few widths). Do not begin #18, #24, #25, voting,
+or the second-level full-comments view until confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

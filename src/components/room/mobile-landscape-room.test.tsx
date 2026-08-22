@@ -103,4 +103,69 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
     expect(overlay.className).toMatch(/\bpointer-events-none\b/);
     expect((overlay.firstElementChild as HTMLElement).className).toMatch(/\bpointer-events-auto\b/);
   });
+
+  describe("room header as a top overlay (real-device finding: two document-flow headers ate too much of an already-short viewport)", () => {
+    it("the room header is no longer a document-flow sibling of the stage — it renders inside the same relatively-positioned stage wrapper", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const stage = screen.getByTestId("room-stage");
+      const heading = screen.getByRole("heading", { name: "Late Night Debate" });
+      expect(stage.parentElement).toBe(screen.getByTestId("room-header-overlay").parentElement);
+      expect(screen.getByTestId("room-header-overlay")).toContainElement(heading);
+    });
+
+    it("the header overlay is click-through outside its actual content, same pattern as the bottom overlay", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const overlay = screen.getByTestId("room-header-overlay");
+      expect(overlay.className).toMatch(/\bpointer-events-none\b/);
+      expect((overlay.firstElementChild as HTMLElement).className).toMatch(/\bpointer-events-auto\b/);
+    });
+
+    it("reserves space on the right so it doesn't collide with the top-right self-preview slot", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const inner = screen.getByTestId("room-header-overlay").firstElementChild as HTMLElement;
+      expect(inner.className).toMatch(/\bpr-16\b/);
+    });
+  });
+
+  describe("comments-focus overlay (issue #21, first slice: chat/controls no longer permanently dominate the screen)", () => {
+    it("renders a dedicated grab handle, separate from the message list, for the drag/tap gesture", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const handle = screen.getByTestId("comments-focus-handle");
+      expect(handle.tagName).toBe("BUTTON");
+      expect(handle.className).toMatch(/\btouch-none\b/);
+    });
+
+    it("starts collapsed — not visually dominant at rest", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "false");
+      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+    });
+
+    it("tapping the handle expands the chat area and darkens the scrim, without touching the stage's own size", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const stage = screen.getByTestId("room-stage");
+      const stageClassBefore = stage.className;
+
+      fireEvent.click(screen.getByTestId("comments-focus-handle"));
+
+      expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "true");
+      expect(Number(screen.getByTestId("room-scrim").style.opacity)).toBeGreaterThan(0);
+      expect(stage.className).toBe(stageClassBefore);
+    });
+
+    it("tapping the handle again collapses it back", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const handle = screen.getByTestId("comments-focus-handle");
+      fireEvent.click(handle);
+      fireEvent.click(handle);
+      expect(handle).toHaveAttribute("aria-expanded", "false");
+      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+    });
+
+    it("a plain tap on an empty-seat tile never triggers the comments-focus gesture", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
+      expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "false");
+    });
+  });
 });

@@ -86,4 +86,11 @@ describe("DesktopRoom (renamed from LandscapeRoom, real-device finding: desktop 
     fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
     expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
   });
+
+  it("narrows the sidebar below the xl breakpoint instead of leaving the stage pathologically squashed right at the desktop threshold (real-device finding)", () => {
+    const { container } = render(<DesktopRoom {...baseProps} />);
+    const sidebar = container.querySelector(".border-l");
+    expect(sidebar?.className).toMatch(/\bw-64\b/);
+    expect(sidebar?.className).toMatch(/\bxl:w-80\b/);
+  });
 });

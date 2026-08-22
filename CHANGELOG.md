@@ -7,6 +7,45 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Checkpoints
+
+- **`prototype-responsive-mobile-landscape-stable`** (2026-08-22, commit
+  `ff540b0`) — known-good recovery point covering the three-composition
+  responsive room split (below), the direct-join media-readiness
+  convergence, the open-seat-reachability fix, and the no-duplicate-
+  self-video fix — all confirmed working on real devices (iPhone
+  portrait, iPhone landscape, desktop) before starting #21's comments-
+  focus interaction. See DECISIONS.md.
+
+### Added
+
+- **#21, first slice: comments-focus overlay for mobile landscape,
+  video geometry never resizes** — the chat/controls overlay's default
+  state is unchanged in size (byte-identical to the prior fixed height)
+  but now expands on a tap or drag of a dedicated handle, darkening
+  `SpeakerStage`'s own scrim as it does — the scrim itself was already
+  built inert by #20, just never driven until now. New
+  `useCommentsFocus()` hook (dead-zone + commit-threshold drag math,
+  exported as a pure, directly-tested function) owns the gesture; a
+  `draggedRef` flag prevents the tap and drag paths from double-toggling
+  each other. The gesture handle is a small, dedicated element —
+  `touch-action: none`, `setPointerCapture` — never the message list
+  itself, so scrolling chat never fights the collapse gesture and normal
+  taps elsewhere in the room never trigger it. `RoomHeader` also becomes
+  an absolutely-positioned top overlay specific to `MobileLandscapeRoom`,
+  reclaiming its document-flow footprint for the stage; `PortraitRoom`
+  is completely untouched by this pass. See ARCHITECTURE.md and
+  DECISIONS.md.
+
+### Fixed
+
+- **Desktop's two-tile stage no longer gets pathologically narrow right
+  at the desktop width threshold** — a real-device finding: a fixed
+  320px sidebar left only ~700px for two side-by-side video tiles at
+  1024px, cropping video heavily via `object-cover`. One isolated,
+  responsive width class (`w-64 xl:w-80`) on `DesktopRoom`'s sidebar —
+  narrower only below 1280px, unchanged above it. See DECISIONS.md.
+
 ### Changed
 
 - **Three room compositions instead of two: mobile portrait, mobile

@@ -73,12 +73,13 @@ import type { Orientation } from "@/hooks/use-orientation";
  *   element — seat numbering/DB assignment, LiveKit subscriptions, and
  *   whatever's already attached to either tile are completely untouched;
  *   nothing here remounts.
- * - The **scrim**, spanning the whole stage — #21 will animate its
- *   opacity as chat/voting focus panels open above it. `opacity-0` and
- *   `pointer-events-none` today: present in the DOM (so #21 doesn't need
- *   to introduce a new layer, just start animating this one) but
- *   invisible and inert, so it can never block a tap on a tile
- *   underneath (e.g. issue #15's "tap to enable camera & mic" control).
+ * - The **scrim**, spanning the whole stage — issue #21's own darkening
+ *   layer for the comments-overlay focus state, driven via the optional
+ *   `scrimOpacity`/`scrimInstant` props below (defaulting to `0`/`false`,
+ *   i.e. today's original inert behavior, for `PortraitRoom`/`DesktopRoom`,
+ *   which don't pass them yet). `pointer-events-none` always — it must
+ *   never block a tap on a tile underneath (e.g. issue #15's "tap to
+ *   enable camera & mic" control), darkening is purely visual.
  *
  * `bg-black`, not a theme token — a video stage stays dark regardless of
  * the app's light/dark mode, the same convention any video player uses.
@@ -94,6 +95,8 @@ export function SpeakerStage({
   onTapEmptySeat,
   isJoiningSeat,
   localVideoTrack,
+  scrimOpacity = 0,
+  scrimInstant = false,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -107,6 +110,10 @@ export function SpeakerStage({
   isJoiningSeat: boolean;
   /** Issue #22: the local participant's own held camera track, if any — see this component's self-preview-slot doc comment above. */
   localVideoTrack: LocalVideoTrack | null;
+  /** Issue #21: 0 (no darkening) to 1 (fully darkened) — see the scrim's own doc comment above. */
+  scrimOpacity?: number;
+  /** Issue #21: true only for live drag frames — omits the CSS transition so the scrim tracks the finger with zero lag; release/tap-toggle frames leave this false so the settle animates. */
+  scrimInstant?: boolean;
 }) {
   const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
   const viewerIsSpeaking = speakers.some((s) => {
@@ -170,11 +177,12 @@ export function SpeakerStage({
       {/* Self-preview slot (issue #22) — hidden entirely, not just an empty placeholder, when there's no local media to show. */}
       {localVideoTrack && <SelfPreview track={localVideoTrack} />}
 
-      {/* Scrim (issue #21 animates this) */}
+      {/* Scrim (issue #21) — driven by scrimOpacity; see the doc comment above. */}
       <div
         data-testid="room-scrim"
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-black opacity-0 transition-opacity duration-200"
+        className={cn("pointer-events-none absolute inset-0 bg-black", !scrimInstant && "transition-opacity duration-200")}
+        style={{ opacity: scrimOpacity }}
       />
     </div>
   );

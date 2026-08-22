@@ -73,12 +73,27 @@ describe("SpeakerStage", () => {
     expect(slot.className).not.toMatch(/\bbottom-3\b/);
   });
 
-  it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath (issue #21 animates it)", () => {
+  it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath — no caller drives it yet", () => {
     render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
     const scrim = screen.getByTestId("room-scrim");
     expect(scrim).toBeInTheDocument();
-    expect(scrim.className).toMatch(/\bopacity-0\b/);
+    expect(scrim.style.opacity).toBe("0");
     expect(scrim.className).toMatch(/\bpointer-events-none\b/);
+  });
+
+  describe("scrim opacity (issue #21, driven by MobileLandscapeRoom's comments-focus overlay)", () => {
+    it("renders whatever opacity the caller passes", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} scrimOpacity={0.4} />);
+      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0.4");
+    });
+
+    it("includes the settle transition by default, omits it only when the caller marks a live drag frame as instant", () => {
+      const { rerender } = render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} scrimOpacity={0.3} />);
+      expect(screen.getByTestId("room-scrim").className).toMatch(/\btransition-opacity\b/);
+
+      rerender(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} scrimOpacity={0.3} scrimInstant />);
+      expect(screen.getByTestId("room-scrim").className).not.toMatch(/\btransition-opacity\b/);
+    });
   });
 
   describe("layering (real-device fix: the divider was bleeding across chat/controls)", () => {

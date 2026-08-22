@@ -321,7 +321,7 @@ different dependencies. Current order:
       decluttered — deliberately deferred, possibly #18) and a mic
       activity indicator. Stays in Testing/Review pending real-device
       confirmation. See SESSION_LOG.md and DECISIONS.md.
-- [ ] Three room compositions by form factor, not two by orientation
+- [x] Three room compositions by form factor, not two by orientation
       (2026-08-22, real-device follow-up to #20's video-first shell) —
       mobile landscape's dashboard-style drift (recorded as a constraint
       in ARCHITECTURE.md during the previous pass) is now fixed: new
@@ -334,9 +334,14 @@ different dependencies. Current order:
       (unchanged). The site-wide header also compacts on a short
       mobile-landscape viewport specifically while inside a room (CSS
       media query + a route-scoping body class, no navigation removed).
-      **Not checked off** — pending real-device confirmation across
-      iPhone portrait, iPhone landscape, and a desktop browser. See
-      ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
+      **User-confirmed on real devices** (iPhone portrait, iPhone
+      landscape, desktop browser) — see the
+      `prototype-responsive-mobile-landscape-stable` checkpoint. A
+      follow-up real-device pass on the same composition found the
+      chat/composer still felt dominant and the headers still cost real
+      space — see the #21 first-slice entry below and the desktop
+      anti-squashing fix. See ARCHITECTURE.md, DECISIONS.md, and
+      SESSION_LOG.md.
 - [ ] Direct join on an uncontested empty seat (issue #27) — split from
       #23 after real-device testing: with a seat open and no pending
       requests, tapping the tile directly attempts to join it — no
@@ -372,12 +377,33 @@ different dependencies. Current order:
       built here, composing rather than being replaced. **Not checked
       off** — pending the user's own real-device confirmation. See
       SESSION_LOG.md and DECISIONS.md.
-- [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
-      drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
-      and voting-focus, tap always available independent of the gesture,
-      and `ChatPanel` made a single continuously-mounted component so
-      draft text/scroll position/mic-request-mode survive focus changes.
-      Explicitly does not own default-state compositing — that's #20's.
+- [ ] Chat/voting focus interactions (issue #21) — **first slice shipped
+      (2026-08-22), mobile landscape only**: a dedicated drag/tap handle
+      (`useCommentsFocus`, dead-zone-gated, commit-threshold release —
+      #21's own bottom-sheet-pattern design) expands the chat overlay and
+      darkens `SpeakerStage`'s own `room-scrim` (built inert in #20, now
+      actually driven) without ever resizing the stage or touching
+      LiveKit/track attachment — governing rule: video geometry is
+      stable, only what's layered over it changes. `ChatPanel` was
+      already a single continuously-mounted component (built in earlier
+      passes), so draft text/scroll position/mic-request-mode already
+      survive focus changes for free. Scoped to `MobileLandscapeRoom`
+      only this pass — `PortraitRoom` untouched (explicit no-regression
+      requirement), the hook is reusable there later. **Remaining**:
+      wiring the same interaction into `PortraitRoom`; the divider's
+      *voting*-focus direction (still #25's job, still fully inert); the
+      second-level "full comments view" with genuinely compressed video
+      (deliberately deferred, a seam is left, not implemented — see
+      DECISIONS.md). **Not checked off** — pending the user's own
+      real-device confirmation. See ARCHITECTURE.md, DECISIONS.md, and
+      SESSION_LOG.md.
+- [x] Desktop anti-squashing fix (2026-08-22, real-device follow-up) —
+      right at the 1024px desktop threshold, a fixed 320px sidebar left
+      the two video tiles pathologically narrow; one isolated responsive
+      width class (`w-64 xl:w-80`) fixes the cramped zone without
+      touching anything else about the desktop composition. A hard
+      minimum width on the stage column itself would be more thorough —
+      left to #18. See DECISIONS.md.
 - [ ] Fresh next-speaker ranking rounds (issue #24) — ranking freshness
       bounded by the current pairing's `joined_at`, so stale reaction
       support from a previous pairing can't dominate a new one.

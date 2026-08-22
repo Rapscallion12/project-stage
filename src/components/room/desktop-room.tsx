@@ -21,6 +21,18 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * `PortraitRoom` already uses). Presentation only, same discipline as
  * every other room composition — all live state still lives in
  * `EventRoom`, above this branch.
+ *
+ * **Anti-squashing note (2026-08-22)**: right at the desktop width
+ * threshold (1024px), a fixed `w-80` (320px) sidebar left the two
+ * side-by-side tiles pathologically narrow — `SpeakerStage`'s tiles have
+ * no minimum width or aspect-ratio floor, so `object-cover` crops video
+ * heavily once a tile gets tall-and-narrow instead of landscape-shaped.
+ * Fixed with one isolated, responsive width class on the sidebar itself
+ * (`w-64 xl:w-80` — narrower only below the 1280px `xl` breakpoint, back
+ * to the original width above it) — everything else about this
+ * composition, and every other one, is untouched. A hard minimum width
+ * on the stage column itself would be a further, more thorough fix;
+ * left to #18 rather than expanded here.
  */
 export function DesktopRoom({
   event,
@@ -97,7 +109,8 @@ export function DesktopRoom({
           countdownText={countdownText}
         />
       </div>
-      <div className="flex w-80 shrink-0 flex-col border-l border-border">
+      {/* w-64 below the xl breakpoint (1280px), not a fixed w-80 — real-device follow-up: right at the desktop threshold (1024px) a fixed 320px sidebar left the two side-by-side video tiles pathologically narrow. A small, isolated width reduction in the cramped zone only; the sidebar returns to its original, already-acceptable w-80 once there's room to spare. See DECISIONS.md. */}
+      <div className="flex w-64 shrink-0 flex-col border-l border-border xl:w-80">
         {identity.type === "guest" && (
           <div className="shrink-0 border-b border-border px-3 py-2">
             <GuestNameEditor initialName={identity.displayName} />

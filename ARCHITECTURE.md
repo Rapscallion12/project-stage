@@ -1293,6 +1293,28 @@ and any further landscape/header polish beyond what real-device testing
 shows is actually needed — still #18's territory, or a follow-up pass on
 this one.
 
+**Issue #21's first slice — comments-focus overlay (2026-08-22)**: a
+follow-up real-device pass found `MobileLandscapeRoom`'s chat/controls
+overlay, though never resizing the stage, was still visually dominant at
+rest, and that `RoomHeader`/`SiteHeader` together still cost real
+document-flow height on an already-short viewport. `SpeakerStage`'s
+`room-scrim` (built inert in #20, `opacity-0` hardcoded) now accepts
+optional `scrimOpacity`/`scrimInstant` props (default `0`/`false` — no
+change for `PortraitRoom`/`DesktopRoom`, which don't pass them); a new
+`useCommentsFocus()` hook (`src/hooks/use-comments-focus.ts`) drives
+those props plus one existing height-controlling wrapper `<div>` from a
+dedicated drag/tap handle, expanding the chat overlay and darkening the
+scrim without ever touching `SpeakerStage`'s own size, props, or the
+`<video>`/LiveKit track attachment beneath it — the governing rule for
+this slice: video geometry is stable, the interaction changes only what's
+layered over it. Scoped to `MobileLandscapeRoom` only for this pass
+(`PortraitRoom` untouched, per an explicit no-regression instruction);
+the hook is written to be reusable there later. `RoomHeader` also moves
+from document flow to an absolutely-positioned top overlay, but only
+within `MobileLandscapeRoom` — full reasoning, including why `SiteHeader`
+itself stays as it was in the previous pass rather than *also* becoming
+an overlay, in DECISIONS.md.
+
 ## Testing & Definition of Done
 
 A feature is not done — regardless of what the roadmap checkbox says —
