@@ -3,6 +3,78 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — A speaker's own seat tile stops rendering their own video; landscape's dashboard drift recorded, not fixed (issue #22 dominant-video corrective pass)
+
+**Problem**: real-device testing of the previous pass (candidate
+readiness/self-preview) confirmed local media acquisition and the
+self-preview both work, but exposed a genuine duplication bug: once
+promoted, a speaker's camera rendered *twice* simultaneously — once as
+their own large tile in the two-seat grid (`SpeakerTile`, via the
+LiveKit `participant` lookup) and again in the persistent corner
+`SelfPreview` (via the directly-held `localVideoTrack`) — the same
+underlying `MediaStreamTrack`, attached to two independent `<video>`
+elements. Separately, testing landscape mode found the room collapses
+into a dashboard-style layout (small horizontal video strip, permanent
+side-panel chat, full header) — a different, unrelated finding the user
+explicitly asked to *record*, not fix, in this pass.
+
+**Investigation** (per instruction, before changing anything): the
+duplication traces to `SpeakerTile` and `SelfPreview` being two
+independent consumers of the same published track, with no coordination
+between them — `SpeakerTile` renders whatever `hasVideo` says regardless
+of *whose* tile it is beyond `isLocal`'s existing (narrower) uses
+(mute attribute, "(you)" label, skipping the tap-to-enable/audio-element
+cases). Confirmed `SpeakerStage` already computes exactly the needed
+signal for free: `isLocal` on any given tile is only ever true for the
+*local* participant's own seat, on *that* participant's own client —
+never true for an audience member (their identity never matches a
+seat's occupant), so gating on it can't affect what an audience member
+sees. Confirmed suppressing the tile's own video is presentation-only:
+`participant` here is `room.localParticipant`, whose track publication
+(and thus what every *other* client subscribes to and renders) is
+entirely independent of what this client chooses to render locally —
+same principle the existing `muted={isLocal}`/no-local-`<audio>`-element
+code already relied on for the mic side.
+
+**Decision**: `SpeakerTile` gained `showBigVideo = hasVideo && !isLocal`
+— the big `<video>` only ever renders for a *remote* participant's tile
+now. When it's the local speaker's own occupied seat and `hasVideo` is
+true, a new neutral placeholder ("You're live — see your preview in the
+corner") renders instead of either the real video or the existing
+"Camera off" text (which would be false — the camera is genuinely on).
+No changes to `SpeakerStage`'s layout, the two-tile grid proportions, or
+the empty-seat tile at all — the other seat (real remote speaker, or
+still empty) renders exactly as before either way, which is what
+"preserve the empty-seat state as dominant, don't enlarge my own preview
+to fill space" required. No changes to `useLiveRoomConnection`, track
+ownership, publishing, or the self-preview itself.
+
+**Landscape finding recorded, not fixed**: full write-up in
+ARCHITECTURE.md ("Landscape must stay video-first too") and issue #18
+(the eventual owner — its own Portrait `SpeakerView` bullet already
+anticipated most of the no-duplication fix above, pulled forward here;
+its Landscape bullet already anticipated *collapsible* chat, compatible
+with the new constraint). Explicitly out of scope for this pass per
+instruction — no landscape code touched.
+
+**Alternatives considered**: (1) literal asymmetric grid resizing — make
+the other speaker's tile visually larger/dominant, not just decluttered
+— rejected for *this* pass: the user explicitly asked for the smallest
+presentation-layer fix and to avoid starting a broader layout redesign;
+"dominant" is satisfied here by there being only one real video left to
+look at, not by resizing the grid. True asymmetric sizing (matching
+#18's own "strong visual priority" language) stays #18's job. (2) A new
+prop threaded down from `SpeakerStage` (e.g. `suppressOwnVideo`) —
+rejected as redundant: `isLocal`, already passed into every tile, is
+already exactly the right signal (true only for the viewer's own seat,
+on their own client) with no additional plumbing needed.
+
+**Tradeoffs**: none functionally — this is a narrower slice of #22's own
+already-reserved "Role-specific dominant video (partial, narrow)"
+bullet, not new scope. The full grid-level "make the other speaker
+visually dominant" treatment and the landscape redesign both remain open
+(#18), by design.
+
 ## 2026-08-22 — Candidate media readiness is a local fact, not a new server field (issue #22's remaining scope)
 
 **Problem**: after `prototype-auto-promotion-stable`, the remaining

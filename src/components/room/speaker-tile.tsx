@@ -32,6 +32,21 @@ function mediaErrorShortLabel(error: NonNullable<MediaError>): string {
  * be `undefined` (not yet connected) or muted/cameraless even while
  * `speaker` is set; that's exactly the case this split exists for. Never
  * the reverse: a `participant` alone never implies an occupied seat.
+ *
+ * Issue #22 (dominant-video corrective pass): when this tile is *my own*
+ * occupied seat (`isLocal`), it deliberately never renders the big video
+ * even though `hasVideo` may be true — `SelfPreview` (SpeakerStage's
+ * corner slot) is the one canonical place a speaker sees their own live
+ * feed; showing it again here duplicated it. This is presentation-only:
+ * `participant` here is `room.localParticipant`, whose track is already
+ * published and subscribed by every *other* participant's own client
+ * completely independently of what this client renders locally — muting
+ * this tile's own video never touches the publication itself, same
+ * principle `muted`/no-`<audio>`-element on the local tile already used
+ * for the local mic. A remote viewer's `isLocal` is never true for either
+ * tile at all (their own identity never matches a seat's occupant), so
+ * this never affects what an audience member sees — both real speaker
+ * tiles render normally for them, unchanged.
  */
 export function SpeakerTile({
   speaker,
@@ -61,16 +76,20 @@ export function SpeakerTile({
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
   const hasVideo = Boolean(cameraPublication?.track && !cameraPublication.isMuted);
+  // Issue #22: this tile's own big video is never shown for the local
+  // speaker's own seat — see this component's doc comment. Only affects
+  // rendering; the underlying publication is untouched.
+  const showBigVideo = hasVideo && !isLocal;
 
   useEffect(() => {
     const track = cameraPublication?.track;
     const element = videoRef.current;
-    if (!track || !element || !hasVideo) return;
+    if (!track || !element || !showBigVideo) return;
     track.attach(element);
     return () => {
       track.detach(element);
     };
-  }, [cameraPublication?.track, hasVideo]);
+  }, [cameraPublication?.track, showBigVideo]);
 
   useEffect(() => {
     if (isLocal) return; // never play back the local participant's own mic
@@ -113,10 +132,12 @@ export function SpeakerTile({
 
   return (
     <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
-      {hasVideo ? (
-        // Local video is muted to avoid feedback; there is no local audio
-        // element at all (see the effect above) for the same reason.
-        <video ref={videoRef} autoPlay playsInline muted={isLocal} className="h-full w-full object-cover" />
+      {showBigVideo ? (
+        // Only ever a remote participant's video now — the local
+        // speaker's own feed lives in SelfPreview instead (see this
+        // component's doc comment), so there's no local-feedback case to
+        // mute here and no local audio element (see the effect above).
+        <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
       ) : isLocal && needsMediaActivation ? (
         // The activation tap-target lives here, on the local participant's
         // own tile — not only in RoomControls' control strip further down
@@ -140,6 +161,20 @@ export function SpeakerTile({
           </div>
           <p className="px-4 text-center text-xs font-medium">Tap to enable camera &amp; mic</p>
         </button>
+      ) : isLocal && hasVideo ? (
+        // I'm live (hasVideo is true — a real, unmuted published track),
+        // just not shown here — see this component's doc comment. Framed
+        // neutrally/positively, not as "Camera off" (untrue: it's on,
+        // it's just deliberately not duplicated in this tile).
+        <div
+          data-testid="own-seat-live"
+          className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/5 text-foreground"
+        >
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
+            {initials(speaker.display_name)}
+          </div>
+          <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
+        </div>
       ) : (
         <div
           data-testid="no-video-placeholder"

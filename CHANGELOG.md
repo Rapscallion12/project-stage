@@ -7,6 +7,25 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Speaker's own video no longer duplicated on stage** (issue #22
+  dominant-video corrective pass) — real-device testing of the previous
+  pass found a promoted speaker's camera rendering twice: once as their
+  own large tile in the two-seat grid, again in the persistent corner
+  self-preview. `SpeakerTile` now never renders the big video for the
+  local participant's own occupied seat (`showBigVideo = hasVideo &&
+  !isLocal`) — a neutral "You're live — see your preview in the corner"
+  placeholder shows there instead. Presentation-only: the local
+  participant's own tile is the only thing affected, on their own
+  client only — track publication and what every other participant
+  actually sees are untouched, and an audience member's view of both
+  real speaker tiles is unaffected. Landscape's dashboard-style drift
+  (small horizontal video strip, permanent side-panel chat, full header)
+  found during the same test pass is recorded as a constraint for a
+  later pass (ARCHITECTURE.md, issue #18), not fixed here. See
+  DECISIONS.md and SESSION_LOG.md.
+
 ### Added
 
 - **Candidate media readiness + persistent self-preview, promotion

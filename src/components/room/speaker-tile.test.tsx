@@ -19,6 +19,10 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   };
 }
 
+function fakeVideoTrack(): Track {
+  return { attach: vi.fn(), detach: vi.fn() } as unknown as Track;
+}
+
 function fakeParticipant(publications: Partial<Record<"camera" | "microphone", Partial<TrackPublication>>>): Participant {
   return {
     getTrackPublication: (source: string) => {
@@ -161,6 +165,46 @@ describe("SpeakerTile", () => {
       );
       expect(screen.getByTestId("no-video-placeholder")).toHaveTextContent("Permission denied");
       expect(screen.queryByText("Camera off")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("no duplicate self-video on the local speaker's own seat (issue #22 dominant-video corrective pass)", () => {
+    it("renders a live-but-not-duplicated placeholder on the local tile, never a <video>, even though a real published track exists", () => {
+      const fakeTrack = {} as Track;
+      const participant = fakeParticipant({ camera: { track: fakeTrack, isMuted: false } });
+      const { container } = render(
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={true} />,
+      );
+      expect(screen.getByTestId("own-seat-live")).toHaveTextContent("You're live");
+      expect(container.querySelector("video")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("a remote (audience-viewed) speaker tile renders the actual video normally, unaffected by the local-suppression rule", () => {
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      const { container } = render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(container.querySelector("video")).toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+    });
+
+    it("still falls back to the generic 'Camera off' placeholder for the local tile when there's genuinely no video yet", () => {
+      render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={true} />);
+      expect(screen.getByTestId("no-video-placeholder")).toHaveTextContent("Camera off");
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+    });
+
+    it("the tap-to-enable-media affordance still wins over the live-placeholder when both could apply", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={true}
+          needsMediaActivation={true}
+          activateMedia={vi.fn(async () => {})}
+        />,
+      );
+      expect(screen.getByTestId("tile-activate-media")).toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
     });
   });
 });

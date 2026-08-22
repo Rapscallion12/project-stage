@@ -473,6 +473,47 @@ stop for the user's own real-device confirmation — do not begin #21,
 (role-specific dominant video, mic activity indicator) stays open and
 narrowed in the issue body, not closed.
 
+**Real-device #22 test came back mostly positive, same session — one
+duplication bug found, fixed; a second finding recorded for later**:
+local media acquisition and self-preview both worked on iPhone, but a
+promoted speaker's own camera rendered twice — their own large tile in
+the two-seat grid *and* the corner self-preview, the same underlying
+track attached to two separate `<video>` elements independently. The
+user explicitly ruled out a broad landscape redesign for this pass and
+asked for inspection first: confirmed `isLocal` (already passed into
+every `SpeakerTile`) is exactly the right signal — true only for the
+local viewer's own seat, on their own client, never for an audience
+member — and confirmed suppressing the local tile's own video is purely
+presentational (the publication every other client subscribes to is
+untouched).
+
+`SpeakerTile` gained `showBigVideo = hasVideo && !isLocal` — the big
+video only ever renders for a remote participant's tile now; the local
+speaker's own occupied seat shows a neutral "You're live — see your
+preview in the corner" placeholder instead (not "Camera off" — untrue,
+the camera is genuinely on). No changes to `SpeakerStage`'s layout, grid
+proportions, or the empty-seat tile — satisfies the explicit "preserve
+the empty-seat state as dominant, don't enlarge my own preview to fill
+space" requirement for free, since neither tile's sizing changed at all.
+No changes to `useLiveRoomConnection`, track ownership, or publishing.
+5 new/changed tests in `speaker-tile.test.tsx`. lint/tsc/build/test all
+pass (209/209). Merged to `main` (fast-forward, same as every prior
+pass), pushed, deployment confirmed via the GitHub deployments API.
+
+**Second finding, recorded not fixed, per explicit instruction**: the
+same real-device pass found landscape mode collapses the room into a
+dashboard-style layout (small horizontal video strip, permanent
+side-panel chat, full header) rather than staying video-first — the
+opposite of this project's philosophy. Written up as a constraint for
+whichever pass does the actual redesign (ARCHITECTURE.md's new
+"Landscape must stay video-first too" subsection; issue #18, already
+scoped to cover role-based/landscape UI, amended via comment rather than
+scope-creeped into this pass). Zero landscape code touched this pass.
+
+**Next task**: stop for the user's own real-device confirmation of the
+duplication fix specifically — do not begin #18's broader redesign,
+#21, #24, #25, or any other issue until confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

@@ -1238,6 +1238,52 @@ hook), it just isn't read by this particular branch. **From
 change this section's rule, it just made that layout, and the
 orientation-safety it already had, reachable earlier than `ready`.
 
+### Landscape must stay video-first too — a real-device finding, not yet fixed
+
+Real-device testing during issue #22's dominant-video corrective pass
+(2026-08-22) found that the state-survival rule above is necessary but
+not sufficient: rotation currently survives *without dropping state*
+exactly as designed, but it lands on a presentation that abandons the
+video-first philosophy entirely — `LandscapeRoom` shrinks the stage to a
+horizontal strip, turns `RoomChatPanel` into a permanent side panel
+(`w-80 shrink-0`), and the full site header still consumes its normal
+share of vertical space. That reads as switching into a different,
+desktop/dashboard-style information architecture on rotation, not "the
+same live session redecorated" — the opposite of this section's own
+smoothness goal above.
+
+**This is not fixed yet** — recorded here as a constraint for whichever
+issue does the work (most likely #18, "Role-based room UI," which
+already scopes a landscape treatment), not implemented in the #22 pass
+that found it (explicitly out of scope for that pass — see
+DECISIONS.md). The constraint for that future work:
+
+- Rotation changes the stage's available aspect ratio, not the room's
+  information architecture — video-first in portrait, video-first in
+  landscape, not "video-first in portrait, dashboard in landscape."
+- Overlays stay overlays in both orientations. Chat must not graduate to
+  a permanent, always-visible side panel merely because the phone
+  rotated — if it's collapsible/overlay-based in portrait, it should be
+  the equivalent in landscape too.
+- The self-preview stays in its stable corner in both orientations —
+  this doesn't change what #22 already built, just constrains how #18
+  arranges the rest of the stage around it.
+- Avoid moving/recreating video elements across the rotation boundary
+  where avoidable — `SpeakerTile`/`SelfPreview`'s `.attach()`-based
+  design already tolerates a remount (rotation swaps
+  `PortraitRoom`/`LandscapeRoom`, unmounting everything beneath), but a
+  layout that *needs* to move a video element to a structurally
+  different position for the redesign below should still prefer
+  restyling a stable element over relocating it in the tree where
+  practical.
+- The room header/nav will need to become substantially smaller,
+  translucent, collapsible, or otherwise less intrusive in immersive
+  room mode — today's full header is sized for a non-video page.
+- Audience and active-speaker interfaces are allowed, and expected, to
+  differ in controls and presentation priority — this isn't a call for
+  one universal layout, just for both orientations of *whichever* layout
+  a given role gets to share the same video-first philosophy.
+
 ## Testing & Definition of Done
 
 A feature is not done — regardless of what the roadmap checkbox says —

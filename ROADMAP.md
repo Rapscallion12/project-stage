@@ -305,11 +305,19 @@ different dependencies. Current order:
       second permission prompt. Deliberately no new server-side
       "readiness" field — local track possession is the whole signal, and
       #23's automatic-promotion eligibility rule is unchanged by this.
-      **Remaining, narrowed further**: role-specific dominant video (the
-      *other* speaker's feed taking over the main stage once you're
-      speaking yourself — deliberately deferred, possibly #18) and a mic
-      activity indicator. Stays in Testing/Review pending real-device
-      confirmation. See SESSION_LOG.md and DECISIONS.md.
+      **Real-device testing found and fixed a duplication bug**: a
+      promoted speaker's own video was rendering twice (own large tile +
+      self-preview) — `SpeakerTile` now never shows the big video for
+      the local participant's own seat, a neutral placeholder shows
+      there instead; presentation-only, no track/publish changes, no
+      grid resizing, no landscape changes. **Remaining, narrowed
+      further**: literal asymmetric grid sizing (the *other* speaker's
+      tile visually enlarged, not just decluttered — deliberately
+      deferred, possibly #18) and a mic activity indicator. Landscape's
+      dashboard-style drift found in the same real-device pass is
+      recorded as a constraint in ARCHITECTURE.md, not fixed — #18's
+      job. Stays in Testing/Review pending real-device confirmation. See
+      SESSION_LOG.md and DECISIONS.md.
 - [ ] Direct join on an uncontested empty seat (issue #27) — split from
       #23 after real-device testing: with a seat open and no pending
       requests, tapping the tile directly attempts to join it — no
