@@ -1403,6 +1403,17 @@ both have a real, Figma-defined visual design to transition between.
 When it returns, it composes on top of `useCommentsMode`'s existing
 `open` boolean as a `progress` value driving the same two endpoints.
 
+**Confirmed stable on real devices (2026-08-22)**: the tap-based Watch
+Mode / Comments Mode states above passed the user's own real-device
+verification on iPhone portrait and landscape. This is now the stable
+interaction foundation the Figma-assisted redesign builds on — not
+something to be redesigned or altered as a side effect of unrelated
+work. A same-day, unrelated fix to `GuestNameEditor` (it wasn't exiting
+its own editing state on blur/outside-tap — a pre-existing bug in that
+component, not caused by or specific to Watch Mode/Comments Mode) is
+documented in DECISIONS.md; it touched `GuestNameEditor` and `<Input>`'s
+ref-forwarding only, nothing in this section's architecture.
+
 ## Testing & Definition of Done
 
 A feature is not done — regardless of what the roadmap checkbox says —

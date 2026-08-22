@@ -3,6 +3,66 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Watch Mode / Comments Mode confirmed stable on real devices; `GuestNameEditor` blur-commit fix
+
+**Status update, not a design change**: the tap-based Watch Mode /
+Comments Mode states (previous entry below) passed the user's own
+real-device confirmation on iPhone portrait and landscape. Per explicit
+instruction, this is now the **stable interaction foundation** —
+further Figma-assisted redesign work builds on top of it rather than
+around it, and it is not to be redesigned or altered as a side effect of
+unrelated fixes (see below). The progressive downward-drag reveal
+remains deliberately deferred, unchanged from the "Future Figma seam"
+reasoning in the entry below.
+
+**Problem**: a small, unrelated bug surfaced during that same real-device
+pass — `GuestNameEditor` (rendered inside the Watch Mode overlay) could
+be left visually stuck in its editing state after tapping "change name,"
+editing the text, and then dismissing the keyboard or tapping elsewhere
+in the room (Comments, a speaker tile, the stage). Explicit instruction:
+fix only this, don't touch the mode toggle, LiveKit, layout, or
+responsive branching in the process.
+
+**Investigation**: `GuestNameEditor` only ever exited editing mode from
+its `<form>`'s own `onSubmit` (triggered by clicking the visible "Save"
+button, or, on some browsers, Enter). There was no `onBlur` handler at
+all — tapping literally anything else in the room moved focus away from
+the input without ever calling `setEditing(false)`, leaving the form
+visually open indefinitely. This has nothing to do with Watch Mode/
+Comments Mode's own state; it was already broken before that work and
+is a pre-existing gap in this one component.
+
+**Decision**: commit on blur, not via a new document-level click-outside
+listener. Every "tap outside" interaction the user listed (Comments, a
+speaker tile, reactions, the stage) already fires a native `blur` on the
+input first, since focus is moving away from it — that's the one event
+already common to all of them. `<Input>` (`src/components/ui/input.tsx`)
+didn't forward refs, so `GuestNameEditor` couldn't imperatively call
+`.blur()` on its own input; wrapped it in `forwardRef` (purely additive
+— no existing caller passes a ref, so no other consumer's behavior
+changes). The form's `onSubmit` (Enter/Done) now just calls
+`inputRef.current?.blur()` instead of saving independently, so there is
+exactly one commit code path, not two that could race on a fast
+double-tap (e.g., tapping the visible Save button both blurs the input
+*and* submits the form — the second call is a harmless no-op against an
+already-blurred element). Validation is untouched: `setGuestName` still
+returns `{ error }` on an empty name and the component still just
+declines to exit editing mode in that case, exactly as before — no new
+message, no new rule, matching the explicit instruction not to invent
+naming rules while fixing this.
+
+**Reason**: the user explicitly asked for "the simplest conventional
+solution—likely committing on blur/focus leaving the editor—rather than
+introducing a global gesture system," which is what real product UIs
+(and this codebase's own recent retired-gesture lesson) both point
+toward: prefer the platform's native event for "focus left this field"
+over inventing a broader interception mechanism to approximate it.
+
+**Tradeoffs**: none identified — this is a strict bugfix with no new
+surface area. The explicit "Save" button remains, redundant with blur
+but harmless (kept for discoverability/parity with desktop mouse users
+who might expect an explicit confirm action).
+
 ## 2026-08-22 — Gesture retired; Watch Mode / Comments Mode rebuilt as a plain tap toggle (the "Future Figma seam")
 
 **Problem**: the room-level drag gesture (previous entry below) failed

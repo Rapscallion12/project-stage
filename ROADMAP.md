@@ -377,7 +377,7 @@ different dependencies. Current order:
       built here, composing rather than being replaced. **Not checked
       off** — pending the user's own real-device confirmation. See
       SESSION_LOG.md and DECISIONS.md.
-- [ ] Chat/voting focus interactions (issue #21) — **gesture retired;
+- [x] Chat/voting focus interactions (issue #21) — **gesture retired;
       rebuilt as Watch Mode / Comments Mode, a plain tap toggle
       (2026-08-22), both mobile orientations**: real-device testing of
       the room-level drag gesture (previous approach, kept below for
@@ -407,9 +407,16 @@ different dependencies. Current order:
       Watch Mode and Comments Mode both have a Figma-defined visual
       design — see DECISIONS.md's "Future Figma seam" entry; the eventual
       second-level "full comments view" with genuinely compressed video
-      (still not implemented, seam only). **Not checked off** — pending
-      the user's own real-device confirmation of the new tap-based
-      states. See ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
+      (still not implemented, seam only). **Checked off (2026-08-22)** —
+      the tap-based Watch Mode / Comments Mode states passed the user's
+      own real-device confirmation on iPhone portrait and landscape and
+      are now the stable interaction foundation the upcoming Figma-
+      assisted redesign builds on; the progressive drag gesture itself
+      remains deliberately unbuilt until that redesign happens. A small
+      same-day follow-up fixed `GuestNameEditor` not exiting its editing
+      state on blur/outside-tap (unrelated to the mode toggle itself —
+      see the entry below). See ARCHITECTURE.md, DECISIONS.md, and
+      SESSION_LOG.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -983,6 +983,43 @@ unaffected. Do not begin #18, #24, #25, voting, or another downward-drag
 gesture attempt until confirmed — that gesture returns only once Figma
 has defined both endpoints' visual design.
 
+**Watch Mode / Comments Mode confirmed on real devices** — the user
+verified the tap-based states on iPhone portrait and landscape and
+directed that this now be treated as the stable interaction foundation
+for the upcoming Figma-assisted redesign, not something to be altered as
+a side effect of unrelated work. ROADMAP.md's #21 entry checked off on
+this basis (the progressive drag itself remains deliberately unbuilt).
+
+**Small follow-up fix, same session**: `GuestNameEditor` (unrelated to
+the mode toggle — it renders inside the overlay both modes share, but
+its own bug predates this issue's work) could be left visually stuck in
+editing mode after tapping "change name," editing the text, and then
+tapping elsewhere or dismissing the keyboard — it only ever exited on
+its own form's `onSubmit`, with no `onBlur` handling at all. Fixed by
+committing on blur instead of adding a document-level click-outside
+listener: every "tap outside" interaction (Comments, a speaker tile, the
+stage) already fires a native blur on the input first, so that's the one
+event already common to all of them, per explicit instruction to prefer
+the simplest conventional fix over a new gesture mechanism. Routed
+Enter/Done through the identical path (`onSubmit` now just calls
+`inputRef.current?.blur()` rather than saving independently) so there's
+one commit code path, not two racing ones. `<Input>`
+(`src/components/ui/input.tsx`) gained `forwardRef` support — purely
+additive, no existing caller passes a ref — so `GuestNameEditor` can
+blur its own input imperatively. Existing empty-name validation/fallback
+left untouched (still just declines to exit editing mode on error, same
+as before). Did not touch LiveKit, comments-mode state, Watch Mode
+layout, speaker geometry, responsive branching, or reconnect behavior —
+confirmed via lint/tsc/build passing and the full test suite (283/283,
+33→34 files) with no other file changed besides `guest-name-editor.tsx`,
+its new test file, and `input.tsx`'s ref forwarding. Merged to `main`,
+pushed, deployment confirmed via the GitHub deployments API.
+
+**Next task**: stop for the user's own real-device confirmation of this
+specific fix (tap "change name," edit, tap away/dismiss keyboard,
+confirm it commits and returns to the normal display). Still not
+beginning #18, #24, #25, voting, or the Figma-assisted redesign.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

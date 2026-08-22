@@ -7,6 +7,24 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`GuestNameEditor` no longer gets stuck in editing mode after tapping
+  away** — the editor only ever exited editing mode from its own form's
+  `onSubmit`; tapping Comments, a speaker tile, the stage, or dismissing
+  the on-screen keyboard never called anything, leaving it visually
+  open. Now commits on `blur` (the one event every "tap outside"
+  interaction already produces), with Enter/Done routed through the same
+  path (`onSubmit` now just blurs the input rather than saving
+  independently) so there's one commit path, not two. `<Input>` gained
+  `forwardRef` support (purely additive) so the editor can blur its own
+  input imperatively. Existing empty-name validation/fallback is
+  unchanged. This is a status confirmation, not a design change: the
+  tap-based Watch Mode / Comments Mode states themselves passed
+  real-device verification on iPhone portrait and landscape this same
+  pass and are now the stable interaction foundation the Figma-assisted
+  redesign builds on. See DECISIONS.md.
+
 ### Changed
 
 - **Comments gesture retired; Watch Mode / Comments Mode rebuilt as a

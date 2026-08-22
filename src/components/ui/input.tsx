@@ -1,9 +1,14 @@
 import { cn } from "@/lib/utils";
+import { forwardRef } from "react";
 import type { ComponentProps } from "react";
 
-export function Input({ className, ...props }: ComponentProps<"input">) {
+export const Input = forwardRef<HTMLInputElement, ComponentProps<"input">>(function Input(
+  { className, ...props },
+  ref,
+) {
   return (
     <input
+      ref={ref}
       className={cn(
         // text-base (16px), not text-sm: iOS Safari auto-zooms the
         // viewport on focus for inputs smaller than 16px.
@@ -13,7 +18,7 @@ export function Input({ className, ...props }: ComponentProps<"input">) {
       {...props}
     />
   );
-}
+});
 
 export function Label({ className, ...props }: ComponentProps<"label">) {
   return (
