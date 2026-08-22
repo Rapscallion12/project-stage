@@ -70,6 +70,24 @@ export function EventRoom({
 
   function handleTapEmptySeat() {
     setJoinSeatMessage(null);
+    // Issue #22 convergence (real-device finding, 2026-08-22): tapping an
+    // open seat is the same expressed intent to speak as the composer's
+    // mic-request submit, so it gets the same readiness treatment —
+    // called synchronously here, directly from the tile's own onClick
+    // (this function's caller), not from inside startJoiningSeat's
+    // transition callback below, for the identical Safari gesture reason
+    // ChatPanel's onSubmit already documents. Reuses prepareLocalMedia
+    // as-is (idempotent, no new hook) — the existing publish path already
+    // publishes whatever's prepared once canPublish flips true, regardless
+    // of which entry point acquired it, so a successful claim below needs
+    // no further wiring to publish without a second permission prompt. On
+    // any failure (including queue-exists, which falls back to the same
+    // composer request mode), the tracks are deliberately left held, not
+    // released — the candidate/audience state this returns to can still
+    // use them (retry, or the composer fallback), same as
+    // prepareLocalMedia already leaves them for a composer request that
+    // hasn't been promoted yet.
+    void connection.prepareLocalMedia();
     startJoiningSeat(async () => {
       const result = await joinOpenSeat(event.id);
       if (result.ok) {

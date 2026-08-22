@@ -310,14 +310,20 @@ different dependencies. Current order:
       self-preview) — `SpeakerTile` now never shows the big video for
       the local participant's own seat, a neutral placeholder shows
       there instead; presentation-only, no track/publish changes, no
-      grid resizing, no landscape changes. **Remaining, narrowed
-      further**: literal asymmetric grid sizing (the *other* speaker's
-      tile visually enlarged, not just decluttered — deliberately
-      deferred, possibly #18) and a mic activity indicator. Landscape's
-      dashboard-style drift found in the same real-device pass is
-      recorded as a constraint in ARCHITECTURE.md, not fixed — #18's
-      job. Stays in Testing/Review pending real-device confirmation. See
-      SESSION_LOG.md and DECISIONS.md.
+      grid resizing, no landscape changes. **A second real-device pass
+      found direct join (#27) bypassed this issue's readiness path
+      entirely** — fixed by having `EventRoom`'s empty-seat tap handler
+      call the same `prepareLocalMedia()` the composer already uses,
+      from the tile's own gesture, before the join call; no new
+      abstraction, both entry points now converge on one readiness path.
+      **Remaining, narrowed further**: literal asymmetric grid sizing
+      (the *other* speaker's tile visually enlarged, not just
+      decluttered — deliberately deferred, possibly #18) and a mic
+      activity indicator. Landscape's dashboard-style drift found in an
+      earlier real-device pass is recorded as a constraint in
+      ARCHITECTURE.md, not fixed — #18's job. Stays in Testing/Review
+      pending real-device confirmation. See SESSION_LOG.md and
+      DECISIONS.md.
 - [ ] Direct join on an uncontested empty seat (issue #27) — split from
       #23 after real-device testing: with a seat open and no pending
       requests, tapping the tile directly attempts to join it — no
@@ -325,9 +331,16 @@ different dependencies. Current order:
       composer's mic-request mode if a queue exists, checked
       server-side (never trusted from the client). Reuses
       `claim_speaker_seat`'s existing race safety, no new DB primitive.
-      **Not checked off as fully confirmed** — real-device confirmation
-      of the actual tap/queue-protection/guest-gating behavior is still
-      pending; see SESSION_LOG.md.
+      **Now also acquires camera/mic readiness the same way the composer
+      does** (see #22's note above) and, when it's the viewer's one
+      actionable open seat, gets visual priority over the bottom chat
+      overlay (`SpeakerStage`'s `order-first`, plus a click-through/
+      interactive layer split on the overlay itself) so it can't end up
+      unreachable underneath it — pure presentation, no seat-number or
+      LiveKit change. **Not checked off as fully confirmed** — real-
+      device confirmation of the actual tap/queue-protection/guest-
+      gating/readiness/reachability behavior is still pending; see
+      SESSION_LOG.md.
 - [ ] Automatic ranked promotion for contested seats (issue #23,
       narrowed further) — **shipped, narrowed below its own original
       scope**: a pending requester now sees an automatic "You're up

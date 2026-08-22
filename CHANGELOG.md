@@ -9,6 +9,27 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **Direct join now acquires media readiness the same way as requesting
+  the mic; the open seat can no longer be blocked by chat** — two
+  real-device findings from the previous pass. Tapping an uncontested
+  open seat (issue #27) now calls the same `prepareLocalMedia()` #22
+  already built for the composer's mic-request submit, from the tile's
+  own click handler (same Safari gesture requirement) before the
+  `joinOpenSeat` call — no new abstraction, both entry points converge
+  onto the identical readiness/publish machinery, so a direct-joiner
+  gets the same pre-acquired self-preview and publish-without-a-second-
+  prompt behavior a composer requester already had. Tracks are
+  deliberately preserved (not released) on any join failure. Separately,
+  `SpeakerStage` now visually promotes an open seat to the front
+  (`order-first`) whenever it's the viewer's one actionable target
+  (exactly one seat empty, viewer not already speaking) — pure CSS
+  ordering, no seat/track identity change, no remount — and
+  `PortraitRoom`'s bottom overlay is split into a click-through outer
+  layer and an interactive inner wrapper, so its purely decorative top
+  margin no longer swallows taps meant for the stage beneath. Together
+  these keep the open seat reachable regardless of chat/controls height,
+  without touching seat numbering, LiveKit, or track ownership. See
+  DECISIONS.md and SESSION_LOG.md.
 - **Speaker's own video no longer duplicated on stage** (issue #22
   dominant-video corrective pass) — real-device testing of the previous
   pass found a promoted speaker's camera rendering twice: once as their

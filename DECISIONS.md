@@ -3,6 +3,105 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Direct join converges onto #22's readiness path; the open seat gets visual priority over the chat overlay
+
+**Problem**: two real-device findings from the dominant-video pass below.
+(1) Requesting the mic through the composer produced a working self-
+preview, but tapping an uncontested open seat directly (issue #27) did
+not — direct join never called `prepareLocalMedia`, so a direct-joiner
+landed on stage with no pre-acquired preview and, at the time,
+`needsMediaActivation` still true (the ordinary gesture-gated fallback,
+not the readiness path). (2) With one seat occupied and the other open,
+the open seat's "Tap to join" tile could end up partly or fully
+underneath the bottom chat/controls overlay in portrait — an actionable
+target rendered unreachable.
+
+**Investigation** (both, per instruction, before changing anything):
+
+1. Direct join bypassed readiness simply because nobody had called
+   `prepareLocalMedia()` from that path — `handleTapEmptySeat`
+   (`EventRoom`) went straight to `joinOpenSeat()`. Nothing else was
+   different; the underlying publish machinery
+   (`applyPublishState` preferring already-held prepared tracks,
+   `syncCanPublish` reacting to the server's `canPublish` push) is
+   already generic across *whichever* entry point acquired the tracks.
+2. The overlay covers the bottom of the stage (`absolute bottom-0`,
+   `z-10`) with a height driven by its content (guest editor + error
+   text + `RoomControls` + a fixed `h-40` chat panel) — on a typical
+   phone viewport that can reach into, or past, the bottom half of a
+   two-tile stacked stage. It also had no `pointer-events` distinction
+   at all: even its purely decorative top gradient padding (`pt-14`, no
+   real content there) captured taps meant for the stage underneath.
+
+**Decision**:
+
+- `EventRoom.handleTapEmptySeat` now calls `connection.prepareLocalMedia()`
+  synchronously, directly in the tile's own click handler (same Safari
+  gesture requirement `ChatPanel`'s `onSubmit` already established for
+  the composer path) — before the async `joinOpenSeat` call, not inside
+  its transition callback. Zero new abstraction: this is the exact same
+  `prepareLocalMedia`/`applyPublishState` machinery #22 already built,
+  reused as-is — confirming request-mic and direct-join really do
+  converge onto one readiness path, not two. On any join failure
+  (`queue-exists` or a real error), tracks are deliberately left held,
+  not released — the state the user returns to (audience with a queue
+  fallback, or a retry) can still use them, same as an unpromoted
+  composer request already leaves them.
+- `SpeakerStage` now visually promotes the open seat to the front
+  (`order-first`, a pure CSS flex property) whenever exactly one seat is
+  empty *and* the viewer isn't a speaker themselves (i.e., the seat is
+  actually tappable) — both-empty, both-occupied, and the active
+  speaker's own view of the other seat are all left in natural seat-
+  number order, since there's no single actionable target to prioritize
+  in any of those cases. Reordering is keyed identically to before
+  (`seat?.id ?? 'empty-N'`), so React reconciles this as a move, not a
+  remount — no LiveKit/track impact, confirmed safe per the instruction
+  not to touch media or seat identity for this.
+- `PortraitRoom`'s overlay is now split into a `pointer-events-none`
+  outer layer (position/gradient/top padding) and a `pointer-events-auto`
+  inner wrapper around the actual controls/chat — identical classes,
+  redistributed, so a tap landing in the decorative margin now reaches
+  the stage beneath instead of being swallowed. Landscape's chat is
+  already a separate side-column flex sibling, not an overlay over the
+  stage at all, so it has no equivalent occlusion to fix.
+
+**Reason**: both fixes reuse machinery/signals that already existed
+(`prepareLocalMedia`, `isLocal`/seat occupancy, `SpeakerStage`'s own key
+scheme) rather than inventing new plumbing, matching "smallest clean
+fix" — and both are presentation/gesture-timing changes with zero
+interaction with track ownership, publishing, or seat authorization
+(`claimSpeakerSeat`'s race protection, the queue-exists check) as
+explicitly required.
+
+**Alternatives considered**: (1) a dedicated `pointer-events` toggle on
+individual overlay children instead of splitting into two layers —
+rejected as more surface area for the same result; one outer/inner split
+covers every current and future child uniformly. (2) Clamping the
+overlay to a max-height so it can never structurally reach the top
+tile — rejected: the fixed `h-40` chat panel plus variable
+guest-editor/error/controls content makes a safe clamp hard to pick
+without risking silently clipping real content on a short viewport, and
+the reordering fix already solves the actionability problem directly
+(the open seat no longer needs to be a fixed distance from the overlay,
+it just needs to not be the bottom one). (3) Reordering only in portrait
+(where the bug was found) — rejected: `SpeakerStage` is shared, the rule
+is orientation-agnostic ("the tappable seat leads"), and applying it
+uniformly costs nothing extra.
+
+**Tradeoffs**: on a sufficiently cramped viewport (unlikely but not
+impossible — e.g. the guest-name editor, a join-failure message, and the
+full `RoomControls` state all showing at once on a short phone), the
+overlay could theoretically still reach up far enough to touch the
+*top* tile too, even after reordering. Not mitigated further here — the
+user explicitly asked not to build #21's chat-collapse system for this;
+flagged for the real-device check instead of guessed at further.
+Separately, found and fixed via the project's own `dev:harness
+clear-sandbox` command: this session's test suite run hit a stale
+`event_speakers_active_seat_uniq` conflict in `scripts/dev-harness.test.ts`
+from leftover real-device-testing occupancy in the permanent test
+room — unrelated to this change, cleared via the existing purpose-built
+tool, not a code fix.
+
 ## 2026-08-22 — A speaker's own seat tile stops rendering their own video; landscape's dashboard drift recorded, not fixed (issue #22 dominant-video corrective pass)
 
 **Problem**: real-device testing of the previous pass (candidate

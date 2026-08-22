@@ -514,6 +514,62 @@ scope-creeped into this pass). Zero landscape code touched this pass.
 duplication fix specifically — do not begin #18's broader redesign,
 #21, #24, #25, or any other issue until confirmed.
 
+**Real-device confirmation came back mostly positive again, same
+session — two more findings, both fixed**: the duplication fix worked
+and the self-preview correctly stayed the one canonical local view. But
+(1) tapping an uncontested open seat directly (#27) didn't get the same
+readiness treatment as requesting the mic — no pre-acquired self-preview,
+back to the ordinary gesture-gated fallback — and (2) with one seat
+occupied and the other open, the open "Tap to join" tile could end up
+partly or fully under the bottom chat overlay in portrait, making it
+untappable even though the seat was genuinely available.
+
+Investigated both before changing anything, per instruction. (1) traced
+to `EventRoom.handleTapEmptySeat` simply never calling
+`prepareLocalMedia()` — the underlying publish machinery (`applyPublishState`
+preferring already-held prepared tracks, `syncCanPublish` reacting to the
+server's `canPublish` push) was already generic across entry points, so
+no new abstraction was needed, just wiring the same call in from this
+second gesture. (2) traced to the overlay's height (guest editor + error
+text + `RoomControls` + a fixed `h-40` chat panel) reaching into the
+stage's bottom half on a typical phone viewport, combined with having no
+`pointer-events` distinction at all — even its purely decorative top
+gradient padding captured taps meant for the stage beneath it.
+
+Fixed: `handleTapEmptySeat` now calls `connection.prepareLocalMedia()`
+synchronously, directly in the tile's own click handler (same Safari
+gesture reasoning `ChatPanel`'s `onSubmit` already established), before
+the async `joinOpenSeat` call — tracks are deliberately left held on any
+join failure, not released, since the state the user returns to
+(queue fallback, or a retry) can still use them. `SpeakerStage` now
+visually promotes the open seat to the front (`order-first`, pure CSS)
+whenever it's the viewer's one actionable target — exactly one seat
+empty, viewer not already speaking — leaving both-empty/both-occupied/
+active-speaker's-own-view all in natural seat-number order; reordering
+is keyed identically to before, so React treats it as a move, never a
+remount, confirmed zero LiveKit/track impact. `PortraitRoom`'s overlay
+is now split into a `pointer-events-none` outer layer and a
+`pointer-events-auto` inner wrapper around the actual controls/chat —
+identical classes, redistributed — so the decorative margin no longer
+swallows taps. Landscape has no equivalent overlay-over-stage occlusion
+to fix (chat is already a separate side column there).
+
+Also cleared, unrelated to the code change: this session's `npm test`
+run hit a stale `event_speakers_active_seat_uniq` conflict in
+`scripts/dev-harness.test.ts` from leftover real-device-testing
+occupancy in the permanent test room — cleared via the project's own
+`npm run dev:harness -- clear-sandbox` (3 stale speaker seats, 5 stale
+chat messages), not a code fix.
+
+7 new/changed tests (`speaker-stage.test.tsx`'s open-seat-priority
+describe block, `portrait-room.test.tsx`'s click-through-overlay describe
+block). lint/tsc/build/test all pass (216/216). Merged to `main`,
+pushed, deployment confirmed via the GitHub deployments API.
+
+**Next task**: stop for the user's own real-device confirmation of both
+fixes — do not begin #18, #21, #24, #25, or any other issue until
+confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

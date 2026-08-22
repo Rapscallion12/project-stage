@@ -2,6 +2,7 @@ import type { LocalVideoTrack, Participant } from "livekit-client";
 import { SpeakerTile } from "@/components/room/speaker-tile";
 import { SelfPreview } from "@/components/room/self-preview";
 import { getParticipantIdentity } from "@/lib/livekit/token";
+import { cn } from "@/lib/utils";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
@@ -60,6 +61,18 @@ import type { Orientation } from "@/hooks/use-orientation";
  *   making the *other* speaker dominant on the main stage instead is a
  *   larger visual redesign left to a later issue (possibly #18), not
  *   done here.
+ * - **Open-seat visual priority** (real-device finding, 2026-08-22): when
+ *   exactly one seat is empty and the viewer isn't a speaker themselves
+ *   (so the empty seat is actually tappable — see `onTapEmptySeat`
+ *   below), that tile renders first (`order-first`) regardless of
+ *   whether it's seat 1 or seat 2. Portrait stacks tiles vertically, so
+ *   this is what keeps the open, actionable seat out of the bottom
+ *   overlay's territory (see `PortraitRoom`'s own doc comment) instead of
+ *   requiring the visitor to somehow work around a fixed-height chat
+ *   panel to reach it. Pure CSS `order` on an unchanged, identically-keyed
+ *   element — seat numbering/DB assignment, LiveKit subscriptions, and
+ *   whatever's already attached to either tile are completely untouched;
+ *   nothing here remounts.
  * - The **scrim**, spanning the whole stage — #21 will animate its
  *   opacity as chat/voting focus panels open above it. `opacity-0` and
  *   `pointer-events-none` today: present in the DOM (so #21 doesn't need
@@ -103,8 +116,18 @@ export function SpeakerStage({
     return identity === myIdentity;
   });
 
+  // Real-device finding (2026-08-22): exactly one open seat, viewer not
+  // already speaking — that seat is this viewer's one actionable target,
+  // so it visually leads regardless of which seat number it happens to
+  // be. Both-empty/both-occupied/viewer-is-speaking all leave natural
+  // seat-number order alone — there's no single "the" actionable seat to
+  // prioritize in those cases.
+  const seat1 = bySeat(1);
+  const seat2 = bySeat(2);
+  const promoteOpenSeat = !viewerIsSpeaking && (seat1 === null) !== (seat2 === null);
+
   function renderTile(seatNumber: 1 | 2) {
-    const seat = bySeat(seatNumber);
+    const seat = seatNumber === 1 ? seat1 : seat2;
     // Issue #16: a seat's occupant identity is whichever of
     // profile_id/guest_id is actually set (the table's own XOR
     // constraint guarantees exactly one) — never assume profile.
@@ -114,7 +137,10 @@ export function SpeakerStage({
         )
       : null;
     return (
-      <div key={seat?.id ?? `empty-${seatNumber}`} className="min-h-0 min-w-0 flex-1">
+      <div
+        key={seat?.id ?? `empty-${seatNumber}`}
+        className={cn("min-h-0 min-w-0 flex-1", promoteOpenSeat && seat === null && "order-first")}
+      >
         <SpeakerTile
           speaker={seat}
           participant={identity ? getParticipant(identity) : undefined}

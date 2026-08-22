@@ -125,4 +125,56 @@ describe("SpeakerStage", () => {
       expect(onTapEmptySeat).not.toHaveBeenCalled();
     });
   });
+
+  describe("open-seat visual priority (real-device finding: keeps the tappable seat out of the bottom overlay's territory)", () => {
+    it("visually promotes the open seat to the front when exactly one seat is empty and the viewer can actually tap it", () => {
+      render(<SpeakerStage speakers={[speaker({ seat_number: 1 })]} orientation="portrait" {...baseProps} />);
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.parentElement?.className).toMatch(/\border-first\b/);
+    });
+
+    it("does not reorder when both seats are empty — no single actionable seat to prioritize over the other", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+      for (const seat of screen.getAllByTestId("empty-seat")) {
+        expect(seat.parentElement?.className).not.toMatch(/\border-first\b/);
+      }
+    });
+
+    it("does not reorder when both seats are occupied", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+        />,
+      );
+      expect(screen.queryByTestId("empty-seat")).not.toBeInTheDocument();
+      const tiles = screen.getAllByTestId("speaker-tile");
+      for (const tile of tiles) {
+        expect(tile.parentElement?.className).not.toMatch(/\border-first\b/);
+      }
+    });
+
+    it("does not reorder the remaining open seat from the active speaker's own view — nothing there is actionable for them", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.parentElement?.className).not.toMatch(/\border-first\b/);
+    });
+
+    it("also applies in landscape (shared component, same rule) — order-first shifts it to the leading side-by-side position", () => {
+      render(<SpeakerStage speakers={[speaker({ seat_number: 2 })]} orientation="landscape" {...baseProps} />);
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.parentElement?.className).toMatch(/\border-first\b/);
+    });
+  });
 });

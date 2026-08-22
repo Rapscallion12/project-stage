@@ -36,6 +36,20 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * contained stacking context regardless (real-device testing found the
  * speaker divider bleeding across this exact overlay before that fix).
  *
+ * **Split into a click-through outer layer + an interactive inner one**
+ * (real-device finding, 2026-08-22): with a seat open and the other
+ * occupied, the open seat's tile can end up (partly) underneath this
+ * overlay's bounding box — `SpeakerStage` now visually promotes the open
+ * seat out of that territory when it's actionable (see its own doc
+ * comment), but the overlay itself previously had no `pointer-events`
+ * distinction at all, so even its purely-decorative top gradient padding
+ * (`pt-14`, no real content there) captured taps meant for whatever's
+ * beneath it. The outer element is `pointer-events-none`; only the inner
+ * wrapper — the actual controls/chat, where real interactive content
+ * lives — is `pointer-events-auto`. Same visual result (identical
+ * classes, just redistributed), but a tap landing in the gradient-only
+ * margin now reaches the stage underneath instead of being swallowed.
+ *
  * Still zero gesture/drag/expand logic — the same `ChatPanel` instance
  * used here (via `RoomChatPanel`) is what issue #21 will later make
  * expandable via a drag handle, without ever swapping which component is
@@ -95,41 +109,43 @@ export function PortraitRoom({
         />
         <div
           data-testid="stage-bottom-overlay"
-          className="stage-overlay absolute inset-x-0 bottom-0 z-10 flex flex-col gap-1 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pt-14 pb-3"
+          className="stage-overlay pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/90 via-black/60 to-transparent pt-14"
         >
-          {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
-          {/* Issue #27: feedback for a failed empty-seat tap (e.g. the guest account-prompt) — a queue-exists result never lands here, it switches the composer to request mode instead. */}
-          {joinSeatMessage && (
-            <p className="text-xs text-red-500" role="alert">
-              {joinSeatMessage}
-            </p>
-          )}
-          <RoomControls
-            eventId={event.id}
-            isSpeaker={isSpeaker}
-            hasPendingRequest={hasPendingRequest}
-            promotionCountdown={promotionCountdown}
-            onCancelPromotion={onCancelPromotion}
-            canPublish={canPublish}
-            needsMediaActivation={needsMediaActivation}
-            activateMedia={activateMedia}
-            onPrepareMedia={onPrepareMedia}
-            mediaError={mediaError}
-            connectionStatus={connectionStatus}
-            phase={phase}
-            countdownText={countdownText}
-          />
-          <div className="h-40 min-h-0">
-            <RoomChatPanel
+          <div className="pointer-events-auto flex flex-col gap-1 px-3 pb-3">
+            {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
+            {/* Issue #27: feedback for a failed empty-seat tap (e.g. the guest account-prompt) — a queue-exists result never lands here, it switches the composer to request mode instead. */}
+            {joinSeatMessage && (
+              <p className="text-xs text-red-500" role="alert">
+                {joinSeatMessage}
+              </p>
+            )}
+            <RoomControls
               eventId={event.id}
-              messages={messages}
-              reactions={reactions}
-              micRequestMode={micRequestMode}
-              onMicRequestModeChange={onMicRequestModeChange}
-              onHasPendingRequestChange={onHasPendingRequestChange}
+              isSpeaker={isSpeaker}
+              hasPendingRequest={hasPendingRequest}
+              promotionCountdown={promotionCountdown}
+              onCancelPromotion={onCancelPromotion}
+              canPublish={canPublish}
+              needsMediaActivation={needsMediaActivation}
+              activateMedia={activateMedia}
               onPrepareMedia={onPrepareMedia}
-              className="h-full"
+              mediaError={mediaError}
+              connectionStatus={connectionStatus}
+              phase={phase}
+              countdownText={countdownText}
             />
+            <div className="h-40 min-h-0">
+              <RoomChatPanel
+                eventId={event.id}
+                messages={messages}
+                reactions={reactions}
+                micRequestMode={micRequestMode}
+                onMicRequestModeChange={onMicRequestModeChange}
+                onHasPendingRequestChange={onHasPendingRequestChange}
+                onPrepareMedia={onPrepareMedia}
+                className="h-full"
+              />
+            </div>
           </div>
         </div>
       </div>

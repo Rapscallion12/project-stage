@@ -88,6 +88,22 @@ describe("PortraitRoom", () => {
     expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bstage-overlay\b/);
   });
 
+  describe("the overlay's decorative margin lets taps through to the stage beneath (real-device finding: an open seat could end up under it)", () => {
+    it("the overlay itself is click-through — only its inner content wrapper captures taps", () => {
+      render(<PortraitRoom {...baseProps} />);
+      const overlay = screen.getByTestId("stage-bottom-overlay");
+      expect(overlay.className).toMatch(/\bpointer-events-none\b/);
+      const inner = overlay.firstElementChild as HTMLElement;
+      expect(inner.className).toMatch(/\bpointer-events-auto\b/);
+    });
+
+    it("real interactive content (the composer) still lives inside the click-through-capable wrapper", () => {
+      render(<PortraitRoom {...baseProps} />);
+      const overlay = screen.getByTestId("stage-bottom-overlay");
+      expect(overlay).toContainElement(screen.getByRole("textbox"));
+    });
+  });
+
   describe("speaker-entry friction removal (issue #27)", () => {
     it("has no standalone 'Request the mic' control anywhere in the room", () => {
       render(<PortraitRoom {...baseProps} />);
