@@ -3,6 +3,82 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Automatic promotion narrowed below #23's own original scope, deliberately
+
+**Problem**: real-device testing of the mic-request flow found the
+manual "Claim your seat" button was exactly the kind of friction issue
+#23 already existed to remove — a candidate who'd already expressed
+intent by requesting the mic still had to notice a button and click it.
+The user asked for automatic, server-authorized promotion with a
+"You're up next" countdown instead — but #23's own written design ties
+automatic promotion's "eligible" determination to issue #22's readiness
+signal (pre-acquired local media), which isn't built.
+
+**Decision**: implement automatic promotion *without* #22 as a
+prerequisite. The user was explicit that camera/mic publish should keep
+using "the existing authorized path" — meaning the existing separate,
+gesture-gated "Tap to enable camera & mic" step stays exactly as it is,
+triggered once actually seated, same as today. This sidesteps needing
+#22's readiness pre-acquisition at all: "eligible" for this pass is
+still `decideClaimEligibility`'s existing rank/seat-availability check,
+unchanged; "did the candidate actually follow through" is observed
+*after* promotion (media activation within a grace period) rather than
+predicted *before* it (pre-acquired tracks).
+
+**Design that came out of this**: `checkPromotionEligibility` (read-only)
+and `claimOpenSeat` (acts) now share one `resolveClaimDecision` helper,
+extracted from what was previously all inside `claimOpenSeat`'s own
+body — the eligibility the countdown polls for and the eligibility the
+final claim enforces are structurally the same code path, not two rules
+that could drift apart. The countdown is deliberately just a client-side
+`setTimeout` chain with no authority of its own; the claim at the end
+re-validates completely independently, so a countdown that turns out to
+have been based on stale information just fails quietly (reset to
+waiting), the same non-alarming way a lost race already worked before
+this change.
+
+**Polling, not purely Realtime-reactive**: eligibility depends on rank,
+which is reaction-count-driven (`rank_pending_speaker_requests`) — a
+candidate can become newly eligible because *someone else's* request
+lost support, with no `event_speakers` row changing at all. A purely
+`event_speakers`-Realtime-triggered check would miss that window
+entirely. Polling only while a candidate has a pending request (a small,
+bounded set) avoids the audience-wide-polling concern already ruled out
+elsewhere in this project (issue #25's design) — this scales with
+concurrent candidates, not concurrent viewers.
+
+**Grace-period addition, scoped narrowly**: issue #23's approved design
+calls for skipping a candidate who cancels, disconnects, or never
+becomes media-ready. Disconnection is already handled (issue #13's
+LiveKit webhook). Cancel reuses the existing `withdrawSpeakerRequest`.
+The one genuinely new piece is a promoted-but-silent candidate — added
+as a 30-second grace-period timer that self-evicts via the existing
+`leaveSpeakerSeat`, no new authority, applying uniformly regardless of
+whether the seat was reached via this promotion path or issue #27's
+direct join (there's no reason to treat the two differently).
+
+**Tradeoffs**: the full "eligible factors in readiness, unready
+candidates yield via time-graduated eligibility *before* ever occupying
+the seat" design from #23's original body is not implemented — a
+candidate can still be promoted, occupy the seat, and only THEN turn out
+to be unready, for up to 30 seconds before self-eviction frees it back
+up. Accepted explicitly: closing that gap is what issue #22's readiness
+pre-acquisition is *for*, and the user was explicit about not pulling it
+in as a prerequisite for this pass.
+
+**Testing note**: one planned test (the full multi-tick countdown-to-
+claim chain, via `renderHook` + fake timers) was attempted with several
+strategies (`advanceTimersByTimeAsync` at multiple granularities,
+`runAllTimersAsync`) and none reliably converged in this test
+environment — a React-effect-rescheduling-a-timer chain interacting with
+fake timers, not a sign of an implementation bug (the underlying
+single-timer mechanism is the same shape already proven by the
+grace-period self-eviction test, which does pass reliably). Dropped
+rather than forced; the full sequence is covered by real-device
+verification instead.
+
+---
+
 ## 2026-08-22 — Speaker divider fixed by CSS stacking containment, not z-index escalation
 
 **Problem**: real-device screenshots showed the speaker divider (and its

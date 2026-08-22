@@ -31,6 +31,32 @@ separate release cadence to track here.
   prerelease. Issues #15/#16/#17 remain open — this checkpoint doesn't
   close them.
 
+### Added
+
+- **Automatic server-authorized promotion, manual "Claim your seat"
+  removed** (issue #23, narrowed) — a pending requester now sees a
+  "You're up next / Going live in N…" countdown once the server
+  determines they're eligible, and the actual seat claim happens on its
+  own at the end of it. New `checkPromotionEligibility` (room/actions.ts)
+  is a read-only counterpart to `claimOpenSeat`, sharing the exact same
+  decision via a new `resolveClaimDecision` helper so the two can never
+  disagree about what "eligible" means. The countdown itself is
+  explicitly not an eligibility mechanism — a pure client-side timer; the
+  real claim at the end independently re-validates, unchanged, and a
+  stale/lost-race outcome just silently resets to waiting. New
+  `useAutomaticPromotion` hook polls while a candidate is waiting (rank
+  can shift from reactions on a *different* candidate's request, so
+  purely Realtime-on-`event_speakers` would miss real eligibility
+  windows) and self-evicts (reusing the existing `leaveSpeakerSeat`) a
+  promoted candidate who never activates media within a 30s grace
+  period — disconnection was already covered by the existing LiveKit
+  webhook. Does not (yet) factor in issue #22's readiness signal —
+  camera/mic activation stays on the existing separate gesture-gated
+  "Tap to enable camera & mic" step, per explicit instruction to keep
+  using the existing authorized path rather than pull #22 in as a
+  prerequisite. Not marked Done pending the user's own real-device
+  confirmation. See DECISIONS.md and SESSION_LOG.md.
+
 ### Fixed
 
 - **Speaker divider bleeding across chat/controls** — root cause:

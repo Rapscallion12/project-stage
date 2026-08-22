@@ -351,6 +351,53 @@ mic-mode composer — pure layering fix.
 that no divider/dot/decoration crosses foreground UI anywhere. Do not
 begin #21, #23, #24, #25, or any other feature until confirmed.
 
+**Divider layering confirmed real-device verified by the user, same
+session.** Redirected to the manual "Claim your seat" step next — the
+last friction point from real-device testing of the mic-request flow.
+
+**Before coding, re-read #22/#23 fresh and mapped scope**, per
+instruction: automatic promotion + countdown belongs to a *narrowed*
+slice of #23, explicitly *without* pulling in #22 as a prerequisite —
+the user was explicit that camera/mic publish should keep using "the
+existing authorized path" (the current separate gesture-gated "Tap to
+enable camera & mic" step), so #23's own stated dependency on #22's
+readiness signal doesn't apply to this narrower version. Full reasoning
+in DECISIONS.md.
+
+**Implemented**: new `checkPromotionEligibility` (room/actions.ts,
+read-only) and `claimOpenSeat` (unchanged behavior, now acts on it) share
+one extracted `resolveClaimDecision` helper, so the eligibility the
+countdown polls for and the eligibility the real claim enforces can never
+diverge. New `useAutomaticPromotion` hook (src/hooks/) — called from
+`EventRoom` above the orientation branch — polls every 4s while a
+candidate has a pending request (polling, not purely Realtime-reactive:
+rank can shift from reactions on a *different* candidate's request
+without any `event_speakers` change), starts a 3-second "You're up next"
+countdown once eligible, then calls the real `claimOpenSeat` (which
+independently re-validates — the countdown itself has no authority).
+Also self-evicts (reusing the existing `leaveSpeakerSeat`) a promoted
+candidate who never activates media within a 30s grace period —
+disconnection was already covered by the existing LiveKit webhook.
+`RoomControls` lost `handleClaim` entirely; "Withdraw" and "Cancel" both
+call the same `onCancelPromotion`.
+
+**Race protections unchanged**: `claim_speaker_seat`'s partial unique
+index remains the sole concurrency backstop, untouched by this change.
+
+**Testing**: 15 new tests (8 for `RoomControls`' countdown/cancel states,
+7 for the hook). One planned test (the full countdown-ticks-to-zero-
+then-claims chain) was attempted with multiple fake-timer strategies and
+dropped as unreliable in this test environment, not evidence of a real
+bug — noted explicitly rather than forced or silently omitted. lint/tsc/
+build/test all pass (188/188). Merged, pushed, production deployment
+confirmed.
+
+**Next task**: stop for the user's own real-device confirmation of the
+automatic-promotion/countdown flow — see this turn's response for the
+exact checklist. Do not begin #21, #24, #25, or any other feature
+(including #22's remaining readiness/self-preview scope, which the user
+explicitly deferred until after this) until confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

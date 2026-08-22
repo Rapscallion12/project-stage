@@ -315,10 +315,21 @@ different dependencies. Current order:
       of the actual tap/queue-protection/guest-gating behavior is still
       pending; see SESSION_LOG.md.
 - [ ] Automatic ranked promotion for contested seats (issue #23,
-      narrowed) — when a seat with a real queue opens, the highest-ranked
-      eligible *ready* candidate is auto-promoted server-side, no manual
-      `claimOpenSeat` race, unready candidates yield via a bounded grace
-      period. Depends on #22's readiness signal.
+      narrowed further) — **shipped, narrowed below its own original
+      scope**: a pending requester now sees an automatic "You're up
+      next" countdown once server-eligible, and the actual seat claim
+      happens on its own — no manual "Claim your seat" button. The
+      countdown is explicitly not an eligibility mechanism (a pure
+      client-side timer; the real claim independently re-validates,
+      unchanged); disconnection during the wait is already covered by
+      the existing LiveKit webhook, and a promoted-but-never-activates-
+      media candidate self-evicts after a 30s grace period. **Does not
+      (yet) factor in #22's readiness signal** — camera/mic activation
+      still goes through the existing separate gesture-gated "Tap to
+      enable camera & mic" step, per explicit instruction to use "the
+      existing authorized path" rather than pull #22 in as a
+      prerequisite. **Not checked off** — pending the user's own
+      real-device confirmation. See SESSION_LOG.md and DECISIONS.md.
 - [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
       drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
       and voting-focus, tap always available independent of the gesture,
