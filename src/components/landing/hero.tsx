@@ -16,13 +16,24 @@ export function Hero() {
       </p>
       {/* No account required to watch — see PRODUCT.md's progressive authentication model. */}
       <div className="mt-10 flex w-full flex-col items-center gap-3 sm:w-auto sm:flex-row sm:gap-4">
-        <ButtonLink href="/events" className="w-full sm:w-auto">
+        <div className="flex w-full flex-col items-center gap-1.5 sm:w-auto">
+          {/* One-click direct-to-room fast path (issue #26) — a plain GET
+              redirect (/join), not a page: no intermediate confirmation
+              screen, no account requirement, lands as audience. "Join Live
+              Audience", not "Join Now" — the latter reads as signup/
+              registration/speaker-join, not "watch what's happening now". */}
+          <ButtonLink href="/join" className="w-full sm:w-auto">
+            Join Live Audience
+          </ButtonLink>
+          <p className="text-xs text-muted">Jump straight into an active room</p>
+        </div>
+        <ButtonLink href="/events" variant="secondary" className="w-full sm:w-auto">
           Browse events
         </ButtonLink>
-        <ButtonLink href="#how-it-works" variant="secondary" className="w-full sm:w-auto">
-          See how it works
-        </ButtonLink>
       </div>
+      <ButtonLink href="#how-it-works" variant="ghost" className="mt-3">
+        See how it works
+      </ButtonLink>
       <p className="mt-6 text-sm text-muted">
         No account needed to watch.{" "}
         <Link href="/signup" className="text-accent hover:underline">

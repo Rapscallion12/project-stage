@@ -68,6 +68,24 @@ export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[
 }
 
 /**
+ * Which of the given events currently have at least one active speaker —
+ * used by the landing page's "Join Live Audience" fast path (issue #26)
+ * to prefer a room that's actually live over one that's merely joinable.
+ * Returns a set of ids, not full `EventSpeaker` rows: the caller only
+ * needs "does this event qualify," not who's seated.
+ */
+export async function listEventIdsWithActiveSpeakers(eventIds: string[]): Promise<Set<string>> {
+  if (eventIds.length === 0) return new Set();
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("event_speakers")
+    .select("event_id")
+    .in("event_id", eventIds)
+    .is("left_at", null);
+  return new Set((data ?? []).map((row) => row.event_id));
+}
+
+/**
  * Whether — and in which seat — a specific identity (account or guest)
  * currently holds an active occupancy for an event. Used by the LiveKit
  * token endpoint (issues #2/#16) to decide `canPublish`; a targeted query
