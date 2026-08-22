@@ -58,6 +58,8 @@ const baseProps: RoomLayoutProps = {
   needsMediaActivation: false,
   activateMedia: vi.fn(async () => {}),
   mediaError: null,
+  localVideoTrack: null,
+  onPrepareMedia: vi.fn(async () => {}),
   messages: [],
   reactions: {},
 };

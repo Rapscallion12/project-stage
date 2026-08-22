@@ -412,6 +412,67 @@ media readiness, persistent local self-preview, promotion without
 reacquiring media) — inspection first, per explicit instruction, report
 back before writing code.
 
+**Issue #22's remaining scope investigated and implemented, same
+session**: inspection first, per instruction — confirmed the checkpoint
+tag's presence remotely, re-read #22 and the current
+`use-live-room-connection.ts`/`event-room.tsx`/`room-chat-panel.tsx`/
+`use-automatic-promotion.ts`, and specifically checked whether #23's
+now-implemented automatic promotion conflicted with #22's original
+design. It didn't: `resolveClaimDecision` (the shared eligibility rule
+`checkPromotionEligibility`/`claimOpenSeat` both use) depends only on
+queue rank, never on media state — `needsMediaActivation`/`mediaError`
+only feed the *grace-period self-eviction* effect, which reacts to
+outcomes after promotion. No stale-design conflict found; implemented
+without changing `useAutomaticPromotion`'s eligibility logic at all. See
+DECISIONS.md for the full reasoning and the alternatives considered.
+
+`feature/candidate-media-readiness`: `useLiveRoomConnection` gained
+`prepareLocalMedia()` (one `createLocalTracks({ audio: true, video: true
+})` call, idempotent, called from the mic-request composer's own
+`onSubmit` — a real gesture, same Safari constraint `activateMedia`
+already documents), `releaseLocalMedia()` (stops held-but-unpublished
+tracks, wired to both "Withdraw" and "Cancel" via a small wrapper in
+`EventRoom`), and `localVideoTrack` (the held camera track). New
+`SelfPreview` component attaches it into #20's reserved top-right slot;
+`SpeakerStage` now renders that component only when a track exists
+(hidden entirely otherwise, not an empty placeholder). `applyPublishState`
+checks for already-held prepared tracks first and calls `publishTrack()`
+on them directly at promotion time — no second `getUserMedia()`, no
+second permission prompt — clearing the prepared-tracks ref on success
+(so a later re-request re-acquires fresh tracks) while leaving the
+`localVideoTrack` state itself untouched, so the same mounted component/
+track survives pending → countdown → published-speaker unchanged. The
+existing `canPublish → false` reaction (unchanged) now also clears
+`localVideoTrack` when a speaker actually leaves, so the self-preview
+correctly disappears again at that point.
+
+Neither existing "Tap to enable camera & mic" (`SpeakerTile`) nor
+"Enable camera & mic" (`RoomControls`) control was removed — both remain
+the correct recovery path for #27's direct join (which never
+pre-acquires) and for a `prepareLocalMedia()` failure; on the normal
+request→promotion path they simply stop appearing in practice, since
+`mediaActivated` is already true by promotion time. `RoomControls`'
+pending-request branch (previously silent about `mediaError` entirely)
+gained its own error message + "Try again" retry action, since a
+still-waiting candidate can now fail *before* ever reaching the
+`isSpeaker` branch that used to be the only place this showed.
+
+**Testing**: new/changed coverage across 7 files — 7 tests for the
+hook's prepare/release behavior via `params: null` (no Room/WebRTC
+mocking needed, same reasoning `shouldPublish`/`classifyMediaError` were
+already tested standalone for), 5 for `SelfPreview`'s attach/detach
+lifecycle, 3 for `RoomControls`' new pending-state media error/retry, 2
+for `ChatPanel`'s submit-triggers-prepare gesture, 2 rewritten
+`SpeakerStage` tests for the slot's now-conditional rendering; the rest
+are call-site updates for the new required props. lint/tsc/build/test
+all pass (205/205).
+
+**Next task**: merge to `main`, deploy, verify against production, then
+stop for the user's own real-device confirmation — do not begin #21,
+#24, #25, or any other issue until confirmed. #22's own remaining scope
+(role-specific dominant video, mic activity indicator) stays open and
+narrowed in the issue body, not closed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

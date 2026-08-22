@@ -1,7 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SpeakerStage } from "./speaker-stage";
+import type { LocalVideoTrack } from "livekit-client";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+
+/** A minimal stand-in for a real LocalVideoTrack — SelfPreview only ever calls attach/detach on it. */
+function fakeVideoTrack(): LocalVideoTrack {
+  return { attach: vi.fn(), detach: vi.fn() } as unknown as LocalVideoTrack;
+}
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -26,6 +32,7 @@ const baseProps = {
   mediaError: null,
   onTapEmptySeat: vi.fn(),
   isJoiningSeat: false,
+  localVideoTrack: null,
 };
 
 describe("SpeakerStage", () => {
@@ -53,16 +60,15 @@ describe("SpeakerStage", () => {
     expect(screen.getByTestId("speaker-divider").className).toMatch(/\bw-2\b/);
   });
 
-  it("establishes a stable, empty self-preview slot (issue #22 renders the local preview into it)", () => {
+  it("renders no self-preview at all when there's no local video track — hidden entirely for an ordinary audience member, not an empty placeholder (issue #22)", () => {
     render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
-    const slot = screen.getByTestId("self-preview-slot");
-    expect(slot).toBeInTheDocument();
-    expect(slot).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
   });
 
-  it("anchors the self-preview slot to the top-right, not bottom-right (issue #20's corrective pass — the bottom is the chat/controls overlay's territory now)", () => {
-    render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
-    const slot = screen.getByTestId("self-preview-slot");
+  it("renders the real self-preview, anchored top-right, once a local video track is held (issue #22)", () => {
+    render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+    const slot = screen.getByTestId("self-preview");
+    expect(slot).toBeInTheDocument();
     expect(slot.className).toMatch(/\btop-3\b/);
     expect(slot.className).not.toMatch(/\bbottom-3\b/);
   });

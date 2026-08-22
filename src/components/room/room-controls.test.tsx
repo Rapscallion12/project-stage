@@ -16,6 +16,7 @@ const readyMediaProps = {
   canPublish: true,
   needsMediaActivation: false,
   activateMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => {}),
   mediaError: null as MediaError,
   connectionStatus: "connected" as const,
   // Issue #17: most tests exercise the room once genuinely live — the
@@ -107,6 +108,52 @@ describe("RoomControls", () => {
       );
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(onCancelPromotion).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("candidate media readiness (issue #22)", () => {
+    it("surfaces a mediaError with a retry action while just waiting, not just once seated", () => {
+      const onPrepareMedia = vi.fn(async () => {});
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          {...notPromoting}
+          {...readyMediaProps}
+          onPrepareMedia={onPrepareMedia}
+          mediaError={{ source: "camera", reason: "permission-denied" }}
+        />,
+      );
+      expect(screen.getByText(/Camera permission was denied/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a mediaError with a retry action during the countdown too", () => {
+      const onPrepareMedia = vi.fn(async () => {});
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          promotionCountdown={2}
+          onCancelPromotion={vi.fn()}
+          {...readyMediaProps}
+          onPrepareMedia={onPrepareMedia}
+          mediaError={{ source: "microphone", reason: "no-device" }}
+        />,
+      );
+      expect(screen.getByText("No microphone found on this device.")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows no media error/retry while waiting cleanly (no error yet)", () => {
+      render(
+        <RoomControls eventId="e1" isSpeaker={false} hasPendingRequest={true} {...notPromoting} {...readyMediaProps} />,
+      );
+      expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     });
   });
 

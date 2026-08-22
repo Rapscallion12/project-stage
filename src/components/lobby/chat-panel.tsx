@@ -29,6 +29,16 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * empty seat that turns out to have a queue (see `SpeakerTile`/
  * `EventRoom`) needs to switch this *same* composer into request mode
  * from outside it, which only works if something above both can set it.
+ *
+ * Issue #22: submitting the request form is also the gesture that
+ * acquires camera/mic (`onPrepareMedia`) — called directly from the
+ * form's own `onSubmit`, synchronously, in the same call stack as the
+ * click/tap that triggered it. This is deliberately a plain event
+ * handler, not something chained off the server action's own pending
+ * state or a `.then()` — same Safari gesture requirement as
+ * `activateMedia` (see useLiveRoomConnection). It never calls
+ * `preventDefault()`, so React's `action` still submits the request
+ * normally; the two just both react to the same click.
  */
 export function ChatPanel({
   eventId,
@@ -37,6 +47,7 @@ export function ChatPanel({
   micRequestMode,
   onMicRequestModeChange,
   onHasPendingRequestChange,
+  onPrepareMedia,
 }: {
   eventId: string;
   messages: LobbyMessage[];
@@ -44,6 +55,7 @@ export function ChatPanel({
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
+  onPrepareMedia: () => Promise<void>;
 }) {
   const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
   const [requestState, requestFormAction, requestPending] = useActionState(
@@ -125,7 +137,17 @@ export function ChatPanel({
             </button>
           ))}
         </div>
-        <form action={micRequestMode ? requestFormAction : sendFormAction} className="flex gap-2">
+        <form
+          action={micRequestMode ? requestFormAction : sendFormAction}
+          onSubmit={
+            micRequestMode
+              ? () => {
+                  void onPrepareMedia();
+                }
+              : undefined
+          }
+          className="flex gap-2"
+        >
           <button
             type="button"
             onClick={() => onMicRequestModeChange(!micRequestMode)}

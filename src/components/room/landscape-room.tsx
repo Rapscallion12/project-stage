@@ -40,6 +40,8 @@ export function LandscapeRoom({
   needsMediaActivation,
   activateMedia,
   mediaError,
+  localVideoTrack,
+  onPrepareMedia,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -64,6 +66,7 @@ export function LandscapeRoom({
             orientation="landscape"
             onTapEmptySeat={onTapEmptySeat}
             isJoiningSeat={isJoiningSeat}
+            localVideoTrack={localVideoTrack}
           />
         </div>
         {joinSeatMessage && (
@@ -80,6 +83,7 @@ export function LandscapeRoom({
           canPublish={canPublish}
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
+          onPrepareMedia={onPrepareMedia}
           mediaError={mediaError}
           connectionStatus={connectionStatus}
           phase={phase}
@@ -99,6 +103,7 @@ export function LandscapeRoom({
           micRequestMode={micRequestMode}
           onMicRequestModeChange={onMicRequestModeChange}
           onHasPendingRequestChange={onHasPendingRequestChange}
+          onPrepareMedia={onPrepareMedia}
           className="min-h-0 flex-1"
         />
       </div>

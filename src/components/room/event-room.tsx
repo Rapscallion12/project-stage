@@ -130,6 +130,18 @@ export function EventRoom({
     onHasPendingRequestChange: setHasPendingRequest,
   });
 
+  // Issue #22: "Withdraw" (waiting) and "Cancel" (mid-countdown) both route
+  // through cancelPromotion — releasing any held-but-unpublished tracks
+  // here too, once, covers both the same way withdrawing already
+  // uniformly does for the request itself. A promoted-and-published
+  // speaker leaving via "Leave the stage" doesn't go through this path at
+  // all (see RoomControls) — that's handled by the existing
+  // canPublish → false reaction inside useLiveRoomConnection instead.
+  function handleCancelPromotion() {
+    connection.releaseLocalMedia();
+    cancelPromotion();
+  }
+
   if (phase === "upcoming") {
     const now = nowMs === null ? null : new Date(nowMs);
     return (
@@ -166,7 +178,7 @@ export function EventRoom({
     hasPendingRequest,
     onHasPendingRequestChange: setHasPendingRequest,
     promotionCountdown,
-    onCancelPromotion: cancelPromotion,
+    onCancelPromotion: handleCancelPromotion,
     micRequestMode,
     onMicRequestModeChange: setMicRequestMode,
     onTapEmptySeat: handleTapEmptySeat,
@@ -179,6 +191,8 @@ export function EventRoom({
     needsMediaActivation: connection.needsMediaActivation,
     activateMedia: connection.activateMedia,
     mediaError: connection.mediaError,
+    localVideoTrack: connection.localVideoTrack,
+    onPrepareMedia: connection.prepareLocalMedia,
     messages,
     reactions,
   };

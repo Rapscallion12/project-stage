@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, type Participant } from "livekit-client";
+import {
+  createLocalTracks,
+  Room,
+  RoomEvent,
+  Track,
+  type LocalTrack,
+  type LocalVideoTrack,
+  type Participant,
+} from "livekit-client";
 
 export type ConnectionStatus = "unavailable" | "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -84,6 +92,36 @@ export type LiveRoomConnection = {
   activateMedia: () => Promise<void>;
   /** Looks up a connected participant by LiveKit identity (`profile:<id>` / `guest:<id>`) for media attachment only — never for deciding who's a speaker. See DECISIONS.md. */
   getParticipant: (identity: string) => Participant | undefined;
+  /**
+   * Issue #22: the locally held camera track, prepared or already
+   * published — the same object throughout, so a `<video>` element
+   * attached to it keeps playing uninterrupted across the pending →
+   * promoted transition. Null for anyone who hasn't called
+   * prepareLocalMedia() (i.e. every ordinary audience member).
+   */
+  localVideoTrack: LocalVideoTrack | null;
+  /**
+   * Issue #22: acquires camera+mic once, ahead of any seat, so a candidate
+   * has a self-preview while waiting and so promotion can publish without
+   * a second permission prompt. MUST be called synchronously from within a
+   * real user gesture (the mic-request submit) — same Safari constraint as
+   * activateMedia's own doc comment. Idempotent: a no-op if tracks are
+   * already held or an acquisition is already in flight. Failures surface
+   * through mediaError, classified the same way activateMedia's failures
+   * are; this tab's existing recovery affordance (needsMediaActivation →
+   * activateMedia) still works normally afterward since prepareLocalMedia
+   * failing leaves no tracks held.
+   */
+  prepareLocalMedia: () => Promise<void>;
+  /**
+   * Issue #22: stops and releases any held-but-not-yet-published tracks —
+   * for withdrawing a pending request before promotion. Already-published
+   * tracks (an active speaker leaving) are unaffected here; that path is
+   * handled by the existing canPublish → false reaction, which unpublishes
+   * regardless of how the track was originally published. Safe to call
+   * with nothing held.
+   */
+  releaseLocalMedia: () => void;
 };
 
 /**
@@ -108,9 +146,18 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
   const [mediaError, setMediaError] = useState<MediaError>(null);
   const [canPublish, setCanPublish] = useState(false);
   const [mediaActivated, setMediaActivated] = useState(false);
+  const [localVideoTrack, setLocalVideoTrack] = useState<LocalVideoTrack | null>(null);
   const roomRef = useRef<Room | null>(null);
   const mediaActivatedRef = useRef(false);
   const applyPublishStateRef = useRef<(publish: boolean) => Promise<void>>(async () => {});
+  const preparedTracksRef = useRef<LocalTrack[]>([]);
+  const preparingRef = useRef(false);
+
+  const stopPreparedTracks = useCallback(() => {
+    for (const track of preparedTracksRef.current) track.stop();
+    preparedTracksRef.current = [];
+    setLocalVideoTrack(null);
+  }, []);
 
   useEffect(() => {
     // No synchronous setStatus/setMediaError here for the "nothing to
@@ -134,6 +181,38 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     const updateCount = () => setParticipantCount(1 + room.remoteParticipants.size);
 
     async function applyPublishState(publish: boolean) {
+      // Issue #22: a candidate who already prepared tracks (via
+      // prepareLocalMedia, ahead of promotion) publishes those directly —
+      // no second getUserMedia call, no second permission prompt. Falls
+      // through to the ordinary setCameraEnabled/setMicrophoneEnabled path
+      // below for everyone else (e.g. issue #27's direct join, which never
+      // pre-acquires).
+      if (publish && preparedTracksRef.current.length > 0) {
+        const stillHeld: LocalTrack[] = [];
+        for (const track of preparedTracksRef.current) {
+          const source = track.kind === Track.Kind.Video ? "camera" : "microphone";
+          try {
+            await room.localParticipant.publishTrack(track);
+            setMediaError((prev) => (prev?.source === source ? null : prev));
+          } catch (error) {
+            // Publish failed even though the track itself is already held
+            // (permission was never the problem here) — keep it in the ref
+            // rather than orphaning the open hardware, so a later retry or
+            // cleanup can still find and stop it.
+            setMediaError(classifyMediaError(source, error));
+            stillHeld.push(track);
+          }
+        }
+        // Successfully published tracks' ownership transfers to the Room
+        // here on — LiveKit's own setCameraEnabled(false)/
+        // setMicrophoneEnabled(false) (the existing unpublish path, driven
+        // by the canPublish → false reaction when a speaker leaves) now
+        // owns stopping those. localVideoTrack state is left untouched:
+        // the self-preview keeps rendering the same track uninterrupted
+        // after publish, exactly as required.
+        preparedTracksRef.current = stillHeld;
+        return;
+      }
       try {
         await room.localParticipant.setMicrophoneEnabled(publish);
         setMediaError((prev) => (prev?.source === "microphone" ? null : prev));
@@ -146,6 +225,13 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       } catch (error) {
         if (publish) setMediaError(classifyMediaError("camera", error));
       }
+      // Disabling (a speaker leaving the stage) means setCameraEnabled(false)
+      // just stopped the same track object localVideoTrack points to —
+      // clear the state so the self-preview slot hides again, same as an
+      // ordinary audience member with no local media. A no-op for anyone
+      // who never held a track (the common publish=false case on initial
+      // connect).
+      if (!publish) setLocalVideoTrack(null);
     }
     applyPublishStateRef.current = applyPublishState;
 
@@ -153,9 +239,10 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       const publish = shouldPublish(room.localParticipant.permissions);
       setCanPublish(publish);
       // Disabling never needs a gesture; enabling before this tab's first
-      // gesture-triggered activateMedia() call would hit the exact Safari
-      // restriction this hook exists to avoid — leave it to
-      // needsMediaActivation/activateMedia instead of applying it here.
+      // gesture-triggered activateMedia() (or prepareLocalMedia()) call
+      // would hit the exact Safari restriction this hook exists to avoid —
+      // leave it to needsMediaActivation/activateMedia instead of applying
+      // it here.
       if (mediaActivatedRef.current || !publish) {
         void applyPublishState(publish);
       }
@@ -201,6 +288,10 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       cancelled = true;
       roomRef.current = null;
       applyPublishStateRef.current = async () => {};
+      // Prepared-but-never-published tracks (e.g. leaving the room while
+      // still a waiting candidate) hold real hardware open — stop them
+      // explicitly, since LiveKit's own Room never learned about them.
+      stopPreparedTracks();
       void room.disconnect();
     };
     // Reconnecting on every render would tear down a healthy call; only
@@ -232,6 +323,42 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     await applyPublishStateRef.current(publish);
   }, []);
 
+  const prepareLocalMedia = useCallback(async () => {
+    if (preparingRef.current || preparedTracksRef.current.length > 0) return;
+    preparingRef.current = true;
+    try {
+      const tracks = await createLocalTracks({ audio: true, video: true });
+      preparedTracksRef.current = tracks;
+      // A real gesture just resolved a getUserMedia call in this tab —
+      // that satisfies the same Safari constraint activateMedia's own
+      // gesture requirement exists for, so later canPublish changes
+      // (promotion) can publish these tracks with no further tap.
+      mediaActivatedRef.current = true;
+      setMediaActivated(true);
+      const videoTrack = tracks.find(
+        (track): track is LocalVideoTrack => track.kind === Track.Kind.Video,
+      );
+      setLocalVideoTrack(videoTrack ?? null);
+      const room = roomRef.current;
+      if (room && shouldPublish(room.localParticipant.permissions)) {
+        await applyPublishStateRef.current(true);
+      }
+    } catch (error) {
+      // createLocalTracks acquires camera+mic together (deliberately — one
+      // combined permission prompt instead of two); a rejection can't be
+      // cleanly attributed to just one device, so this is classified
+      // against "camera" as the more central failure mode for this
+      // product rather than added as a third, more precise error source.
+      setMediaError(classifyMediaError("camera", error));
+    } finally {
+      preparingRef.current = false;
+    }
+  }, []);
+
+  const releaseLocalMedia = useCallback(() => {
+    stopPreparedTracks();
+  }, [stopPreparedTracks]);
+
   return {
     status,
     participantCount,
@@ -240,5 +367,8 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     needsMediaActivation: canPublish && !mediaActivated,
     activateMedia,
     getParticipant,
+    localVideoTrack,
+    prepareLocalMedia,
+    releaseLocalMedia,
   };
 }

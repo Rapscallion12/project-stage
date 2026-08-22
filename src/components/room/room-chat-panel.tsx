@@ -21,6 +21,7 @@ export function RoomChatPanel({
   micRequestMode,
   onMicRequestModeChange,
   onHasPendingRequestChange,
+  onPrepareMedia,
   featuredSlot,
   className,
 }: {
@@ -30,6 +31,8 @@ export function RoomChatPanel({
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
+  /** Issue #22: acquires camera+mic from the mic-request submit gesture — see ChatPanel. */
+  onPrepareMedia: () => Promise<void>;
   featuredSlot?: React.ReactNode;
   className?: string;
 }) {
@@ -43,6 +46,7 @@ export function RoomChatPanel({
         micRequestMode={micRequestMode}
         onMicRequestModeChange={onMicRequestModeChange}
         onHasPendingRequestChange={onHasPendingRequestChange}
+        onPrepareMedia={onPrepareMedia}
       />
     </div>
   );

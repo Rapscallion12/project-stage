@@ -21,6 +21,7 @@ const baseProps = {
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
   onHasPendingRequestChange: vi.fn(),
+  onPrepareMedia: vi.fn(),
 };
 
 describe("ChatPanel", () => {
@@ -89,6 +90,26 @@ describe("ChatPanel", () => {
 
     await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(true));
     expect(onMicRequestModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it("submitting a speaker request also acquires camera/mic, synchronously from the same gesture — issue #22", () => {
+    submitSpeakerRequest.mockResolvedValue(undefined);
+    const onPrepareMedia = vi.fn();
+    render(<ChatPanel {...baseProps} micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+      target: { value: "AI and creativity" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Request" }));
+    expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("submitting a normal chat message never acquires camera/mic", () => {
+    sendMessage.mockResolvedValue(undefined);
+    const onPrepareMedia = vi.fn();
+    render(<ChatPanel {...baseProps} onPrepareMedia={onPrepareMedia} />);
+    fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onPrepareMedia).not.toHaveBeenCalled();
   });
 
   it("a failed request shows its error and stays in request mode — never silently reverts", async () => {

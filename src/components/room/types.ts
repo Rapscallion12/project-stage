@@ -1,4 +1,4 @@
-import type { Participant } from "livekit-client";
+import type { LocalVideoTrack, Participant } from "livekit-client";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { EventPhase } from "@/lib/events";
@@ -75,6 +75,10 @@ export type RoomLayoutProps = {
   /** Must be invoked directly from a click handler — see useLiveRoomConnection's activateMedia. */
   activateMedia: () => Promise<void>;
   mediaError: MediaError;
+  /** Issue #22: the local participant's own held camera track (prepared ahead of promotion, or already published), or null when there's nothing to preview — see SpeakerStage/SelfPreview. */
+  localVideoTrack: LocalVideoTrack | null;
+  /** Issue #22: acquires camera+mic once, ahead of any seat — triggered from the mic-request composer's own submit gesture (see ChatPanel), never automatically. */
+  onPrepareMedia: () => Promise<void>;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
 };

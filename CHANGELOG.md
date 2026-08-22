@@ -7,6 +7,47 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Added
+
+- **Candidate media readiness + persistent self-preview, promotion
+  without reacquiring media** (issue #22, remaining scope) — submitting
+  the mic-request composer is now itself the gesture that acquires
+  camera/mic (`useLiveRoomConnection`'s new `prepareLocalMedia`, one
+  `createLocalTracks({ audio: true, video: true })` call, combined
+  permission prompt), instead of waiting for the separate "Tap to enable
+  camera & mic" step post-promotion. The acquired tracks are held in a
+  ref and exposed as `localVideoTrack`; a new `SelfPreview` component
+  renders them into #20's reserved top-right slot — hidden entirely
+  (not an empty placeholder) for an ordinary audience member with no
+  local media, visually labeled "You", and the *same* component/track
+  stays mounted across the whole pending → countdown → published-speaker
+  transition, so it's never re-created or reacquired. `applyPublishState`
+  now checks for already-held prepared tracks first and calls
+  `publishTrack()` on them directly at promotion time — no second
+  `getUserMedia()` call, no second permission prompt — falling back to
+  the existing `setCameraEnabled`/`setMicrophoneEnabled` gesture-gated
+  path unchanged for anyone who never pre-acquired (issue #27's direct
+  join). Withdrawing ("Withdraw"/"Cancel", both routed through the same
+  `onCancelPromotion`) now also releases any held-but-unpublished tracks
+  (`releaseLocalMedia`); leaving the stage after actually publishing is
+  unaffected — that already went through the existing
+  `canPublish → false` reaction, which now also clears the self-preview.
+  Deliberately **no new server-side "ready" field** — readiness is
+  represented entirely by whether the client currently holds valid local
+  tracks; automatic promotion's own eligibility rule
+  (`resolveClaimDecision`) is untouched, and its existing grace-period
+  self-eviction is what a promoted-but-unpublishable candidate still
+  falls back to, unchanged. A candidate whose acquisition fails sees the
+  same specific error copy `RoomControls` already had for a seated
+  speaker, now shown while still pending too, with its own "Try again"
+  retry action — the existing "Tap to enable camera & mic"/"Enable
+  camera & mic" controls are both left in place as the recovery path for
+  exactly that failure case and for #27's direct join, neither is
+  provably redundant. The larger "make the *other* speaker's video
+  dominant once I'm on stage" redesign is explicitly deferred (possibly
+  #18), not built here — the self-preview stays the local feed only.
+  See DECISIONS.md and SESSION_LOG.md.
+
 ### Checkpoints
 
 - **`prototype-auto-promotion-stable`** (2026-08-22, commit `e934619`) —

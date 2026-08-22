@@ -293,17 +293,23 @@ different dependencies. Current order:
       against the original gut-check bar. See SESSION_LOG.md and
       DECISIONS.md.
 - [ ] Composer mic-request + candidate readiness/self-preview (issue
-      #22) — **composer-integrated request shipped** (🎤 toggle in the
-      existing chat composer, replacing the standalone "Request the mic"
-      control entirely). Remaining, narrowed scope: local media acquired
-      once via `createLocalTracks()` at request time, a persistent
-      spatially-stable self-preview that morphs (not remounts) from
-      candidate to active speaker, and promotion via `publishTrack()` on
-      the already-held tracks — no second `getUserMedia()` call. Today,
-      camera/mic activation is still a separate second tap once seated
-      (issue #15's existing flow) — a known, accepted gap pending this
-      remaining scope, not an oversight. Stays in Testing/Review pending
-      real-device confirmation. See SESSION_LOG.md.
+      #22) — **composer-integrated request and candidate
+      readiness/self-preview/promotion-without-reacquiring all shipped**.
+      Submitting the mic-request composer now acquires camera/mic itself
+      (`createLocalTracks`, one combined permission prompt); the acquired
+      tracks power a persistent, spatially-stable `SelfPreview` in #20's
+      top-right slot — hidden entirely with no local media, the same
+      mounted component/track from candidate through countdown through
+      published speaker; promotion calls `publishTrack()` on the
+      already-held tracks directly, no second `getUserMedia()` call, no
+      second permission prompt. Deliberately no new server-side
+      "readiness" field — local track possession is the whole signal, and
+      #23's automatic-promotion eligibility rule is unchanged by this.
+      **Remaining, narrowed further**: role-specific dominant video (the
+      *other* speaker's feed taking over the main stage once you're
+      speaking yourself — deliberately deferred, possibly #18) and a mic
+      activity indicator. Stays in Testing/Review pending real-device
+      confirmation. See SESSION_LOG.md and DECISIONS.md.
 - [ ] Direct join on an uncontested empty seat (issue #27) — split from
       #23 after real-device testing: with a seat open and no pending
       requests, tapping the tile directly attempts to join it — no
@@ -323,13 +329,15 @@ different dependencies. Current order:
       client-side timer; the real claim independently re-validates,
       unchanged); disconnection during the wait is already covered by
       the existing LiveKit webhook, and a promoted-but-never-activates-
-      media candidate self-evicts after a 30s grace period. **Does not
-      (yet) factor in #22's readiness signal** — camera/mic activation
-      still goes through the existing separate gesture-gated "Tap to
-      enable camera & mic" step, per explicit instruction to use "the
-      existing authorized path" rather than pull #22 in as a
-      prerequisite. **Not checked off** — pending the user's own
-      real-device confirmation. See SESSION_LOG.md and DECISIONS.md.
+      media candidate self-evicts after a 30s grace period. Its own
+      eligibility rule (`resolveClaimDecision`) is untouched by #22's
+      later readiness work — a candidate who pre-acquired media now
+      typically auto-publishes and clears `needsMediaActivation` almost
+      immediately after promotion, so the grace period rarely fires for
+      that path in practice, but the mechanism itself is exactly the one
+      built here, composing rather than being replaced. **Not checked
+      off** — pending the user's own real-device confirmation. See
+      SESSION_LOG.md and DECISIONS.md.
 - [ ] Chat/voting focus interactions (issue #21) — dead-zone-gated
       drag-handle gestures (bottom-sheet pattern) for reaching chat-focus
       and voting-focus, tap always available independent of the gesture,

@@ -66,6 +66,8 @@ export function PortraitRoom({
   needsMediaActivation,
   activateMedia,
   mediaError,
+  localVideoTrack,
+  onPrepareMedia,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -89,6 +91,7 @@ export function PortraitRoom({
           orientation="portrait"
           onTapEmptySeat={onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
+          localVideoTrack={localVideoTrack}
         />
         <div
           data-testid="stage-bottom-overlay"
@@ -110,6 +113,7 @@ export function PortraitRoom({
             canPublish={canPublish}
             needsMediaActivation={needsMediaActivation}
             activateMedia={activateMedia}
+            onPrepareMedia={onPrepareMedia}
             mediaError={mediaError}
             connectionStatus={connectionStatus}
             phase={phase}
@@ -123,6 +127,7 @@ export function PortraitRoom({
               micRequestMode={micRequestMode}
               onMicRequestModeChange={onMicRequestModeChange}
               onHasPendingRequestChange={onHasPendingRequestChange}
+              onPrepareMedia={onPrepareMedia}
               className="h-full"
             />
           </div>

@@ -3,6 +3,80 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Candidate media readiness is a local fact, not a new server field (issue #22's remaining scope)
+
+**Problem**: after `prototype-auto-promotion-stable`, the remaining
+scope of #22 was candidate readiness (pre-acquiring camera/mic ahead of
+a seat), a persistent self-preview, and publishing at promotion time
+without a second `getUserMedia()` call. The issue's own "Blocks #23"
+note (written before automatic promotion existed) implied #23 needed a
+"readiness signal" from #22 to distinguish a ready vs. unready
+candidate — worth re-checking against what #23 actually became before
+building anything.
+
+**Investigation**: re-reading `useAutomaticPromotion` (issue #23)
+confirmed its eligibility decision (`resolveClaimDecision`, shared by
+`checkPromotionEligibility` and `claimOpenSeat`) depends only on queue
+rank — never on media state. `needsMediaActivation`/`mediaError` only
+feed its *grace-period self-eviction* effect, which reacts to outcomes
+*after* promotion, not before. There is no pre-promotion "readiness
+check" in the eligibility path at all — so #22 was never actually
+blocking #23 the way the older note assumed, and #23 needed no changes.
+
+**Decision**: readiness is represented purely by whether the client
+currently holds valid local `LocalTrack`s — no new database column, no
+new server round-trip. `useLiveRoomConnection` grew `prepareLocalMedia()`
+(acquires camera+mic once, from the mic-request composer's own submit
+gesture — same Safari gesture constraint `activateMedia` already
+documents), `releaseLocalMedia()` (stops held-but-unpublished tracks,
+for withdrawal), and `localVideoTrack` (the held camera track, for the
+new `SelfPreview` component). `applyPublishState` now checks for
+already-held prepared tracks before falling back to the existing
+`setCameraEnabled`/`setMicrophoneEnabled` gesture-gated path — so
+promotion calls `publishTrack()` directly on tracks acquired earlier,
+with no second permission prompt. On successful publish, ownership of
+those tracks transfers conceptually to the Room (the prepared-tracks ref
+is cleared so a *later* re-request re-acquires fresh tracks instead of
+reusing spent ones) while the `localVideoTrack` React state is left
+untouched, so the same mounted `SelfPreview` keeps rendering the same
+track uninterrupted across the whole pending → countdown →
+published-speaker transition — nothing above it ever swaps which
+component or DOM node owns the attachment.
+
+**Alternatives considered**: (1) a server-side `speaker_requests.is_ready`
+column, flipped by a new mutation once `getUserMedia()` succeeds —
+rejected per explicit instruction and because it would duplicate state
+that's inherently local and can go stale silently (a track dying doesn't
+push anything to the server); the client already has the ground truth.
+(2) A second, parallel "media-ready" promotion path alongside
+`useAutomaticPromotion` — rejected as a competing mechanism; the
+existing grace-period self-eviction already covers "seated but
+never/no-longer publishable," regardless of *how* the seat was reached,
+and needed no changes to keep covering the #22-readiness case too.
+
+**Reason**: keeps the server as the sole authority on *who* gets a seat
+(rank, race-safety) while keeping *whether local media is usable right
+now* — a fact only the browser tab can actually know, and one that can
+change without any server-visible event — entirely client-side, matching
+the project's existing "server decides eligibility, client reports its
+own readiness" split rather than inventing a new one.
+
+**Tradeoffs**: `createLocalTracks({ audio: true, video: true })` acquires
+both devices in one call (deliberately — one combined permission prompt
+instead of two), so a rejection can't be cleanly attributed to just one
+device; classified against `"camera"` as the more central failure mode
+for this product rather than adding a third, more precise `MediaError`
+source for one ambiguous case. A candidate whose media dies while
+genuinely still waiting (before any publish attempt) isn't detected
+live — it surfaces the next time a publish is actually attempted (at
+promotion), where the existing grace-period fallback already takes over;
+no new "track ended" listener was added for this pass, since the
+existing fallback already resolves it, just one step later than a live
+listener would. The larger "make the other speaker's video dominant
+once I'm on stage" redesign is explicitly deferred (possibly #18) —
+`SelfPreview` stays the local feed only, never resized/repositioned by
+this pass.
+
 ## 2026-08-22 — Third checkpoint tagged (`prototype-auto-promotion-stable`)
 
 **Problem**: the friction-reduction work since `prototype-live-av-stable`

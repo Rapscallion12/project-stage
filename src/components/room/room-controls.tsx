@@ -46,6 +46,13 @@ function mediaErrorMessage(error: NonNullable<MediaError>): string {
  * "Withdraw" (waiting) and "Cancel" (mid-countdown) both call the same
  * `onCancelPromotion` — semantically identical, "stop trying to get a
  * seat," whether or not a countdown happens to be running right now.
+ *
+ * Issue #22: a candidate's camera/mic are normally acquired up front (see
+ * ChatPanel's mic-request submit), so `mediaError` can legitimately be set
+ * *before* this component ever reaches its `isSpeaker` branch — the
+ * pending branch below surfaces it with its own retry action
+ * (`onPrepareMedia`) for exactly that case, not just the already-seated
+ * one.
  */
 export function RoomControls({
   eventId,
@@ -56,6 +63,7 @@ export function RoomControls({
   canPublish,
   needsMediaActivation,
   activateMedia,
+  onPrepareMedia,
   mediaError,
   connectionStatus,
   phase,
@@ -69,6 +77,8 @@ export function RoomControls({
   canPublish: boolean;
   needsMediaActivation: boolean;
   activateMedia: () => Promise<void>;
+  /** Issue #22: retries camera/mic acquisition for a still-pending candidate whose prepareLocalMedia failed — same gesture requirement as activateMedia. */
+  onPrepareMedia: () => Promise<void>;
   mediaError: MediaError;
   connectionStatus: ConnectionStatus;
   /** Issue #17: requesting the mic works from lobby_open onward, but going live is still gated to "ready" — enforced server-side (checkPromotionEligibility/claimOpenSeat), not just here. */
@@ -128,6 +138,29 @@ export function RoomControls({
   }
 
   if (hasPendingRequest) {
+    // Issue #22: shown in both sub-states below — a still-pending
+    // candidate's camera/mic are normally already being acquired in the
+    // background (see ChatPanel), so a failure here needs its own visible
+    // recovery action, not just the isSpeaker branch's.
+    const mediaErrorNotice = mediaError && (
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-red-500" role="alert">
+          {mediaErrorMessage(mediaError)}
+        </p>
+        <Button
+          variant="ghost"
+          className="min-h-0 px-3 py-1 text-xs"
+          onClick={() => {
+            // Same gesture requirement as activateMedia — invoked directly
+            // from this click, not from inside another callback.
+            void onPrepareMedia();
+          }}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+
     if (promotionCountdown !== null) {
       return (
         <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
@@ -140,6 +173,7 @@ export function RoomControls({
               Cancel
             </Button>
           </div>
+          {mediaErrorNotice}
         </div>
       );
     }
@@ -157,6 +191,7 @@ export function RoomControls({
             Withdraw
           </Button>
         </div>
+        {mediaErrorNotice}
       </div>
     );
   }

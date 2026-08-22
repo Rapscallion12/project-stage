@@ -1,5 +1,6 @@
-import type { Participant } from "livekit-client";
+import type { LocalVideoTrack, Participant } from "livekit-client";
 import { SpeakerTile } from "@/components/room/speaker-tile";
+import { SelfPreview } from "@/components/room/self-preview";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -42,13 +43,23 @@ import type { Orientation } from "@/hooks/use-orientation";
  *   function until #21/#25 exist, and an inert decoration was part of
  *   the visual clutter real-device testing flagged; the bar itself
  *   (the actual structural anchor those issues need) stays.
- * - The **self-preview slot**, a fixed corner position — #22 renders the
- *   local participant's persistent camera preview into it. Kept
+ * - The **self-preview slot**, a fixed corner position — issue #22:
+ *   renders `SelfPreview` (the local participant's own camera, attached
+ *   directly from `localVideoTrack`) whenever local media is actually
+ *   held, and nothing at all otherwise — an ordinary audience member who
+ *   hasn't expressed intent to speak never sees a placeholder here. Kept
  *   *outside* the flex row/col below (a sibling, absolutely positioned
  *   against this component's own `relative` root) so it stays visually
  *   anchored to the stage as a whole, never inside either individual
- *   tile. Top-right, not bottom-right (issue #20's real-device corrective
+ *   tile, and so the *same* mounted element survives the pending →
+ *   countdown → published-speaker transition (this component itself
+ *   doesn't unmount across that transition either — see EventRoom).
+ *   Top-right, not bottom-right (issue #20's real-device corrective
  *   pass) — the bottom is now the chat/controls overlay's territory.
+ *   Deliberately still just the local feed even once actually speaking —
+ *   making the *other* speaker dominant on the main stage instead is a
+ *   larger visual redesign left to a later issue (possibly #18), not
+ *   done here.
  * - The **scrim**, spanning the whole stage — #21 will animate its
  *   opacity as chat/voting focus panels open above it. `opacity-0` and
  *   `pointer-events-none` today: present in the DOM (so #21 doesn't need
@@ -69,6 +80,7 @@ export function SpeakerStage({
   orientation,
   onTapEmptySeat,
   isJoiningSeat,
+  localVideoTrack,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -80,6 +92,8 @@ export function SpeakerStage({
   /** Issue #27: tapping either empty seat tile — omitted entirely (not just disabled) when the viewer already holds a seat, since a seated speaker has no use for it. */
   onTapEmptySeat: () => void;
   isJoiningSeat: boolean;
+  /** Issue #22: the local participant's own held camera track, if any — see this component's self-preview-slot doc comment above. */
+  localVideoTrack: LocalVideoTrack | null;
 }) {
   const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
   const viewerIsSpeaking = speakers.some((s) => {
@@ -127,12 +141,8 @@ export function SpeakerStage({
         {renderTile(2)}
       </div>
 
-      {/* Self-preview slot (issue #22 renders into this) */}
-      <div
-        data-testid="self-preview-slot"
-        aria-hidden="true"
-        className="pointer-events-none absolute top-3 right-3 h-24 w-16 rounded-md border border-dashed border-white/30 bg-white/5 sm:h-28 sm:w-20"
-      />
+      {/* Self-preview slot (issue #22) — hidden entirely, not just an empty placeholder, when there's no local media to show. */}
+      {localVideoTrack && <SelfPreview track={localVideoTrack} />}
 
       {/* Scrim (issue #21 animates this) */}
       <div

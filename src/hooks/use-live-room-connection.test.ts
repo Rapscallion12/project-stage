@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { classifyMediaError, shouldPublish } from "./use-live-room-connection";
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { classifyMediaError, shouldPublish, useLiveRoomConnection } from "./use-live-room-connection";
+import { Track } from "livekit-client";
+
+const { createLocalTracks } = vi.hoisted(() => ({ createLocalTracks: vi.fn() }));
+
+vi.mock("livekit-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("livekit-client")>();
+  return { ...actual, createLocalTracks };
+});
 
 describe("shouldPublish", () => {
   it("is false when there are no permissions yet (not connected)", () => {
@@ -64,5 +73,128 @@ describe("classifyMediaError", () => {
       source: "microphone",
       reason: "init-failed",
     });
+  });
+});
+
+/**
+ * Issue #22: prepareLocalMedia/releaseLocalMedia, exercised with
+ * `params: null` (no LiveKit Room instantiated at all — see the hook's
+ * own doc comment for why passing null skips connecting entirely) so
+ * these can be tested without mocking the real Room/WebRTC surface, the
+ * same reasoning shouldPublish/classifyMediaError above are already
+ * unit-tested standalone for.
+ */
+describe("useLiveRoomConnection — candidate media readiness (issue #22)", () => {
+  function fakeVideoTrack() {
+    return { kind: Track.Kind.Video, stop: vi.fn() };
+  }
+  function fakeAudioTrack() {
+    return { kind: Track.Kind.Audio, stop: vi.fn() };
+  }
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("exposes the acquired camera track as localVideoTrack once prepareLocalMedia resolves", async () => {
+    const video = fakeVideoTrack();
+    createLocalTracks.mockResolvedValue([fakeAudioTrack(), video]);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    expect(result.current.localVideoTrack).toBeNull();
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    expect(result.current.localVideoTrack).toBe(video);
+  });
+
+  it("is idempotent — a second call doesn't re-acquire once tracks are already held", async () => {
+    createLocalTracks.mockResolvedValue([fakeAudioTrack(), fakeVideoTrack()]);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    expect(createLocalTracks).toHaveBeenCalledTimes(1);
+  });
+
+  it("on acquisition failure, surfaces mediaError and holds no track", async () => {
+    const error = new Error("simulated NotAllowedError");
+    error.name = "NotAllowedError";
+    createLocalTracks.mockRejectedValue(error);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    expect(result.current.localVideoTrack).toBeNull();
+    expect(result.current.mediaError).toEqual({ source: "camera", reason: "permission-denied" });
+  });
+
+  it("a failed acquisition doesn't block a later retry from succeeding", async () => {
+    createLocalTracks.mockRejectedValueOnce(new Error("simulated failure"));
+    const video = fakeVideoTrack();
+    createLocalTracks.mockResolvedValueOnce([fakeAudioTrack(), video]);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    expect(result.current.localVideoTrack).toBeNull();
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    expect(result.current.localVideoTrack).toBe(video);
+    expect(createLocalTracks).toHaveBeenCalledTimes(2);
+  });
+
+  it("releaseLocalMedia stops held tracks and clears localVideoTrack", async () => {
+    const video = fakeVideoTrack();
+    const audio = fakeAudioTrack();
+    createLocalTracks.mockResolvedValue([audio, video]);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    act(() => {
+      result.current.releaseLocalMedia();
+    });
+
+    expect(result.current.localVideoTrack).toBeNull();
+    expect(video.stop).toHaveBeenCalledTimes(1);
+    expect(audio.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("releaseLocalMedia is safe to call with nothing held", () => {
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+    expect(() => {
+      act(() => {
+        result.current.releaseLocalMedia();
+      });
+    }).not.toThrow();
+    expect(result.current.localVideoTrack).toBeNull();
+  });
+
+  it("after releasing, a later prepareLocalMedia re-acquires fresh tracks rather than staying inert", async () => {
+    createLocalTracks.mockResolvedValue([fakeAudioTrack(), fakeVideoTrack()]);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    act(() => {
+      result.current.releaseLocalMedia();
+    });
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+
+    expect(createLocalTracks).toHaveBeenCalledTimes(2);
+    expect(result.current.localVideoTrack).not.toBeNull();
   });
 });
