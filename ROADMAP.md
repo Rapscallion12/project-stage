@@ -377,33 +377,36 @@ different dependencies. Current order:
       built here, composing rather than being replaced. **Not checked
       off** — pending the user's own real-device confirmation. See
       SESSION_LOG.md and DECISIONS.md.
-- [ ] Chat/voting focus interactions (issue #21) — **first slice shipped
-      (2026-08-22), mobile landscape only**: a dedicated drag/tap handle
-      (`useCommentsFocus`, dead-zone-gated, commit-threshold release —
-      #21's own bottom-sheet-pattern design) expands the chat overlay and
-      darkens `SpeakerStage`'s own `room-scrim` (built inert in #20, now
-      actually driven) without ever resizing the stage or touching
-      LiveKit/track attachment — governing rule: video geometry is
-      stable, only what's layered over it changes. `ChatPanel` was
-      already a single continuously-mounted component (built in earlier
-      passes), so draft text/scroll position/mic-request-mode already
+- [ ] Chat/voting focus interactions (issue #21) — **rebuilt as a
+      room-level gesture (2026-08-22), mobile landscape only**: real-
+      device testing found the original handle-driven design was the
+      wrong abstraction, not just imperfectly wired — the product intent
+      was always a broad, natural downward drag (closer to pulling down
+      a notification shade), never a tiny grab target. `useCommentsFocus`
+      was rewritten (not patched): its pointer handlers now attach to one
+      broad DOM ancestor (the stage wrapper) instead of a dedicated
+      handle, with `event.target`-based exclusion (buttons/links/inputs/
+      `data-gesture-ignore` on the message list) deciding whether a touch
+      starts the room gesture or is left alone for its own control. A
+      single always-present `comments-toggle` button reaches the exact
+      same state as the gesture — required as a first-class affordance,
+      not a fallback. Governing rule unchanged: video geometry stays
+      stable, darkens `SpeakerStage`'s own `room-scrim` (built inert in
+      #20) without ever resizing the stage or touching LiveKit/track
+      attachment. `ChatPanel` was already a single continuously-mounted
+      component, so draft text/scroll position/mic-request-mode already
       survive focus changes for free. Scoped to `MobileLandscapeRoom`
       only this pass — `PortraitRoom` untouched (explicit no-regression
-      requirement), the hook is reusable there later. **Real-device
-      follow-up (same day)**: the handle originally revealed
-      `GuestNameEditor` (sat directly above it, with `RoomControls`
-      between it and the chat), not comments — reordered so low-priority
-      metadata sits above the handle, fixed size, outside the
-      expand/collapse relationship, and the handle sits directly against
-      the chat wrapper it actually controls. The compact-💬-emblem
-      fallback (if the gesture still proves unreliable) is deliberately
-      not built yet — that's the user's own real-device call to make
-      after this correction. **Remaining**: wiring the same interaction
-      into `PortraitRoom`; the divider's *voting*-focus direction (still
-      #25's job, still fully inert); the second-level "full comments
-      view" with genuinely compressed video (deliberately deferred, a
-      seam is left, not implemented — see DECISIONS.md). **Not checked
-      off** — pending the user's own real-device confirmation. See
+      requirement), the hook remains reusable there later. **Remaining**:
+      wiring the same interaction into `PortraitRoom`; the divider's
+      *voting*-focus direction (still #25's job, still fully inert); the
+      second-level "full comments view" with genuinely compressed video
+      (deliberately deferred, a seam is left, not implemented — see
+      DECISIONS.md). **Not checked off** — pending the user's own
+      real-device confirmation, specifically including whether the
+      `preventDefault()`-based scroll suppression (a deliberate
+      simplification instead of a blanket `touch-action: none`, which
+      would have broken the message list's own scroll) holds up. See
       ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who

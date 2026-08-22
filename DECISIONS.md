@@ -3,6 +3,158 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Comments reveal rebuilt as a room-level gesture; the handle-driven design replaced, not patched
+
+**Problem**: real-device testing clarified that the previous pass's
+comments interaction was described wrong from the start. The product
+intent was never "grab a small handle to resize a panel" — it's "the
+room feels naturally vertically navigable," the same physical metaphor
+as pulling down a notification shade: there's more interface below/
+behind the video, reachable from a broad, natural gesture, not a
+specific tiny target. The user explicitly authorized concluding the
+existing implementation was the wrong abstraction rather than patching
+around it.
+
+**Investigation** (13 questions, answered before any code changed):
+
+1–2. The previous `useCommentsFocus` bundled all its pointer handlers
+   (including `onClick`) into one `handleProps` object, meant to be
+   spread onto exactly one small `<button>` — nothing else in the tree
+   had these handlers, so a touch starting anywhere else never began
+   tracking a drag at all. This was a deliberate, working design for a
+   *dedicated handle* — the architecture was never wrong for that
+   narrower interaction, it was simply the wrong interaction to build.
+3. **Conclusion: replace, not patch.** The dead-zone/commit-threshold
+   math (`computeDragProgress`) is unchanged and still correct — a pure
+   function, already decoupled from *where* it's triggered from. What
+   had to change was the hook's whole surface-facing API: bundling
+   `onClick` into the same handlers meant for a broad ancestor doesn't
+   make sense (a broad surface has no single "the tap target" — see
+   below), so the tap/drag disambiguation logic (`draggedRef`) that
+   existed specifically to keep those two from double-firing on the
+   *same* element became entirely unnecessary once they're driven by
+   *different* elements instead.
+4. **The gesture surface is a genuine DOM ancestor** — `MobileLandscapeRoom`'s
+   own stage wrapper (containing the video, header overlay, and chat/
+   controls overlay together), not a separate transparent layer placed
+   on top of everything. This distinction matters concretely: a
+   `pointer-events: auto` overlay *on top of* a button would receive the
+   touch and never let it reach the button underneath at all (touch
+   dispatch is a hit-test against the topmost element, not DOM
+   ancestry) — event delegation via a real ancestor, relying on
+   *bubbling*, is the only way `event.target` still correctly reflects
+   "the button the user actually touched," which is what makes excluding
+   it possible in the first place.
+5. **Descendants that opt out**: real `<button>`/`<a>`/`<input>`/
+   `<textarea>`/`<select>`/`[role="button"]`/`[contenteditable]`
+   elements match a single CSS selector check — covers empty-seat tap-
+   to-join, camera/mic activation, the composer, `GuestNameEditor`'s own
+   button, and the new comments-toggle itself, with no per-component
+   opt-out markers needed. One exception needed an explicit marker:
+   `data-gesture-ignore`, added to `ChatPanel`'s own message-list
+   container — a `<div>` with native scroll, not semantically a "control"
+   the selector above would otherwise catch.
+6. **Room gesture vs. comment-history scroll**: decided by *where the
+   touch starts*, exactly as issue #21's own body already prescribed for
+   the (now-replaced) handle — a touch beginning inside the message list
+   is excluded from ever starting a room-level drag, so its native
+   `overflow-y-auto` scroll runs completely unmanaged by this hook.
+   Per explicit instruction ("reliability over cleverness"), no drag-to-
+   close gesture was built once comments are open — only the explicit
+   toggle reliably closes them, avoiding the nested-scroll ambiguity
+   question entirely rather than trying to resolve it cleverly.
+7. **Pointer Events**, unchanged from the previous design — well-
+   supported on modern iOS Safari, unifies touch/mouse. CSS
+   `overscroll-behavior`/`touch-action` are complementary, not
+   alternatives — see point 8.
+8. **Avoiding scroll leaking, and a real bug caught in this same
+   investigation**: the room's own root containers are already
+   `overflow-hidden` (#20), so document/body-level scroll isn't reachable
+   from inside the room at all. The remaining risk is iOS Safari's
+   native rubber-band/pan gesture competing with the manual drag. The
+   *obvious* fix — `touch-action: none` on the shared stage-wrapper
+   ancestor — was investigated and rejected: CSS `touch-action` for a
+   given element is the *intersection* of its own value and every
+   ancestor's, so `none` on the stage wrapper would also have disabled
+   the message list's own scrolling, since the message list is a
+   *descendant* of that same wrapper — the one thing that must keep
+   scrolling normally. Fixed instead with `event.preventDefault()`
+   called inside `onPointerMove`, but *only* once a drag has already
+   started tracking (i.e., only for touches that already passed the
+   interactive/message-list exclusion check) — this suppresses the
+   competing native gesture for a genuine room-level drag without ever
+   touching the message list's own `touch-action`, which is additionally
+   reasserted explicitly (`touch-pan-y`) as a defensive belt-and-braces
+   measure. This is a deliberate simplification, not a proven-reliable
+   choice — flagged explicitly as real-device-unverified.
+9. **Video geometry**: unchanged from the previous pass's own guarantee
+   — `SpeakerStage`'s props (speakers/orientation/etc.) are never driven
+   by gesture state, only the pre-existing `scrimOpacity`/`scrimInstant`
+   presentational props and the chat wrapper's own height.
+10. **💬 and the drag reach the same state** by construction — both are
+    just different callers of the same `open` boolean inside one hook
+    instance (`openComments()`/`closeComments()` for the explicit
+    control, the drag's own commit logic for the gesture) — never two
+    parallel state machines.
+11. **Always-hideable**: a single, compact toggle button
+    (`comments-toggle`) whose label/`aria-expanded` reflects `open` —
+    present in exactly the same DOM position in both states (directly
+    above the chat wrapper), reliable regardless of whether the gesture
+    ever gets used at all.
+12. **`GuestNameEditor`**: kept exactly where the previous pass's own
+    fix already put it — above the reveal, fixed-size, outside the
+    expand/collapse relationship entirely. That already satisfies "does
+    not visually define this interaction"; this pass's job was fixing
+    *how the reveal is triggered*, not repositioning identity UI a
+    second time.
+13. **Real-device risk, named explicitly**: the `preventDefault()`-in-
+    `onPointerMove` approach (point 8) is the one piece of this design
+    genuinely untested against real iOS Safari — a blanket
+    `touch-action: none` is the more commonly-cited *bulletproof*
+    pattern for this exact class of gesture, and was only rejected here
+    because of the specific intersection conflict with the message
+    list's own scroll requirement. If real-device testing finds the
+    drag competing with page/rubber-band behavior, revisiting this
+    specific tradeoff (e.g. applying `touch-action: none` to
+    non-message-list siblings individually, rather than the shared
+    ancestor) is the documented next step, not a sign the whole
+    direction was wrong.
+
+**Decision**: `useCommentsFocus` rewritten. Returns `open`/`progress`/
+`dragging` (unchanged shape) plus `openComments`/`closeComments` (plain
+setters, for the toggle) and `surfaceProps` (four pointer handlers, meant
+for one broad ancestor). `MobileLandscapeRoom` spreads `surfaceProps`
+directly onto its own stage wrapper div (replacing the small handle
+button entirely) and renders one `comments-toggle` button, positioned
+exactly where the handle used to be — directly above the chat wrapper,
+still above nothing but the reveal target itself. Drag direction flipped
+to match the corrected product description: `deltaY = currentY - startY`
+(positive = moved *down* = reveal), not the previous pass's Maps/Music-
+panel "drag up" convention. `ChatPanel`'s message-list container gained
+`data-gesture-ignore` + `touch-pan-y`.
+
+**Alternatives considered**: (1) keeping the handle *and* adding
+broad-surface support alongside it — rejected: the spec is explicit that
+a handle "must not be the required interaction target," and running two
+parallel trigger mechanisms with subtly different behavior (one on a
+tiny element with its own onClick, one on a broad ancestor) is exactly
+the kind of duplication this project's own conventions warn against. (2)
+A transparent overlay div layered on top of the whole stage, instead of
+attaching handlers to a real ancestor — rejected outright once point 4
+above was worked through: it cannot let taps reach real controls
+underneath it at all, a fundamental dealbreaker, not a tuning question.
+(3) Drag-to-close once comments are open — deferred per explicit
+instruction, not attempted as a "clever" solution to the nested-scroll
+question; the explicit toggle is the only reliable close path built.
+
+**Tradeoffs**: `preventDefault()`-based suppression (point 8/13) instead
+of a declarative `touch-action: none` is a real, named simplification —
+the single biggest real-device risk in this pass, more so than the
+gesture math itself. The compact-💬-emblem "fallback direction" the
+user described as a possible Part 4 is not needed *as a fallback* here —
+the always-present `comments-toggle` already *is* that affordance, built
+as a first-class part of this design rather than a backup plan.
+
 ## 2026-08-22 — Refresh-recovery self-preview, a server-validated reconnect grace period, and the comments-focus target correction
 
 **Problem**: three real-device findings from the previous pass, addressed

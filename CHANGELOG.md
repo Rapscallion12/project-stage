@@ -7,6 +7,31 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Comments reveal rebuilt as a room-level gesture, not a handle** —
+  real-device testing clarified the product intent was described wrong:
+  requiring a user to grab a small dedicated handle isn't "the room
+  feels naturally vertically navigable." `useCommentsFocus` was
+  rewritten (not patched) so its pointer handlers attach to one broad
+  DOM ancestor (`MobileLandscapeRoom`'s own stage wrapper) instead of a
+  tiny button — a downward drag started from almost anywhere on the
+  video/background reveals comments, with `event.target`-based exclusion
+  (buttons/links/inputs/the message list, via `data-gesture-ignore`)
+  deciding whether a given touch starts the room gesture or is left
+  alone for its own control. A single always-present `comments-toggle`
+  reaches the exact same state as the gesture — never a second, parallel
+  UI. Ownership between "room reveal" and "comment-history scroll" is
+  decided by where a touch starts, not motion heuristics; no drag-to-
+  close was built once open, only the explicit toggle, per an explicit
+  "reliability over cleverness" instruction. Video geometry is still
+  completely unaffected — only scrim opacity and the chat wrapper's
+  height animate. See DECISIONS.md for the full investigation, including
+  the one deliberately-simplified, real-device-unverified piece
+  (`preventDefault()`-based scroll suppression instead of a blanket
+  `touch-action: none`, which would have also broken the message list's
+  own scroll due to CSS's ancestor-intersection rule).
+
 ### Fixed
 
 - **Refresh recovery restores a seated speaker's own self-preview** — a

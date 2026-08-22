@@ -1319,27 +1319,52 @@ and any further landscape/header polish beyond what real-device testing
 shows is actually needed — still #18's territory, or a follow-up pass on
 this one.
 
-**Issue #21's first slice — comments-focus overlay (2026-08-22)**: a
-follow-up real-device pass found `MobileLandscapeRoom`'s chat/controls
-overlay, though never resizing the stage, was still visually dominant at
-rest, and that `RoomHeader`/`SiteHeader` together still cost real
-document-flow height on an already-short viewport. `SpeakerStage`'s
-`room-scrim` (built inert in #20, `opacity-0` hardcoded) now accepts
-optional `scrimOpacity`/`scrimInstant` props (default `0`/`false` — no
-change for `PortraitRoom`/`DesktopRoom`, which don't pass them); a new
-`useCommentsFocus()` hook (`src/hooks/use-comments-focus.ts`) drives
-those props plus one existing height-controlling wrapper `<div>` from a
-dedicated drag/tap handle, expanding the chat overlay and darkening the
-scrim without ever touching `SpeakerStage`'s own size, props, or the
-`<video>`/LiveKit track attachment beneath it — the governing rule for
-this slice: video geometry is stable, the interaction changes only what's
-layered over it. Scoped to `MobileLandscapeRoom` only for this pass
-(`PortraitRoom` untouched, per an explicit no-regression instruction);
-the hook is written to be reusable there later. `RoomHeader` also moves
-from document flow to an absolutely-positioned top overlay, but only
-within `MobileLandscapeRoom` — full reasoning, including why `SiteHeader`
-itself stays as it was in the previous pass rather than *also* becoming
-an overlay, in DECISIONS.md.
+**Issue #21 — comments reveal (2026-08-22, rebuilt as a room-level
+gesture)**: a follow-up real-device pass found `MobileLandscapeRoom`'s
+chat/controls overlay, though never resizing the stage, was still
+visually dominant at rest, and that `RoomHeader`/`SiteHeader` together
+still cost real document-flow height on an already-short viewport —
+fixed first via `SpeakerStage`'s now-controllable `room-scrim`
+(`scrimOpacity`/`scrimInstant` props, default `0`/`false` — no change
+for `PortraitRoom`/`DesktopRoom`) and `RoomHeader` moving from document
+flow to an absolutely-positioned top overlay within `MobileLandscapeRoom`
+specifically (full reasoning, including why `SiteHeader` itself stays as
+it was rather than also becoming an overlay, in DECISIONS.md). A second
+real-device pass then found the *interaction* itself wrong at the root:
+requiring a user to find and grab a small dedicated handle isn't "the
+room feels naturally vertically navigable" — the product intent was a
+broad, room-level gesture the whole time, closer to pulling down a
+notification shade than operating a resize handle. `useCommentsFocus`
+(`src/hooks/use-comments-focus.ts`) was rewritten, not patched — its
+`surfaceProps` (four pointer handlers) are meant for one broad DOM
+ancestor (`MobileLandscapeRoom`'s own stage wrapper, containing the
+video, header, and chat/controls overlay together) rather than a single
+small element, with `event.target`-based exclusion (a CSS selector match
+for buttons/links/inputs/`data-gesture-ignore`) deciding whether a given
+touch starts tracking a room-level drag or is left completely alone for
+its own control to handle. This only works because the handler sits on a
+genuine ancestor relying on event bubbling — a separate transparent
+overlay layered on top would receive every touch itself and never let it
+reach a real button underneath, since hit-testing picks the topmost
+element, not something bubbling can route around. `ChatPanel`'s message
+list carries `data-gesture-ignore` so it's excluded from ever starting
+a room-level drag, leaving its own native scroll completely unmanaged by
+this hook — the ownership boundary between "room reveal" and "comment
+history scroll" is decided by *where a touch starts*, never by
+direction-of-motion heuristics or a nested-scroll negotiation. A single
+always-present `comments-toggle` button reaches the exact same `open`
+state the gesture does — required, not just a nicety, since discovering
+a gesture by accident was never good enough on its own. Governing rule
+unchanged: video geometry is stable, only what's layered over it
+changes. Still scoped to `MobileLandscapeRoom` only (`PortraitRoom`
+untouched); the hook remains written to be reusable there later. See
+DECISIONS.md for the full 13-point investigation this rebuild was based
+on, including the one deliberately-simplified, real-device-unverified
+piece: suppressing iOS Safari's native scroll competing with the drag
+via `event.preventDefault()` in `onPointerMove` rather than a blanket
+`touch-action: none` (which would have also disabled the message list's
+own scroll, since CSS `touch-action` is the *intersection* of an element
+and all its ancestors).
 
 ## Testing & Definition of Done
 

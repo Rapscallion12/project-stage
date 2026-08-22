@@ -17,6 +17,11 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 }));
 
 Element.prototype.scrollTo = vi.fn();
+// jsdom doesn't implement the Pointer Capture APIs at all — stubbed the
+// same way scrollTo is above, so real fireEvent.pointerDown/Move/Up
+// sequences against real DOM nodes don't throw.
+Element.prototype.setPointerCapture = vi.fn();
+Element.prototype.releasePointerCapture = vi.fn();
 
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
 
@@ -128,62 +133,99 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
     });
   });
 
-  describe("comments-focus overlay (issue #21, first slice: chat/controls no longer permanently dominate the screen)", () => {
-    it("renders a dedicated grab handle, separate from the message list, for the drag/tap gesture", () => {
+  describe("comments reveal — explicit toggle (issue #21, always-reliable trigger, same state the gesture reaches)", () => {
+    it("renders a compact, always-available toggle control", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      const handle = screen.getByTestId("comments-focus-handle");
-      expect(handle.tagName).toBe("BUTTON");
-      expect(handle.className).toMatch(/\btouch-none\b/);
+      const toggle = screen.getByTestId("comments-toggle");
+      expect(toggle.tagName).toBe("BUTTON");
+      expect(toggle).toHaveTextContent("Comments");
     });
 
     it("starts collapsed — not visually dominant at rest", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "false");
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "false");
       expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
     });
 
-    it("tapping the handle expands the chat area and darkens the scrim, without touching the stage's own size", () => {
+    it("tapping the toggle expands the chat area and darkens the scrim, without touching the stage's own size", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
       const stage = screen.getByTestId("room-stage");
       const stageClassBefore = stage.className;
 
-      fireEvent.click(screen.getByTestId("comments-focus-handle"));
+      fireEvent.click(screen.getByTestId("comments-toggle"));
 
-      expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByTestId("comments-toggle")).toHaveTextContent("Hide");
       expect(Number(screen.getByTestId("room-scrim").style.opacity)).toBeGreaterThan(0);
       expect(stage.className).toBe(stageClassBefore);
     });
 
-    it("tapping the handle again collapses it back", () => {
+    it("tapping the toggle again collapses it back", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      const handle = screen.getByTestId("comments-focus-handle");
-      fireEvent.click(handle);
-      fireEvent.click(handle);
-      expect(handle).toHaveAttribute("aria-expanded", "false");
+      const toggle = screen.getByTestId("comments-toggle");
+      fireEvent.click(toggle);
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
     });
 
-    it("a plain tap on an empty-seat tile never triggers the comments-focus gesture", () => {
-      render(<MobileLandscapeRoom {...baseProps} />);
-      fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
-      expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "false");
-    });
-
-    it("the handle sits directly against the chat it reveals — nothing else between it and the composer (real-device finding: the gesture used to reveal the guest-name editor instead)", () => {
+    it("the toggle sits directly against the chat it reveals — nothing else between it and the composer (real-device finding: the old handle revealed the guest-name editor instead)", () => {
       render(<MobileLandscapeRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
-      const handle = screen.getByTestId("comments-focus-handle");
+      const toggle = screen.getByTestId("comments-toggle");
       const composer = screen.getByRole("textbox");
-      // The handle's very next sibling must be the chat wrapper (containing the composer) — not the guest-name editor or RoomControls.
-      const nextSibling = handle.nextElementSibling as HTMLElement;
+      const nextSibling = toggle.nextElementSibling as HTMLElement;
       expect(nextSibling).toContainElement(composer);
     });
 
-    it("the guest-name editor renders above the handle, not between it and the chat", () => {
+    it("the guest-name editor renders above the toggle, not between it and the chat", () => {
       render(<MobileLandscapeRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
-      const handle = screen.getByTestId("comments-focus-handle");
+      const toggle = screen.getByTestId("comments-toggle");
       const changeNameButton = screen.getByRole("button", { name: /change name/i });
-      // The handle must come *after* the guest-name control in document order, not before it.
-      expect(changeNameButton.compareDocumentPosition(handle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(changeNameButton.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
+
+  describe("comments reveal — room-level drag gesture (real-device correction: broad surface, not a handle to find first)", () => {
+    it("a downward drag started on the plain stage background (not on any control) opens comments", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const surface = screen.getByTestId("room-stage").parentElement as HTMLElement;
+
+      fireEvent.pointerDown(surface, { pointerId: 1, clientY: 100 });
+      fireEvent.pointerMove(surface, { pointerId: 1, clientY: 260 });
+      fireEvent.pointerUp(surface, { pointerId: 1, clientY: 260 });
+
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("a drag starting on the empty-seat tile never opens comments — the tile's own tap still fires normally", () => {
+      const onTapEmptySeat = vi.fn();
+      render(<MobileLandscapeRoom {...baseProps} onTapEmptySeat={onTapEmptySeat} />);
+      const emptySeat = screen.getAllByTestId("empty-seat")[0];
+
+      fireEvent.pointerDown(emptySeat, { pointerId: 1, clientY: 100 });
+      fireEvent.pointerMove(emptySeat, { pointerId: 1, clientY: 260 });
+      fireEvent.pointerUp(emptySeat, { pointerId: 1, clientY: 260 });
+      fireEvent.click(emptySeat);
+
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "false");
+      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("a small accidental movement on the plain surface does nothing", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      const surface = screen.getByTestId("room-stage").parentElement as HTMLElement;
+
+      fireEvent.pointerDown(surface, { pointerId: 1, clientY: 100 });
+      fireEvent.pointerMove(surface, { pointerId: 1, clientY: 108 });
+      fireEvent.pointerUp(surface, { pointerId: 1, clientY: 108 });
+
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("the message list opts out of the room-level gesture so it can scroll normally", () => {
+      render(<MobileLandscapeRoom {...baseProps} messages={[]} />);
+      const list = document.querySelector("[data-gesture-ignore]");
+      expect(list).toBeInTheDocument();
     });
   });
 });

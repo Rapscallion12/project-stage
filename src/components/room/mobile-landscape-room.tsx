@@ -30,38 +30,41 @@ const MAX_SCRIM_OPACITY = 0.55;
  * comfortably under the desktop width threshold, so it lands here, not
  * in `DesktopRoom`.
  *
- * **Comments-focus overlay (issue #21, first slice, 2026-08-22)**: the
- * chat/controls overlay's default state is compact — same height as
- * before this pass (`COLLAPSED_CHAT_HEIGHT_PX`, matching the old
- * always-on `h-24`) — and a dedicated grab handle (`useCommentsFocus`)
- * lets it grow taller to `EXPANDED_CHAT_HEIGHT_PX` on a tap or a drag,
- * darkening `SpeakerStage`'s own scrim as it does. **Video geometry never
- * changes** — `SpeakerStage`'s own size/position (and the actual
- * `<video>` elements/LiveKit tracks inside it) are completely untouched
- * by this; only the *height of the chat wrapper* and the *scrim's
- * opacity* animate, both purely presentational values passed down as
- * props/inline styles. The room's own `RoomHeader` is a translucent
- * overlay pinned to the stage's top edge (not a document-flow block
- * above it, unlike every other composition) specifically to reclaim its
- * footprint for the stage — `pr-16`/`pr-20` on its wrapper reserves room
- * for the top-right self-preview so the two don't visually collide.
+ * **Comments reveal, room-level gesture (issue #21, re-architected
+ * 2026-08-22)**: real-device testing found the original handle-driven
+ * design wrong at the root — requiring a user to locate and grab a tiny
+ * handle isn't "the room feels naturally vertically navigable," it's a
+ * slider widget. This component's own outer stage wrapper (the `relative
+ * min-h-0 flex-1` div immediately below) is now the gesture surface
+ * itself — `useCommentsFocus`'s `surfaceProps` are spread directly onto
+ * it, so a downward drag started from almost anywhere on the broad
+ * video/background area reveals the comments overlay; no handle to find
+ * first. See that hook's own doc comment for exactly how it tells a
+ * room-level drag apart from a tap on a real control (buttons, the
+ * composer, the message list) — every one of those keeps working
+ * completely normally, untouched by this. A small toggle
+ * (`comments-toggle`) remains as the explicit, always-reliable
+ * alternative — required per instruction, not merely a nicety: tapping
+ * 💬 in Watch Mode or the collapse control once open drives the *exact
+ * same* `open` state the gesture does, never a second, parallel UI.
  *
- * **Focus target corrected (real-device finding, 2026-08-22)**: the
- * first pass put the handle directly above `GuestNameEditor`, with
- * `RoomControls` between it and the chat — the *literal* thing the drag
- * revealed was the guest-name editor, not comments, exactly the
- * complaint. `GuestNameEditor`/`joinSeatMessage` and `RoomControls` now
- * sit *above* the handle, outside the expand/collapse relationship
- * entirely — fixed size, always visible, never growing — so the handle
- * sits directly against the one thing it actually controls: the chat
- * wrapper immediately below it. Still the same `StageOverlayShell`,
- * still the same underlying `useCommentsFocus` state; only the ordering
- * of what's inside it changed.
+ * **Video geometry never changes** — `SpeakerStage`'s own size/position
+ * (and the actual `<video>` elements/LiveKit tracks inside it) are
+ * completely untouched by any of this; only `scrimOpacity` and the chat
+ * wrapper's height (both existing, purely presentational values) animate
+ * with reveal progress. The room's own `RoomHeader` stays a translucent
+ * top overlay (reclaims its document-flow footprint for the stage);
+ * `pr-16`/`pr-20` on its wrapper reserves room for the top-right
+ * self-preview so the two don't visually collide.
  *
- * The site-wide header's own compaction (globals.css, `body.room-active`
- * + a `(orientation: landscape) and (max-height: …)` media query) is
- * handled entirely outside this component — see `EventRoom`'s doc
- * comment — since that header lives in the root layout, not here.
+ * **Reveal hierarchy**: `GuestNameEditor`/`joinSeatMessage` and
+ * `RoomControls` sit *above* the reveal, fixed-size and always visible —
+ * low-priority account/identity utility never competes with, or defines,
+ * what the gesture actually reveals. Comments + composer are that one
+ * thing (via the chat wrapper's own height animating), matching the
+ * priority order the product asks for (comments, composer, reactions,
+ * request-to-speak — the last already lives in `RoomControls`, already
+ * fixed-position/always-visible, not gated behind the reveal at all).
  */
 export function MobileLandscapeRoom({
   event,
@@ -94,13 +97,14 @@ export function MobileLandscapeRoom({
   messages,
   reactions,
 }: RoomLayoutProps) {
-  const { open: commentsFocused, progress, dragging, handleProps } = useCommentsFocus();
+  const { open: commentsOpen, progress, dragging, openComments, closeComments, surfaceProps } = useCommentsFocus();
   const chatHeightPx =
     COLLAPSED_CHAT_HEIGHT_PX + (EXPANDED_CHAT_HEIGHT_PX - COLLAPSED_CHAT_HEIGHT_PX) * progress;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="relative min-h-0 flex-1">
+      {/* The gesture surface: a real DOM ancestor of every tile/button/composer beneath it, not a transparent layer on top — see useCommentsFocus's own doc comment for why that distinction is what lets taps on real controls keep working untouched. */}
+      <div className="relative min-h-0 flex-1" {...surfaceProps}>
         <SpeakerStage
           speakers={speakers}
           getParticipant={getParticipant}
@@ -133,7 +137,7 @@ export function MobileLandscapeRoom({
           </div>
         </div>
         <StageOverlayShell topClassName="pt-8">
-          {/* Fixed-size, always visible, never part of the expand/collapse — low-priority metadata stays out of the handle's own reveal target below. */}
+          {/* Fixed-size, always visible, never part of the reveal — low-priority metadata stays out of what the gesture/💬 actually shows. */}
           {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
           {joinSeatMessage && (
             <p className="text-xs text-red-500" role="alert">
@@ -155,16 +159,24 @@ export function MobileLandscapeRoom({
             phase={phase}
             countdownText={countdownText}
           />
-          {/* The handle sits directly against the one thing it reveals — nothing else between it and the chat wrapper below. */}
+          {/* The one explicit, always-reliable trigger — same open/close state the broad-surface drag reaches, never a second parallel UI. Also acts as the subtle "more content below" visual hint the gesture surface itself doesn't otherwise provide. */}
           <button
             type="button"
-            data-testid="comments-focus-handle"
-            {...handleProps}
-            aria-expanded={commentsFocused}
-            aria-label={commentsFocused ? "Collapse comments" : "Expand comments"}
-            className="flex h-6 w-full shrink-0 touch-none items-center justify-center"
+            data-testid="comments-toggle"
+            onClick={commentsOpen ? closeComments : openComments}
+            aria-expanded={commentsOpen}
+            aria-label={commentsOpen ? "Hide comments" : "Show comments"}
+            className="flex h-7 w-full shrink-0 items-center justify-center gap-1 text-xs text-white/70"
           >
-            <span aria-hidden="true" className="h-1 w-10 rounded-full bg-white/40" />
+            {commentsOpen ? (
+              <>
+                <span aria-hidden="true">⌄</span> Hide
+              </>
+            ) : (
+              <>
+                <span aria-hidden="true">💬</span> Comments
+              </>
+            )}
           </button>
           <div style={{ height: chatHeightPx }} className="min-h-0 shrink-0">
             <RoomChatPanel

@@ -813,6 +813,87 @@ corrected comments-focus target. Do not begin #18, #24, #25, voting, the
 second-level full-comments view, or the compact-💬 fallback until
 confirmed.
 
+**Real-device testing clarified the #21 interaction was described wrong
+from the start, same session — the handle-driven design replaced, not
+patched**: refresh recovery confirmed working; reconnect grace confirmed
+mostly working (not yet multi-user stress-tested); but the comments
+interaction still didn't feel right — the user identified the root
+cause as architectural, not a tuning problem: requiring a user to find
+and grab a small handle isn't "the room feels naturally vertically
+navigable," the actual product intent all along. Explicitly authorized
+concluding the existing implementation was the wrong abstraction rather
+than defending sunk work.
+
+Investigated 13 specific questions before writing any code (full
+answers in DECISIONS.md, not duplicated here): confirmed the dead-zone/
+commit-threshold math (`computeDragProgress`) was still correct and
+reusable, but the hook's *surface-facing API* (bundling `onClick` into
+handlers meant for one small element) was the wrong shape for a broad,
+room-level gesture — concluded **replace, not patch**. Worked through
+why a separate transparent overlay-on-top (an earlier idea) is a
+dealbreaker, not a tuning question: hit-testing picks whichever element
+is visually topmost, so an overlay layered above real buttons would
+swallow every touch and never let it reach them — only a genuine DOM
+ancestor, relying on event bubbling, lets `event.target` still reflect
+the actual button the user touched, which is what makes excluding it
+possible at all. Also caught, mid-investigation, a real CSS footgun: the
+"obvious" fix for iOS Safari's native scroll competing with the drag
+(`touch-action: none` on the shared stage-wrapper ancestor) would have
+also disabled the *message list's* own scrolling, since `touch-action`
+for a given element is the *intersection* of its own value and every
+ancestor's — worked around with `event.preventDefault()` inside
+`onPointerMove`, but only once a drag has already started tracking (i.e.
+already passed the interactive-element/message-list exclusion check),
+explicitly flagged as the one real-device-unverified piece of this
+design rather than presented as equally solid.
+
+**Rewrote `useCommentsFocus`**: now returns `openComments`/
+`closeComments` (plain setters for the explicit toggle) and
+`surfaceProps` (four pointer handlers meant for one broad ancestor,
+replacing the old single-element `handleProps`) — `onPointerDown` checks
+`event.target.closest('button, a, input, textarea, select,
+[role="button"], [contenteditable], [data-gesture-ignore]')` before
+tracking anything, so real controls (empty-seat tap-to-join, camera/mic
+activation, the composer, `GuestNameEditor`'s own button, the new
+toggle) are never touched. `ChatPanel`'s message list gained
+`data-gesture-ignore` + `touch-pan-y`. Drag direction flipped to match
+the corrected description (`deltaY = currentY − startY`, positive =
+moved *down* = reveal — not the previous pass's Maps/Music "drag up"
+convention). `MobileLandscapeRoom` spreads `surfaceProps` on its own
+stage wrapper (the video/header/chat-overlay's shared ancestor) and
+renders one `comments-toggle` button in the same spot the old handle
+occupied — same `open`/`progress`/`dragging` state driving the
+(unchanged) scrim-opacity/chat-height mechanics either way. Removed the
+old tap-vs-drag double-toggle-suppression logic (`draggedRef`) entirely
+— unnecessary now that the drag and the explicit tap live on different
+elements rather than competing for the same one.
+
+Also confirmed (per instruction, before touching anything): refresh
+recovery and the reconnect grace period were both left completely
+untouched — nothing about either needed to change for this rebuild.
+
+15 changed/rewritten tests across 2 files (`use-comments-focus.test.ts`
+fully rewritten for the new API and exclusion behavior;
+`mobile-landscape-room.test.tsx`'s comments-focus describe blocks split
+into an explicit-toggle group and a new room-level-drag group, exercised
+via real `fireEvent.pointerDown/Move/Up` sequences against real DOM
+nodes — required stubbing `Element.prototype.setPointerCapture`, which
+jsdom doesn't implement at all, the same way `scrollTo` was already
+stubbed in this file). lint/tsc/build/test all pass (283/283). Merged
+to `main`, pushed, deployment confirmed via the GitHub deployments API,
+structural production check against the deployed test room confirmed no
+regressions.
+
+**Next task**: stop for the user's own real-device confirmation —
+specifically whether the broad-surface drag actually feels natural now,
+whether it reliably avoids stealing taps from real controls, whether the
+message list scrolls without fighting the room gesture, and whether the
+`preventDefault()`-based scroll suppression holds up against iOS
+Safari's own native behavior. Do not begin #18, #24, #25, voting, the
+second-level full-comments view, wiring this into `PortraitRoom`, or any
+further gesture refinement (velocity/flick, drag-to-close) until
+confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work
