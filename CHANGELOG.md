@@ -9,7 +9,32 @@ separate release cadence to track here.
 
 ### Changed
 
-- **Comments reveal rebuilt as a room-level gesture, not a handle** —
+- **Comments gesture retired; Watch Mode / Comments Mode rebuilt as a
+  plain tap toggle** — a second real-device pass found the room-level
+  drag gesture below produced no meaningful transition on an actual
+  iPhone, and, independently, that neither orientation actually hid the
+  chat panel at rest: landscape only shortened it (still always mounted,
+  96px↔160px), and portrait had never received any of this issue's work
+  at all, still showing a fixed `h-40` panel from issue #20. Deleted
+  `use-comments-focus.ts` outright and replaced it with
+  `use-comments-mode.ts` — a plain boolean (`open`/`openComments`/
+  `closeComments`), no drag tracking, no `progress`, no pointer handlers.
+  Both `MobileLandscapeRoom` and `PortraitRoom` (built from scratch for
+  portrait) now share this hook: **Watch Mode** renders no chat panel in
+  the DOM at all (not shortened — absent) plus a compact `💬 Comments`
+  toggle; **Comments Mode** mounts the existing, unchanged chat/composer
+  UI and darkens the stage scrim to a constant opacity. `chat-panel.tsx`'s
+  `data-gesture-ignore`/`touch-pan-y` markers are gone with the drag they
+  existed to exempt the message list from. `DesktopRoom` untouched.
+  Video geometry unaffected, same as before — `SpeakerStage` stays a
+  sibling of the overlay, never remounted or resized by this toggle. This
+  is a deliberate, temporary foundation: the progressive downward-drag
+  reveal is deferred, not abandoned, until Watch Mode and Comments Mode
+  both have a Figma-defined visual design to transition between — see
+  DECISIONS.md's "Future Figma seam" entry.
+
+- **Comments reveal rebuilt as a room-level gesture, not a handle**
+  (superseded by the retirement above, kept for history) —
   real-device testing clarified the product intent was described wrong:
   requiring a user to grab a small dedicated handle isn't "the room
   feels naturally vertically navigable." `useCommentsFocus` was

@@ -74,7 +74,7 @@ describe("SpeakerStage", () => {
     expect(slot.className).not.toMatch(/\bbottom-3\b/);
   });
 
-  it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath — no caller drives it yet", () => {
+  it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath", () => {
     render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
     const scrim = screen.getByTestId("room-scrim");
     expect(scrim).toBeInTheDocument();
@@ -82,7 +82,7 @@ describe("SpeakerStage", () => {
     expect(scrim.className).toMatch(/\bpointer-events-none\b/);
   });
 
-  describe("scrim opacity (issue #21, driven by MobileLandscapeRoom's comments-focus overlay)", () => {
+  describe("scrim opacity (issue #21, driven by MobileLandscapeRoom/PortraitRoom's Comments Mode)", () => {
     it("renders whatever opacity the caller passes", () => {
       render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} scrimOpacity={0.4} />);
       expect(screen.getByTestId("room-scrim").style.opacity).toBe("0.4");

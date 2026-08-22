@@ -4,14 +4,12 @@ import { RoomChatPanel } from "@/components/room/room-chat-panel";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
-import { useCommentsFocus } from "@/hooks/use-comments-focus";
+import { useCommentsMode } from "@/hooks/use-comments-mode";
 import type { RoomLayoutProps } from "@/components/room/types";
 
-/** h-24's own equivalent — identical to today's height at rest (progress 0), zero regression for the collapsed default. */
-const COLLAPSED_CHAT_HEIGHT_PX = 96;
-/** Tunable, not validated against a real short landscape viewport yet — see this pass's own verification report. */
-const EXPANDED_CHAT_HEIGHT_PX = 160;
-const MAX_SCRIM_OPACITY = 0.55;
+/** Comments Mode's own height when open — a phone in landscape has less room to spare than portrait, so this stays shorter. Tunable, not validated against a real device yet. */
+const COMMENTS_MODE_HEIGHT_PX = 208;
+const SCRIM_OPACITY_WHEN_OPEN = 0.55;
 
 /**
  * A phone rotated sideways, not a small desktop (real-device finding,
@@ -30,41 +28,32 @@ const MAX_SCRIM_OPACITY = 0.55;
  * comfortably under the desktop width threshold, so it lands here, not
  * in `DesktopRoom`.
  *
- * **Comments reveal, room-level gesture (issue #21, re-architected
- * 2026-08-22)**: real-device testing found the original handle-driven
- * design wrong at the root — requiring a user to locate and grab a tiny
- * handle isn't "the room feels naturally vertically navigable," it's a
- * slider widget. This component's own outer stage wrapper (the `relative
- * min-h-0 flex-1` div immediately below) is now the gesture surface
- * itself — `useCommentsFocus`'s `surfaceProps` are spread directly onto
- * it, so a downward drag started from almost anywhere on the broad
- * video/background area reveals the comments overlay; no handle to find
- * first. See that hook's own doc comment for exactly how it tells a
- * room-level drag apart from a tap on a real control (buttons, the
- * composer, the message list) — every one of those keeps working
- * completely normally, untouched by this. A small toggle
- * (`comments-toggle`) remains as the explicit, always-reliable
- * alternative — required per instruction, not merely a nicety: tapping
- * 💬 in Watch Mode or the collapse control once open drives the *exact
- * same* `open` state the gesture does, never a second, parallel UI.
+ * **Watch Mode / Comments Mode, tap-driven (issue #21, gesture retired,
+ * 2026-08-22)**: two rounds of real-device testing found the room-level
+ * downward-drag gesture didn't produce a usable interaction — no
+ * meaningful transition on an actual iPhone — and, independently, that
+ * the *previous* "collapsed" state was never actually hidden, just
+ * shorter, so comments/composer still permanently dominated the stage.
+ * `useCommentsMode` (retired back to a plain boolean, no drag tracking
+ * at all — see its own doc comment) now drives two clean, discrete
+ * states: **Watch Mode** (`open === false`) shows only
+ * `GuestNameEditor`/`joinSeatMessage`/`RoomControls` and the compact
+ * `comments-toggle` — no chat panel rendered at all, not even a sliver.
+ * **Comments Mode** (`open === true`) additionally mounts the full
+ * `RoomChatPanel` at `COMMENTS_MODE_HEIGHT_PX` and darkens
+ * `SpeakerStage`'s scrim. This is a deliberate, temporary foundation —
+ * see DECISIONS.md's "Future Figma seam" note — not a redesign: the
+ * eventual downward-drag reveal returns once Watch Mode and Comments
+ * Mode both have a real, Figma-defined visual target to transition
+ * between, not before.
  *
  * **Video geometry never changes** — `SpeakerStage`'s own size/position
- * (and the actual `<video>` elements/LiveKit tracks inside it) are
- * completely untouched by any of this; only `scrimOpacity` and the chat
- * wrapper's height (both existing, purely presentational values) animate
- * with reveal progress. The room's own `RoomHeader` stays a translucent
- * top overlay (reclaims its document-flow footprint for the stage);
- * `pr-16`/`pr-20` on its wrapper reserves room for the top-right
- * self-preview so the two don't visually collide.
- *
- * **Reveal hierarchy**: `GuestNameEditor`/`joinSeatMessage` and
- * `RoomControls` sit *above* the reveal, fixed-size and always visible —
- * low-priority account/identity utility never competes with, or defines,
- * what the gesture actually reveals. Comments + composer are that one
- * thing (via the chat wrapper's own height animating), matching the
- * priority order the product asks for (comments, composer, reactions,
- * request-to-speak — the last already lives in `RoomControls`, already
- * fixed-position/always-visible, not gated behind the reveal at all).
+ * (and the actual `<video>` elements/LiveKit tracks inside it) are a
+ * sibling of the overlay, not a child of it; toggling Comments Mode on
+ * or off never re-renders, resizes, or remounts it. The room's own
+ * `RoomHeader` stays a translucent top overlay (reclaims its document-
+ * flow footprint for the stage); `pr-16`/`pr-20` on its wrapper reserves
+ * room for the top-right self-preview so the two don't visually collide.
  */
 export function MobileLandscapeRoom({
   event,
@@ -97,14 +86,11 @@ export function MobileLandscapeRoom({
   messages,
   reactions,
 }: RoomLayoutProps) {
-  const { open: commentsOpen, progress, dragging, openComments, closeComments, surfaceProps } = useCommentsFocus();
-  const chatHeightPx =
-    COLLAPSED_CHAT_HEIGHT_PX + (EXPANDED_CHAT_HEIGHT_PX - COLLAPSED_CHAT_HEIGHT_PX) * progress;
+  const { open: commentsOpen, openComments, closeComments } = useCommentsMode();
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {/* The gesture surface: a real DOM ancestor of every tile/button/composer beneath it, not a transparent layer on top — see useCommentsFocus's own doc comment for why that distinction is what lets taps on real controls keep working untouched. */}
-      <div className="relative min-h-0 flex-1" {...surfaceProps}>
+      <div className="relative min-h-0 flex-1">
         <SpeakerStage
           speakers={speakers}
           getParticipant={getParticipant}
@@ -116,8 +102,7 @@ export function MobileLandscapeRoom({
           onTapEmptySeat={onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           localVideoTrack={localVideoTrack}
-          scrimOpacity={progress * MAX_SCRIM_OPACITY}
-          scrimInstant={dragging}
+          scrimOpacity={commentsOpen ? SCRIM_OPACITY_WHEN_OPEN : 0}
           reconnectingIdentities={reconnectingIdentities}
         />
         {/* Room header as a translucent top overlay — reclaims its document-flow footprint for the stage, same reasoning as the bottom overlay below. Right padding leaves room for the top-right self-preview so the two don't collide. */}
@@ -137,7 +122,6 @@ export function MobileLandscapeRoom({
           </div>
         </div>
         <StageOverlayShell topClassName="pt-8">
-          {/* Fixed-size, always visible, never part of the reveal — low-priority metadata stays out of what the gesture/💬 actually shows. */}
           {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
           {joinSeatMessage && (
             <p className="text-xs text-red-500" role="alert">
@@ -159,7 +143,7 @@ export function MobileLandscapeRoom({
             phase={phase}
             countdownText={countdownText}
           />
-          {/* The one explicit, always-reliable trigger — same open/close state the broad-surface drag reaches, never a second parallel UI. Also acts as the subtle "more content below" visual hint the gesture surface itself doesn't otherwise provide. */}
+          {/* Watch Mode's one persistent affordance — Comments Mode's own explicit "back to video" control, same button either way. */}
           <button
             type="button"
             data-testid="comments-toggle"
@@ -178,18 +162,21 @@ export function MobileLandscapeRoom({
               </>
             )}
           </button>
-          <div style={{ height: chatHeightPx }} className="min-h-0 shrink-0">
-            <RoomChatPanel
-              eventId={event.id}
-              messages={messages}
-              reactions={reactions}
-              micRequestMode={micRequestMode}
-              onMicRequestModeChange={onMicRequestModeChange}
-              onHasPendingRequestChange={onHasPendingRequestChange}
-              onPrepareMedia={onPrepareMedia}
-              className="h-full"
-            />
-          </div>
+          {/* Comments Mode only — not rendered at all in Watch Mode, not just shorter. */}
+          {commentsOpen && (
+            <div style={{ height: COMMENTS_MODE_HEIGHT_PX }} className="min-h-0 shrink-0">
+              <RoomChatPanel
+                eventId={event.id}
+                messages={messages}
+                reactions={reactions}
+                micRequestMode={micRequestMode}
+                onMicRequestModeChange={onMicRequestModeChange}
+                onHasPendingRequestChange={onHasPendingRequestChange}
+                onPrepareMedia={onPrepareMedia}
+                className="h-full"
+              />
+            </div>
+          )}
         </StageOverlayShell>
       </div>
     </div>

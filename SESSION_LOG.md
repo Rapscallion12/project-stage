@@ -894,6 +894,95 @@ second-level full-comments view, wiring this into `PortraitRoom`, or any
 further gesture refinement (velocity/flick, drag-to-close) until
 confirmed.
 
+**Real-device confirmation came back negative** — the room-level drag
+above failed too: "dragging downward produced no meaningful transition,"
+and, independently of the gesture itself, comments/composer still
+permanently occupied too much of the stage in both orientations (in
+portrait's case because it had never received any of this issue's work
+at all). Explicit instruction: treat this as a failed UX experiment, not
+a tuning problem, and change strategy — build two reliable, tap-driven
+states now, revisit the progressive drag only after Figma defines what
+those states should look like.
+
+**Investigation before writing any code** (six questions, full answers
+in DECISIONS.md): confirmed every part of `useCommentsFocus` was
+gesture-only (dead-zone/commit-threshold math, `computeDragProgress`,
+`INTERACTIVE_SELECTOR`, the four pointer handlers) — nothing in it
+represented open/closed state on its own. Confirmed removing it was safe:
+it only ever touched `SpeakerStage`'s presentational `scrimOpacity`/
+`scrimInstant` props and the chat wrapper's own height, never LiveKit/
+media/seat/reconnect/reaction state. Found the actual root cause of the
+"still cluttered" complaint independent of the gesture: `MobileLandscapeRoom`
+animated the chat wrapper's height but never actually removed it from the
+DOM (96px "collapsed" still showed the composer and a message sliver),
+and `PortraitRoom` had a fixed, always-visible `h-40` panel with zero
+Watch/Comments-state concept at all. Confirmed one shared hook could
+drive both orientations' *logical* state without forcing identical
+layouts (each keeps its own height constant and control placement).
+
+**Stable checkpoint created first**: verified `main`/`origin/main`/latest
+successful Vercel deployment all matched at `2e5966a` (the failed
+room-level-gesture commit), then tagged `prototype-media-refresh-reconnect-stable`
+(annotated, pushed, GitHub prerelease) documenting what's preserved
+(refresh recovery, reconnect grace, responsive branching, seat/media
+flows) versus what's being retired (the gesture UX) — confirmed via
+`git ls-remote --tags` that the earlier `prototype-responsive-mobile-landscape-stable`
+(`ff540b0`) checkpoint was untouched.
+
+**Implemented**: `git rm src/hooks/use-comments-focus.ts
+use-comments-focus.test.ts`, replaced with `use-comments-mode.ts` — a
+plain `useState(false)` boolean with `openComments`/`closeComments`,
+nothing else (its own doc comment frames this as the deliberate,
+temporary foundation the eventual drag composes back onto later).
+`MobileLandscapeRoom`: dropped `surfaceProps`/`progress`/`dragging`
+entirely, chat wrapper switched from always-mounted-but-height-animated
+to `{commentsOpen && <RoomChatPanel .../>}`, scrim opacity now a
+two-value constant instead of a continuous interpolation.
+`PortraitRoom`: got the same Watch/Comments split built from scratch
+(comments-toggle button, conditional chat mount at a taller 320px vs.
+landscape's 208px, scrim wiring) — it had never had any #21 code before
+this. `chat-panel.tsx`: removed `data-gesture-ignore`/`touch-pan-y` and
+their doc comment — no gesture surface left to exempt the message list
+from. `DesktopRoom`: confirmed untouched, never used the gesture hook.
+`SpeakerStage`: no code changes — `scrimOpacity`/`scrimInstant` were
+already generic presentational props.
+
+**Documented the Future Figma seam** (DECISIONS.md, new top entry): the
+eventual Watch Mode → progressive drag → Comments Mode vision is
+unchanged, just deferred until both states have a real Figma-defined
+visual target — building gesture physics against a target that itself
+needed to change is the throughline behind both real-device failures.
+ARCHITECTURE.md, ROADMAP.md, and CHANGELOG.md updated to match (old
+gesture entries kept, not deleted, for history — new entries added
+describing the retirement and current state).
+
+**Tests rewritten**: `use-comments-mode.test.ts` (new, 4 tests: starts
+closed, open/close, and an explicit assertion that no
+`progress`/`dragging`/`surfaceProps` exist — a guard against gesture
+creep back into this hook). `mobile-landscape-room.test.tsx`: removed
+the room-level-drag describe block and its `fireEvent.pointerDown/Move/Up`
+tests plus the now-unneeded `setPointerCapture`/`releasePointerCapture`
+stubs; rewrote the toggle tests to assert the chat panel/composer is
+completely absent from the DOM in Watch Mode (not just short), present
+with message history and the reaction/emoji affordance in Comments Mode,
+and that `SpeakerStage`'s own DOM node/class list are unchanged by the
+toggle. `portrait-room.test.tsx`: new Watch/Comments Mode describe block
+mirroring the same coverage, since portrait never had any before;
+existing composer-dependent tests updated to open Comments Mode first.
+`speaker-stage.test.tsx`: two stale doc-string references to the retired
+hook corrected (no behavior change — the props were already generic).
+
+**Verification**: lint clean, `tsc --noEmit` clean, full test suite
+277/277 passing (33 files, no stale `event_speakers_active_seat_uniq`
+conflict this run), production build succeeded.
+
+**Next task**: stop for the user's own real-device confirmation of the
+new tap-based Watch Mode / Comments Mode states, on both iPhone portrait
+and iPhone landscape, plus a check that desktop's dedicated layout is
+unaffected. Do not begin #18, #24, #25, voting, or another downward-drag
+gesture attempt until confirmed — that gesture returns only once Figma
+has defined both endpoints' visual design.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

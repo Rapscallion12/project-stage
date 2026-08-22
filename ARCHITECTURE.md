@@ -1366,6 +1366,43 @@ via `event.preventDefault()` in `onPointerMove` rather than a blanket
 own scroll, since CSS `touch-action` is the *intersection* of an element
 and all its ancestors).
 
+**Issue #21 — gesture retired; Watch Mode / Comments Mode, tap-driven
+(2026-08-22)**: a second real-device pass on the room-level gesture above
+found it non-functional ("dragging downward produced no meaningful
+transition"), and — independently — that neither orientation actually
+hid the chat panel: `MobileLandscapeRoom` only ever shrank its height
+(96px↔160px, always mounted), and `PortraitRoom` had received none of
+this issue's work at all, still rendering a fixed `h-40` panel from
+issue #20. `use-comments-focus.ts` (the file described in the two
+paragraphs above) was deleted outright — `git rm`, no shim — and
+replaced with `src/hooks/use-comments-mode.ts`: a plain
+`useState(false)` boolean with `openComments`/`closeComments`
+callbacks, no drag tracking, no `progress`, no pointer handlers at all.
+Both `MobileLandscapeRoom` and `PortraitRoom` now share this one hook
+and the same two-state model: **Watch Mode** (`open === false`) renders
+no chat panel in the DOM at all — not shortened, absent — plus a compact
+`💬 Comments` toggle; **Comments Mode** (`open === true`) mounts the
+existing `RoomChatPanel` (unchanged layout — history, composer, mic-
+request switch, reactions) at a fixed height (208px landscape, 320px
+portrait — landscape has less vertical room to spare) and darkens
+`SpeakerStage`'s `room-scrim` to a constant opacity, no `progress`
+interpolation. `chat-panel.tsx`'s `data-gesture-ignore`/`touch-pan-y`
+markers are gone with the drag they existed to exempt the message list
+from. `SpeakerStage` itself needed no changes — `scrimOpacity`/
+`scrimInstant` were already generic presentational props, not gesture-
+specific ones; this pass just stopped feeding them a continuous `drag`
+value in favor of a two-value constant. `DesktopRoom` untouched — it
+never used the gesture hook. Video geometry is unchanged for the same
+structural reason as before: `SpeakerStage` remains a sibling of the
+overlay, not a child of it, so toggling Comments Mode never re-renders,
+resizes, or remounts it or its LiveKit tracks. **This is a deliberate,
+temporary foundation, not the end state** — see DECISIONS.md's "Future
+Figma seam" entry for the full reasoning: the progressive downward-drag
+reveal is deferred, not abandoned, until Watch Mode and Comments Mode
+both have a real, Figma-defined visual design to transition between.
+When it returns, it composes on top of `useCommentsMode`'s existing
+`open` boolean as a `progress` value driving the same two endpoints.
+
 ## Testing & Definition of Done
 
 A feature is not done — regardless of what the roadmap checkbox says —

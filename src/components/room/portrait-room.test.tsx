@@ -98,10 +98,10 @@ describe("PortraitRoom", () => {
       expect(inner.className).toMatch(/\bpointer-events-auto\b/);
     });
 
-    it("real interactive content (the composer) still lives inside the click-through-capable wrapper", () => {
+    it("the comments toggle lives inside the click-through-capable wrapper", () => {
       render(<PortraitRoom {...baseProps} />);
       const overlay = screen.getByTestId("stage-bottom-overlay");
-      expect(overlay).toContainElement(screen.getByRole("textbox"));
+      expect(overlay).toContainElement(screen.getByTestId("comments-toggle"));
     });
   });
 
@@ -112,8 +112,9 @@ describe("PortraitRoom", () => {
       expect(screen.queryByPlaceholderText(/why should you get the mic/i)).not.toBeInTheDocument();
     });
 
-    it("has exactly one text composer in the room", () => {
+    it("has exactly one text composer once Comments Mode is open", () => {
       render(<PortraitRoom {...baseProps} />);
+      fireEvent.click(screen.getByTestId("comments-toggle"));
       expect(screen.getAllByRole("textbox")).toHaveLength(1);
     });
 
@@ -124,15 +125,97 @@ describe("PortraitRoom", () => {
       expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
     });
 
-    it("surfaces a failed join attempt's message near the composer, not silently", () => {
+    it("surfaces a failed join attempt's message near the controls, not silently", () => {
       render(<PortraitRoom {...baseProps} joinSeatMessage="Create an account to join as a speaker." />);
       expect(screen.getByText("Create an account to join as a speaker.")).toBeInTheDocument();
     });
 
-    it("the composer's 🎤 toggle switches it into speaker-request mode", () => {
+    it("the composer's 🎤 toggle switches it into speaker-request mode, once Comments Mode is open", () => {
       render(<PortraitRoom {...baseProps} micRequestMode={true} />);
+      fireEvent.click(screen.getByTestId("comments-toggle"));
       expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Request" })).toBeInTheDocument();
+    });
+  });
+
+  describe("Watch Mode / Comments Mode (issue #21, gesture retired 2026-08-22: built from scratch for portrait — it never got either gesture pass)", () => {
+    it("defaults to Watch Mode: comments closed, no chat panel mounted at all", () => {
+      render(<PortraitRoom {...baseProps} />);
+      const toggle = screen.getByTestId("comments-toggle");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle).toHaveTextContent("Comments");
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+    });
+
+    it("tapping the toggle opens Comments Mode: full composer/history mount, scrim darkens", () => {
+      render(<PortraitRoom {...baseProps} />);
+      fireEvent.click(screen.getByTestId("comments-toggle"));
+
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByTestId("comments-toggle")).toHaveTextContent("Hide");
+      expect(screen.getByRole("textbox")).toBeInTheDocument();
+      expect(Number(screen.getByTestId("room-scrim").style.opacity)).toBeGreaterThan(0);
+    });
+
+    it("Comments Mode shows message history and the reaction/emoji affordance, not just a bare composer", () => {
+      const messages = [
+        {
+          id: "m1",
+          author_display_name: "Jamie",
+          author_profile_id: "p1",
+          author_guest_id: null,
+          body: "hello from the audience",
+          created_at: new Date().toISOString(),
+          is_speaker_request: false,
+        },
+      ];
+      render(<PortraitRoom {...baseProps} messages={messages} />);
+      fireEvent.click(screen.getByTestId("comments-toggle"));
+
+      expect(screen.getByText("hello from the audience")).toBeInTheDocument();
+      expect(screen.getAllByLabelText(/^Insert /).length).toBeGreaterThan(0);
+    });
+
+    it("opening Comments Mode never resizes, remounts, or reconnects SpeakerStage — same DOM node, same class list", () => {
+      render(<PortraitRoom {...baseProps} />);
+      const stage = screen.getByTestId("room-stage");
+      const stageClassBefore = stage.className;
+
+      fireEvent.click(screen.getByTestId("comments-toggle"));
+
+      expect(screen.getByTestId("room-stage")).toBe(stage);
+      expect(stage.className).toBe(stageClassBefore);
+    });
+
+    it("tapping close/back returns immediately to Watch Mode — chat panel unmounts entirely, not just shrinks", () => {
+      render(<PortraitRoom {...baseProps} />);
+      const toggle = screen.getByTestId("comments-toggle");
+      fireEvent.click(toggle);
+      fireEvent.click(toggle);
+
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+    });
+
+    it("the guest-name editor renders above the toggle, not inside Comments Mode", () => {
+      render(<PortraitRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
+      const toggle = screen.getByTestId("comments-toggle");
+      const changeNameButton = screen.getByRole("button", { name: /change name/i });
+      expect(changeNameButton.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("no pointer/drag gesture infrastructure remains active on the stage wrapper", () => {
+      render(<PortraitRoom {...baseProps} />);
+      const surface = screen.getByTestId("room-stage").parentElement as HTMLElement;
+
+      fireEvent.pointerDown(surface, { pointerId: 1, clientY: 100 });
+      fireEvent.pointerMove(surface, { pointerId: 1, clientY: 260 });
+      fireEvent.pointerUp(surface, { pointerId: 1, clientY: 260 });
+
+      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "false");
+      expect(document.querySelector("[data-gesture-ignore]")).not.toBeInTheDocument();
     });
   });
 });

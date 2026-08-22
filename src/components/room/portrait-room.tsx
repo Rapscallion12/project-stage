@@ -4,7 +4,12 @@ import { RoomChatPanel } from "@/components/room/room-chat-panel";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
+import { useCommentsMode } from "@/hooks/use-comments-mode";
 import type { RoomLayoutProps } from "@/components/room/types";
+
+/** Comments Mode's own height when open — portrait has more vertical room to spare than landscape, so this can afford to be taller. Tunable, not validated against a real device yet. */
+const COMMENTS_MODE_HEIGHT_PX = 320;
+const SCRIM_OPACITY_WHEN_OPEN = 0.55;
 
 /**
  * Video-first (issue #20, corrective pass): the stage takes 100% of the
@@ -49,10 +54,25 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * chat over the stage instead of beside it) once both needed the
  * identical outer-click-through/inner-interactive structure.
  *
- * Still zero gesture/drag/expand logic — the same `ChatPanel` instance
- * used here (via `RoomChatPanel`) is what issue #21 will later make
- * expandable via a drag handle, without ever swapping which component is
- * mounted. This pass only changes *where* it renders, not *what* it does.
+ * **Watch Mode / Comments Mode, tap-driven (issue #21, gesture retired,
+ * 2026-08-22)**: this component never got the first (handle-driven) or
+ * second (room-level drag) gesture pass at all — it shipped issue #20's
+ * always-visible, fixed-height chat strip and stayed there, which is
+ * exactly what real-device testing flagged: "comments/composer continue
+ * overlapping/competing with the lower speaker area." `useCommentsMode`
+ * (a plain boolean, no drag tracking — see its own doc comment) now
+ * drives the same two states `MobileLandscapeRoom` uses: **Watch Mode**
+ * (`open === false`) renders no chat panel at all, just the compact
+ * `comments-toggle`; **Comments Mode** (`open === true`) mounts the full
+ * `RoomChatPanel` at `COMMENTS_MODE_HEIGHT_PX` (taller than landscape's,
+ * since portrait has more vertical room to spare) and darkens
+ * `SpeakerStage`'s scrim. This is a deliberate, temporary foundation —
+ * see DECISIONS.md's "Future Figma seam" note — not a redesign: the
+ * eventual downward-drag reveal returns once Watch Mode and Comments
+ * Mode both have a real, Figma-defined visual target to transition
+ * between, not before. Video geometry never changes: `SpeakerStage` is a
+ * sibling of the overlay, not a child of it, so toggling Comments Mode
+ * never re-renders, resizes, or remounts it.
  */
 export function PortraitRoom({
   event,
@@ -85,6 +105,8 @@ export function PortraitRoom({
   messages,
   reactions,
 }: RoomLayoutProps) {
+  const { open: commentsOpen, openComments, closeComments } = useCommentsMode();
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <RoomHeader
@@ -106,6 +128,7 @@ export function PortraitRoom({
           onTapEmptySeat={onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           localVideoTrack={localVideoTrack}
+          scrimOpacity={commentsOpen ? SCRIM_OPACITY_WHEN_OPEN : 0}
           reconnectingIdentities={reconnectingIdentities}
         />
         <StageOverlayShell>
@@ -131,18 +154,40 @@ export function PortraitRoom({
             phase={phase}
             countdownText={countdownText}
           />
-          <div className="h-40 min-h-0">
-            <RoomChatPanel
-              eventId={event.id}
-              messages={messages}
-              reactions={reactions}
-              micRequestMode={micRequestMode}
-              onMicRequestModeChange={onMicRequestModeChange}
-              onHasPendingRequestChange={onHasPendingRequestChange}
-              onPrepareMedia={onPrepareMedia}
-              className="h-full"
-            />
-          </div>
+          {/* Watch Mode's one persistent affordance — Comments Mode's own explicit "back to video" control, same button either way. */}
+          <button
+            type="button"
+            data-testid="comments-toggle"
+            onClick={commentsOpen ? closeComments : openComments}
+            aria-expanded={commentsOpen}
+            aria-label={commentsOpen ? "Hide comments" : "Show comments"}
+            className="flex h-8 w-full shrink-0 items-center justify-center gap-1 text-sm text-white/70"
+          >
+            {commentsOpen ? (
+              <>
+                <span aria-hidden="true">⌄</span> Hide
+              </>
+            ) : (
+              <>
+                <span aria-hidden="true">💬</span> Comments
+              </>
+            )}
+          </button>
+          {/* Comments Mode only — not rendered at all in Watch Mode, not just shorter. */}
+          {commentsOpen && (
+            <div style={{ height: COMMENTS_MODE_HEIGHT_PX }} className="min-h-0 shrink-0">
+              <RoomChatPanel
+                eventId={event.id}
+                messages={messages}
+                reactions={reactions}
+                micRequestMode={micRequestMode}
+                onMicRequestModeChange={onMicRequestModeChange}
+                onHasPendingRequestChange={onHasPendingRequestChange}
+                onPrepareMedia={onPrepareMedia}
+                className="h-full"
+              />
+            </div>
+          )}
         </StageOverlayShell>
       </div>
     </div>

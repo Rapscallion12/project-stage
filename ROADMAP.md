@@ -377,37 +377,39 @@ different dependencies. Current order:
       built here, composing rather than being replaced. **Not checked
       off** — pending the user's own real-device confirmation. See
       SESSION_LOG.md and DECISIONS.md.
-- [ ] Chat/voting focus interactions (issue #21) — **rebuilt as a
-      room-level gesture (2026-08-22), mobile landscape only**: real-
-      device testing found the original handle-driven design was the
-      wrong abstraction, not just imperfectly wired — the product intent
-      was always a broad, natural downward drag (closer to pulling down
-      a notification shade), never a tiny grab target. `useCommentsFocus`
-      was rewritten (not patched): its pointer handlers now attach to one
-      broad DOM ancestor (the stage wrapper) instead of a dedicated
-      handle, with `event.target`-based exclusion (buttons/links/inputs/
-      `data-gesture-ignore` on the message list) deciding whether a touch
-      starts the room gesture or is left alone for its own control. A
-      single always-present `comments-toggle` button reaches the exact
-      same state as the gesture — required as a first-class affordance,
-      not a fallback. Governing rule unchanged: video geometry stays
-      stable, darkens `SpeakerStage`'s own `room-scrim` (built inert in
-      #20) without ever resizing the stage or touching LiveKit/track
-      attachment. `ChatPanel` was already a single continuously-mounted
-      component, so draft text/scroll position/mic-request-mode already
-      survive focus changes for free. Scoped to `MobileLandscapeRoom`
-      only this pass — `PortraitRoom` untouched (explicit no-regression
-      requirement), the hook remains reusable there later. **Remaining**:
-      wiring the same interaction into `PortraitRoom`; the divider's
-      *voting*-focus direction (still #25's job, still fully inert); the
+- [ ] Chat/voting focus interactions (issue #21) — **gesture retired;
+      rebuilt as Watch Mode / Comments Mode, a plain tap toggle
+      (2026-08-22), both mobile orientations**: real-device testing of
+      the room-level drag gesture (previous approach, kept below for
+      history) came back negative a second time — "dragging downward
+      produced no meaningful transition" — and, independently, found
+      that neither orientation actually hid the chat panel at rest:
+      landscape only shortened it (always mounted, 96px↔160px), and
+      portrait had received none of this issue's work at all, still
+      showing a fixed `h-40` panel from issue #20. Per explicit
+      instruction, this was treated as a failed UX experiment rather than
+      something to keep tuning — `useCommentsFocus` deleted outright,
+      replaced with `useCommentsMode`: a plain boolean (`open`/
+      `openComments`/`closeComments`), no drag tracking, no `progress`,
+      no pointer handlers. Both `MobileLandscapeRoom` and `PortraitRoom`
+      (built from scratch for portrait) now share this hook and the same
+      two-state model: **Watch Mode** renders no chat panel in the DOM at
+      all (not shortened — absent) plus a compact `💬 Comments` toggle;
+      **Comments Mode** mounts the existing, unchanged chat/composer UI
+      (history, reactions, mic-request composer) and darkens
+      `SpeakerStage`'s `room-scrim` to a constant opacity. Video geometry
+      still completely unaffected — `SpeakerStage` stays a sibling of the
+      overlay, never resized/remounted by the toggle. `chat-panel.tsx`'s
+      `data-gesture-ignore`/`touch-pan-y` markers removed along with the
+      drag they existed to exempt the message list from. **Remaining**:
+      the *voting*-focus direction (still #25's job, still fully inert);
+      the progressive downward-drag reveal, deliberately deferred until
+      Watch Mode and Comments Mode both have a Figma-defined visual
+      design — see DECISIONS.md's "Future Figma seam" entry; the eventual
       second-level "full comments view" with genuinely compressed video
-      (deliberately deferred, a seam is left, not implemented — see
-      DECISIONS.md). **Not checked off** — pending the user's own
-      real-device confirmation, specifically including whether the
-      `preventDefault()`-based scroll suppression (a deliberate
-      simplification instead of a blanket `touch-action: none`, which
-      would have broken the message list's own scroll) holds up. See
-      ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
+      (still not implemented, seam only). **Not checked off** — pending
+      the user's own real-device confirmation of the new tap-based
+      states. See ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

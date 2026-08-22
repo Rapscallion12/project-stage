@@ -3,6 +3,100 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Gesture retired; Watch Mode / Comments Mode rebuilt as a plain tap toggle (the "Future Figma seam")
+
+**Problem**: the room-level drag gesture (previous entry below) failed
+real-device testing a second time — "dragging downward produced no
+meaningful transition." Independently of whether the gesture itself
+worked, the same test found the thing it revealed was still wrong:
+comments/composer permanently occupied a substantial share of the stage
+in both orientations, in landscape *and* in portrait (which had never
+received any #21 work at all — it still had #20's fixed `h-40` chat
+strip). The user's explicit read: two rounds of gesture-tuning against a
+target that itself hadn't been visually designed is the wrong order of
+operations. Reliable states first; a smooth transition between them
+later, once Figma defines what those states actually look like.
+
+**Investigation** (six questions, answered before any code changed):
+
+1. Everything in `useCommentsFocus`/its `surfaceProps` existed solely to
+   support dragging: `DEAD_ZONE_PX`/`DRAG_DISTANCE_PX`/`COMMIT_THRESHOLD`,
+   `computeDragProgress`, `INTERACTIVE_SELECTOR`, and the
+   `onPointerDown`/`Move`/`Up`/`Cancel` handlers meant to be spread onto a
+   broad stage ancestor. None of it represented open/closed state itself.
+2. The only genuinely reusable part was the *concept* of an
+   `open`/`openComments`/`closeComments` boolean — everything else was
+   gesture plumbing on top of that concept, not part of it.
+3. Removing the drag handlers was confirmed safe: they only ever touched
+   presentational props (`SpeakerStage`'s `scrimOpacity`/`scrimInstant`)
+   and the chat wrapper's own height — a sibling concern to LiveKit/
+   media/seat state, never a dependency of it. No LiveKit, self-preview,
+   tap-to-join, request-to-speak, promotion, reconnect-grace, or
+   reactions code path touched the gesture hook at all.
+4. `MobileLandscapeRoom` mounted `RoomChatPanel` unconditionally inside
+   `StageOverlayShell`, animating only its height (96px collapsed →
+   160px expanded) — never actually removing it from the DOM, which is
+   why "collapsed" still read as clutter on a real phone. `PortraitRoom`
+   mounted it unconditionally at a fixed `h-40`, no collapse concept at
+   all. `DesktopRoom` was untouched by any of this — its own dedicated
+   sidebar `RoomChatPanel` never used the gesture hook.
+5. Yes — hiding/showing the chat panel is a conditional-render decision
+   in a sibling of `SpeakerStage`, not a prop or ancestor of it. Nothing
+   about mounting or unmounting `RoomChatPanel` touches `SpeakerStage`'s
+   own subtree, so its LiveKit tracks are never disturbed.
+6. Yes — one hook (`useCommentsMode`) drives both `MobileLandscapeRoom`
+   and `PortraitRoom` via the same `open`/`openComments`/`closeComments`
+   shape, but each composition still owns its own JSX, its own Comments
+   Mode height constant (208px landscape / 320px portrait — landscape
+   has less vertical room to spare), and its own control placement. The
+   hook enforces *one logical state*, not *one visual layout*.
+
+**Decision**: delete `use-comments-focus.ts` and its test outright (not
+deprecate, not keep behind a flag) — `git rm`, no re-export shim. Replace
+with `use-comments-mode.ts`: a `useState(false)` boolean plus two
+callbacks, nothing else. `MobileLandscapeRoom` drops `surfaceProps`
+entirely and switches its chat wrapper from height-animated-but-always-
+mounted to a plain `{commentsOpen && <RoomChatPanel .../>}`. `PortraitRoom`
+gets the same treatment built from scratch (it never had any #21 code to
+remove). Both keep a `💬 Comments` / `⌄ Hide` tap toggle — the *tap* was
+never the failed part; only the drag was. `chat-panel.tsx`'s
+`data-gesture-ignore`/`touch-pan-y` markers (added to exempt the message
+list from the room-level drag) are removed along with the drag itself —
+there's no gesture surface left to opt out of. `DesktopRoom` untouched.
+
+**Reason**: matches the user's explicit instruction to treat the gesture
+as "a failed UX experiment, not something to keep tuning with
+thresholds," and to build "the smallest safe version" of two discrete
+states rather than a third gesture attempt.
+
+**The Future Figma seam** (documented, not built, this pass): the
+eventual product vision is unchanged —
+
+```
+WATCH MODE
+  ↓ user drags/scrolls downward
+  progressive comments reveal
+  ↓
+COMMENTS MODE
+```
+
+— but that progressive gesture will not be attempted again until Watch
+Mode and Comments Mode both have a real, Figma-defined visual design to
+transition *between*. Building gesture physics against a visual target
+that itself still needed to change is the throughline behind both of
+this feature's real-device failures. When the gesture returns, it sits
+on top of `useCommentsMode`'s existing `open` boolean as a continuous
+`progress` value driving the same two endpoints — nothing in this pass's
+simplification makes that harder to add back, and nothing beyond state
+separation (no speaker-feed compression, no solid Comments Mode
+background, no audience/speaker divergence) was invented here.
+
+**Tradeoffs**: Comments Mode still uses the existing chat/composer
+layout verbatim — no visual redesign, so it doesn't yet look like a
+purpose-built "discussion" surface. That's deliberate scope control for
+this pass, not an oversight — the redesign is Figma's job, not this
+issue's.
+
 ## 2026-08-22 — Comments reveal rebuilt as a room-level gesture; the handle-driven design replaced, not patched
 
 **Problem**: real-device testing clarified that the previous pass's

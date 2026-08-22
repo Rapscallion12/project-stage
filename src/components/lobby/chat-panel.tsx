@@ -109,17 +109,7 @@ export function ChatPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/*
-       * Issue #21 (real-device correction, 2026-08-22): `data-gesture-ignore`
-       * excludes this specific element from ever starting a room-level
-       * comments-reveal drag (see useCommentsFocus's own doc comment) — a
-       * touch that starts here scrolls the message list, never the room
-       * overlay. `touch-pan-y` reasserts normal vertical scroll for this
-       * subtree explicitly, since CSS `touch-action` is the intersection
-       * of an element and its ancestors and this component doesn't know
-       * whether some future ancestor might set `touch-action: none`.
-       */}
-      <div ref={listRef} data-gesture-ignore="true" className="flex-1 touch-pan-y overflow-y-auto px-4 py-2">
+      <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-2">
         {messages.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted">
             No messages yet — say hello.
