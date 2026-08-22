@@ -398,6 +398,20 @@ exact checklist. Do not begin #21, #24, #25, or any other feature
 (including #22's remaining readiness/self-preview scope, which the user
 explicitly deferred until after this) until confirmed.
 
+**Automatic-promotion flow confirmed acceptable in real production use,
+same session** — third checkpoint tagged, `prototype-auto-promotion-stable`
+on `e934619` (same process as the prior two: two independent commit/
+deployment checks, a fresh structural pass against the deployed site,
+pushed, verified present remotely, GitHub Release created marked
+prerelease). `prototype-live-av-stable` confirmed untouched, still at
+`397d3ff` — this is an additional recovery point, not a relocation. Full
+reasoning in DECISIONS.md.
+
+**Next task**: begin investigating issue #22's remaining scope (candidate
+media readiness, persistent local self-preview, promotion without
+reacquiring media) — inspection first, per explicit instruction, report
+back before writing code.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

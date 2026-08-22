@@ -3,6 +3,37 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Third checkpoint tagged (`prototype-auto-promotion-stable`)
+
+**Problem**: the friction-reduction work since `prototype-live-av-stable`
+(video-first shell, the always-on test room, direct join, composer
+mic-request, automatic promotion) reached a state the user confirmed as
+"acceptable enough to continue" in real production use. The next planned
+work (#22's remaining scope — local media pre-acquisition, self-preview,
+promotion without reacquiring) touches the same sensitive LiveKit/media-
+acquisition path this whole sequence has been careful around, so the
+user asked for a fresh recovery point before starting it.
+
+**Decision**: same process as the prior two checkpoints — annotated tag
+`prototype-auto-promotion-stable` on `main`'s current tip
+(`e934619d72b63cd1f35bb0adcdfeddf0cb67fd60`), confirmed via two
+independent checks (the commit matches both `origin/main` and the most
+recent Vercel deployment's SHA, that deployment's own status is
+`success`), plus a fresh structural pass against the deployed production
+site (Join Live Audience journey, direct-join tile, mic-mode composer,
+no manual claim button, stage/overlay layering) immediately before
+tagging. Pushed, verified present on the remote via `git ls-remote`, and
+a GitHub Release created from it, marked prerelease — same reasoning as
+before: a prototype checkpoint, not a production version.
+
+**`prototype-live-av-stable` is untouched** — confirmed still pointing
+at `397d3ff` immediately before pushing the new tag. This is an
+additional, newer checkpoint, not a relocation of the existing one.
+
+**Tradeoffs**: none — pure bookkeeping, no implementation changed.
+
+---
+
 ## 2026-08-22 — Automatic promotion narrowed below #23's own original scope, deliberately
 
 **Problem**: real-device testing of the mic-request flow found the

@@ -9,6 +9,17 @@ separate release cadence to track here.
 
 ### Checkpoints
 
+- **`prototype-auto-promotion-stable`** (2026-08-22, commit `e934619`) —
+  known-good recovery point covering everything built since
+  `prototype-live-av-stable`: the video-first room shell and its
+  divider-layering fix, the permanent always-on test room, direct
+  empty-seat join, composer-integrated mic-request mode, and automatic
+  server-authorized promotion (no more manual "Claim your seat"). Does
+  **not** move or replace `prototype-live-av-stable` — a newer, additional
+  tag, not a relocation. Tagged prerelease, at the user's explicit
+  request, after production use confirmed this interaction flow works
+  well enough to build the next piece (issue #22's remaining scope) on
+  top of. See DECISIONS.md and SESSION_LOG.md.
 - **`prototype-live-av-stable`** (2026-08-18, commit `397d3ff`) — the
   one item `prototype-mobile-single-device-stable` explicitly left
   unverified: the user personally confirmed real two-device LiveKit
