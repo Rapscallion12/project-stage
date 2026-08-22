@@ -186,12 +186,19 @@ export async function claimSpeakerSeat(
  * replacement (issue #13, widened to guests by issue #16) —
  * 'moderator_removed', 'event_ended', or 'disconnected'. Same
  * trusted-server-only tier as `claimSpeakerSeat` and for the same
- * reason: no anon/authenticated grant, service client only. Today's real
- * callers are the LiveKit webhook route handler (after it independently
- * verifies LiveKit's webhook signature) and, once #16 ships, the same
- * handler for guest disconnects too. Returns `null`, not an error, if
- * the identity had no active seat — a safe no-op (e.g. the webhook
- * firing for someone who was only ever audience).
+ * reason: no anon/authenticated grant, service client only. Real
+ * callers: the LiveKit webhook route handler (after it independently
+ * verifies LiveKit's webhook signature) for an immediate eviction, and
+ * `checkAndEvictDisconnectedSpeaker` (room/actions.ts, real-device
+ * reconnect-grace-period finding) for the graced path — the latter is
+ * reachable from an ordinary client call, but only ever actually reaches
+ * this function after its own independent re-verification via LiveKit's
+ * `RoomServiceClient` confirms the identity is genuinely absent right
+ * now; the caller's own claim is never trusted directly. Returns `null`,
+ * not an error, if the identity had no active seat — a safe no-op (e.g.
+ * the webhook firing for someone who was only ever audience, or a
+ * redundant grace-period check after the seat was already vacated some
+ * other way).
  */
 export async function endSpeakerSeat(
   eventId: string,

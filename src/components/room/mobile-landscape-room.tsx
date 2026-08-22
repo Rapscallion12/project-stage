@@ -10,7 +10,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 /** h-24's own equivalent — identical to today's height at rest (progress 0), zero regression for the collapsed default. */
 const COLLAPSED_CHAT_HEIGHT_PX = 96;
 /** Tunable, not validated against a real short landscape viewport yet — see this pass's own verification report. */
-const EXPANDED_CHAT_HEIGHT_PX = 176;
+const EXPANDED_CHAT_HEIGHT_PX = 160;
 const MAX_SCRIM_OPACITY = 0.55;
 
 /**
@@ -46,6 +46,18 @@ const MAX_SCRIM_OPACITY = 0.55;
  * footprint for the stage — `pr-16`/`pr-20` on its wrapper reserves room
  * for the top-right self-preview so the two don't visually collide.
  *
+ * **Focus target corrected (real-device finding, 2026-08-22)**: the
+ * first pass put the handle directly above `GuestNameEditor`, with
+ * `RoomControls` between it and the chat — the *literal* thing the drag
+ * revealed was the guest-name editor, not comments, exactly the
+ * complaint. `GuestNameEditor`/`joinSeatMessage` and `RoomControls` now
+ * sit *above* the handle, outside the expand/collapse relationship
+ * entirely — fixed size, always visible, never growing — so the handle
+ * sits directly against the one thing it actually controls: the chat
+ * wrapper immediately below it. Still the same `StageOverlayShell`,
+ * still the same underlying `useCommentsFocus` state; only the ordering
+ * of what's inside it changed.
+ *
  * The site-wide header's own compaction (globals.css, `body.room-active`
  * + a `(orientation: landscape) and (max-height: …)` media query) is
  * handled entirely outside this component — see `EventRoom`'s doc
@@ -78,6 +90,7 @@ export function MobileLandscapeRoom({
   mediaError,
   localVideoTrack,
   onPrepareMedia,
+  reconnectingIdentities,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -101,6 +114,7 @@ export function MobileLandscapeRoom({
           localVideoTrack={localVideoTrack}
           scrimOpacity={progress * MAX_SCRIM_OPACITY}
           scrimInstant={dragging}
+          reconnectingIdentities={reconnectingIdentities}
         />
         {/* Room header as a translucent top overlay — reclaims its document-flow footprint for the stage, same reasoning as the bottom overlay below. Right padding leaves room for the top-right self-preview so the two don't collide. */}
         <div
@@ -119,16 +133,7 @@ export function MobileLandscapeRoom({
           </div>
         </div>
         <StageOverlayShell topClassName="pt-8">
-          <button
-            type="button"
-            data-testid="comments-focus-handle"
-            {...handleProps}
-            aria-expanded={commentsFocused}
-            aria-label={commentsFocused ? "Collapse comments" : "Expand comments"}
-            className="flex h-6 w-full shrink-0 touch-none items-center justify-center"
-          >
-            <span aria-hidden="true" className="h-1 w-10 rounded-full bg-white/40" />
-          </button>
+          {/* Fixed-size, always visible, never part of the expand/collapse — low-priority metadata stays out of the handle's own reveal target below. */}
           {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
           {joinSeatMessage && (
             <p className="text-xs text-red-500" role="alert">
@@ -150,6 +155,17 @@ export function MobileLandscapeRoom({
             phase={phase}
             countdownText={countdownText}
           />
+          {/* The handle sits directly against the one thing it reveals — nothing else between it and the chat wrapper below. */}
+          <button
+            type="button"
+            data-testid="comments-focus-handle"
+            {...handleProps}
+            aria-expanded={commentsFocused}
+            aria-label={commentsFocused ? "Collapse comments" : "Expand comments"}
+            className="flex h-6 w-full shrink-0 touch-none items-center justify-center"
+          >
+            <span aria-hidden="true" className="h-1 w-10 rounded-full bg-white/40" />
+          </button>
           <div style={{ height: chatHeightPx }} className="min-h-0 shrink-0">
             <RoomChatPanel
               eventId={event.id}

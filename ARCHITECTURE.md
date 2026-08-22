@@ -872,6 +872,32 @@ introduce distributed infrastructure" [Vendor portability](#vendor-portability)
 warns against, for a prototype where this failure mode is rare and
 self-healing.
 
+**Application-level reconnect grace period, layered on top of LiveKit's
+own (2026-08-22)**: the paragraph above already covers LiveKit's own
+platform-default reconnect tolerance — brief enough that a fast page
+refresh usually never even reaches `participant_left` at all. Once that
+webhook *does* fire, though, `endSpeakerSeat` still runs immediately —
+no application-level grace period, so a genuinely slower reconnect (a
+real network blip, not just a refresh) still lost the seat outright. A
+real-device test surfaced this: refreshing while seated worked (LiveKit's
+own tolerance covered it), but the fix that restored the client-side
+self-preview state afterward exposed that nothing was actually watching
+for the *slower* case. `useSpeakerReconnectGrace` (client-side, every
+connected viewer) and `checkAndEvictDisconnectedSpeaker` (server-side,
+room/actions.ts) add exactly that layer: a client-observed gap between
+DB occupancy and LiveKit's live participant list starts a 25s (tunable)
+timer; only once it elapses does a server action re-verify absence via
+`RoomServiceClient.getParticipant` — the same trusted credential every
+token/permission call already uses — before calling the same
+`endSpeakerSeat` the webhook itself calls. The caller triggering the
+check is never trusted on its own; only the server's own independent
+LiveKit query decides. See DECISIONS.md for the full investigation,
+including why this reuses `useAutomaticPromotion`'s own grace-period
+shape rather than introducing a second timer system, and why the watch
+runs for every viewer rather than just the other active speaker (a solo
+speaker's seat must still eventually release with no co-speaker around
+to notice).
+
 ## Live room UI
 
 Issue #3, restructured by issue #17 into the single event experience:

@@ -7,6 +7,46 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Refresh recovery restores a seated speaker's own self-preview** — a
+  seated speaker who hard-refreshed and tapped "Enable camera & mic"
+  published correctly (every other participant saw/heard them) but their
+  own self-preview stayed empty, recoverable only by leaving and
+  rejoining. Root cause: the fallback activation path
+  (`setCameraEnabled`/`setMicrophoneEnabled`) acquires and publishes in
+  one LiveKit call but never sets `localVideoTrack`. `activateMedia()`
+  now delegates to the existing `prepareLocalMedia()` — the same
+  acquisition path #22 already built — unifying every activation entry
+  point onto one mechanism that gets self-preview right. Side effect,
+  also fixed: a failed activation attempt used to permanently hide the
+  retry button; it now correctly stays available since `mediaActivated`
+  only flips true on genuine success. See DECISIONS.md.
+- **Comments-focus handle now reveals comments, not the guest-name
+  editor** — the drag/tap handle sat above `GuestNameEditor`, with
+  `RoomControls` between it and the chat, so the literal thing it
+  revealed was low-priority metadata. `GuestNameEditor`/`joinSeatMessage`/
+  `RoomControls` now sit above the handle, fixed-size and outside the
+  expand/collapse relationship; the handle sits directly against the
+  chat wrapper it actually controls. See DECISIONS.md.
+
+### Added
+
+- **Speaker reconnect grace period** — the LiveKit webhook used to evict
+  a seat the instant it saw `participant_left`, no grace period, so any
+  brief disconnect (not just a refresh) risked losing a seat outright.
+  New `useSpeakerReconnectGrace` hook watches every other occupied seat
+  for a gap between DB occupancy and LiveKit's live participant list;
+  after 25s (tunable) of that gap persisting, calls a new,
+  server-re-validated `checkAndEvictDisconnectedSpeaker` action — which
+  independently confirms absence via LiveKit's own `RoomServiceClient`
+  before calling the same `endSpeakerSeat` the webhook uses, so no
+  caller can force an eviction of a still-connected speaker. Reuses
+  `useAutomaticPromotion`'s own grace-period pattern rather than a
+  second timer system. `SpeakerTile` shows "Speaker reconnecting…"
+  instead of the generic "Camera off" for a seat currently watched this
+  way. See DECISIONS.md.
+
 ### Checkpoints
 
 - **`prototype-responsive-mobile-landscape-stable`** (2026-08-22, commit

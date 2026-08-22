@@ -57,6 +57,7 @@ export function SpeakerTile({
   mediaError = null,
   onTapEmptySeat,
   isJoiningSeat = false,
+  isReconnecting = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -69,6 +70,8 @@ export function SpeakerTile({
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
   isJoiningSeat?: boolean;
+  /** Real-device reconnect-grace-period finding: true when `useSpeakerReconnectGrace` has been watching this seat's occupant be absent from LiveKit for a while, still within the grace period — always false for the local viewer's own seat (see that hook's own doc comment for why). Shown as "Speaker reconnecting…" instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
+  isReconnecting?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -174,6 +177,16 @@ export function SpeakerTile({
             {initials(speaker.display_name)}
           </div>
           <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
+        </div>
+      ) : isReconnecting ? (
+        <div
+          data-testid="speaker-reconnecting"
+          className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
+        >
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
+            {initials(speaker.display_name)}
+          </div>
+          <p className="text-xs">Speaker reconnecting…</p>
         </div>
       ) : (
         <div

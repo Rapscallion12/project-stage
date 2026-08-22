@@ -389,14 +389,38 @@ different dependencies. Current order:
       passes), so draft text/scroll position/mic-request-mode already
       survive focus changes for free. Scoped to `MobileLandscapeRoom`
       only this pass — `PortraitRoom` untouched (explicit no-regression
-      requirement), the hook is reusable there later. **Remaining**:
-      wiring the same interaction into `PortraitRoom`; the divider's
-      *voting*-focus direction (still #25's job, still fully inert); the
-      second-level "full comments view" with genuinely compressed video
-      (deliberately deferred, a seam is left, not implemented — see
-      DECISIONS.md). **Not checked off** — pending the user's own
-      real-device confirmation. See ARCHITECTURE.md, DECISIONS.md, and
-      SESSION_LOG.md.
+      requirement), the hook is reusable there later. **Real-device
+      follow-up (same day)**: the handle originally revealed
+      `GuestNameEditor` (sat directly above it, with `RoomControls`
+      between it and the chat), not comments — reordered so low-priority
+      metadata sits above the handle, fixed size, outside the
+      expand/collapse relationship, and the handle sits directly against
+      the chat wrapper it actually controls. The compact-💬-emblem
+      fallback (if the gesture still proves unreliable) is deliberately
+      not built yet — that's the user's own real-device call to make
+      after this correction. **Remaining**: wiring the same interaction
+      into `PortraitRoom`; the divider's *voting*-focus direction (still
+      #25's job, still fully inert); the second-level "full comments
+      view" with genuinely compressed video (deliberately deferred, a
+      seam is left, not implemented — see DECISIONS.md). **Not checked
+      off** — pending the user's own real-device confirmation. See
+      ARCHITECTURE.md, DECISIONS.md, and SESSION_LOG.md.
+- [ ] Refresh/reconnect media recovery + speaker reconnect grace period
+      (2026-08-22, real-device follow-up) — a seated speaker who
+      hard-refreshed and re-activated media published correctly but never
+      saw their own self-preview return; `activateMedia()` now delegates
+      to the existing `prepareLocalMedia()` (issue #22) instead of a
+      second, incomplete acquisition path, fixing that and, as a side
+      effect, a failed-attempt-permanently-hides-the-retry-button bug too.
+      Separately, the LiveKit webhook's immediate (no-grace-period)
+      eviction on `participant_left` was exposed as a real gap — new
+      `useSpeakerReconnectGrace`/`checkAndEvictDisconnectedSpeaker` add a
+      25s (tunable), server-re-validated grace period, reusing
+      `useAutomaticPromotion`'s own grace-period shape rather than a
+      second timer system; `SpeakerTile` shows "Speaker reconnecting…"
+      during it. No new SQL. **Not checked off** — pending the user's own
+      real-device confirmation (refresh, and a real temporary
+      disconnect). See ARCHITECTURE.md and DECISIONS.md.
 - [x] Desktop anti-squashing fix (2026-08-22, real-device follow-up) —
       right at the 1024px desktop threshold, a fixed 320px sidebar left
       the two video tiles pathologically narrow; one isolated responsive

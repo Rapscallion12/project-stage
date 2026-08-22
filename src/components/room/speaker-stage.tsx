@@ -97,6 +97,7 @@ export function SpeakerStage({
   localVideoTrack,
   scrimOpacity = 0,
   scrimInstant = false,
+  reconnectingIdentities,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -114,6 +115,8 @@ export function SpeakerStage({
   scrimOpacity?: number;
   /** Issue #21: true only for live drag frames — omits the CSS transition so the scrim tracks the finger with zero lag; release/tap-toggle frames leave this false so the settle animates. */
   scrimInstant?: boolean;
+  /** Real-device reconnect-grace-period finding: LiveKit identities `useSpeakerReconnectGrace` is currently watching as disconnected-but-within-grace — passed through to whichever tile matches, see SpeakerTile's own isReconnecting doc comment. */
+  reconnectingIdentities: ReadonlySet<string>;
 }) {
   const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
   const viewerIsSpeaking = speakers.some((s) => {
@@ -157,6 +160,7 @@ export function SpeakerStage({
           mediaError={mediaError}
           onTapEmptySeat={viewerIsSpeaking ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
+          isReconnecting={identity !== null && reconnectingIdentities.has(identity)}
         />
       </div>
     );

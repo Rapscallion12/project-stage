@@ -3,6 +3,165 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-22 — Refresh-recovery self-preview, a server-validated reconnect grace period, and the comments-focus target correction
+
+**Problem**: three real-device findings from the previous pass, addressed
+in priority order. (1) A seated speaker who hard-refreshes keeps their
+seat, but tapping "Enable camera & mic" afterward published correctly
+(the audience saw/heard them) while their *own* self-preview stayed
+empty — recoverable only by leaving and rejoining. (2) That refresh
+scenario exposed a real gap: the LiveKit webhook evicts a seat the
+instant it sees `participant_left`, no grace period at all, so any
+brief disconnect (a network blip, not just a refresh) risks losing a
+seat outright. (3) The #21 comments-focus overlay shipped last pass
+technically worked, but the drag/tap handle sat directly above
+`GuestNameEditor`, with `RoomControls` between it and the chat — the
+*literal* thing it revealed was the guest-name editor, not comments.
+
+**Part 1 investigation** (per instruction, before guessing): traced the
+full refresh lifecycle. Identity restoration, seat restoration, and the
+LiveKit token/grant are all *already correct* — `page.tsx` (a server
+component) calls `getLiveKitToken` fresh on every request, which derives
+`canPublish` from `event_speakers` occupancy at request time
+(`getActiveSeatForIdentity`), so a still-seated speaker's fresh token
+already carries `canPublish: true`. What's lost is entirely client-side
+and entirely expected to be lost — a hard refresh tears down the whole
+JS realm, so `mediaActivated`, `localVideoTrack`, and any prepared
+tracks all restart at their initial, empty values; there is no
+"incorrectly destroying state" cleanup effect to find, because nothing
+here survives a full page reload by design. The actual bug: tapping
+"Enable camera & mic" called `activateMedia()`, which called
+`applyPublishState(true)` directly — and when nothing was already
+prepared (the refresh case, and originally #27's direct-join case
+too), that function's fallback branch calls LiveKit's own
+`setCameraEnabled`/`setMicrophoneEnabled` convenience methods, which
+acquire *and* publish in one step but never touch `localVideoTrack`
+state at all. Publishing worked (every other participant correctly
+saw/heard the recovered speaker); this tab's own self-preview simply
+never had anything told to it. A second, related bug found in the same
+trace: because the old `activateMedia()` set `mediaActivated = true`
+*unconditionally and immediately*, a *failed* attempt (permission
+denied) also permanently hid `needsMediaActivation`'s retry
+affordance — the "Enable camera & mic" button vanished forever after
+one failure, with no way back short of leaving the seat.
+
+**Part 1 decision**: `activateMedia()` now just calls `prepareLocalMedia()`
+— the exact same acquisition path #22 already built (`createLocalTracks`,
+sets `localVideoTrack`, then publishes via its own tail check once
+`canPublish` is true) — rather than duplicating a second, incomplete
+acquisition flow. This unifies every activation path (composer request,
+direct join, and this recovery tap) onto the one mechanism that already
+gets `localVideoTrack` right, and fixes the retry-affordance bug as a
+direct consequence: `mediaActivated` now only flips true on an actually
+*successful* acquisition, so a failed attempt correctly leaves
+`needsMediaActivation` true and the retry button in place. No new
+abstraction — an existing one, reused where it should have been from
+the start.
+
+**Part 2 investigation**: read `api/livekit/webhook/route.ts` — confirmed
+it calls `endSpeakerSeat(eventId, identity, "disconnected")` immediately
+on `participant_left`, no grace period, today. (LiveKit's own connection
+layer already tolerates a *very* brief reconnect — e.g. a fast page
+refresh — before it even reports the participant as gone, which is why
+the bug in Part 1 was reachable at all: the seat really was still theirs
+by the time the new page loaded. That built-in tolerance is opaque and
+uncontrolled from this app's side, though, with no UI communicating it —
+exactly the gap this part closes explicitly.) Confirmed via the LiveKit
+server SDK (`RoomServiceClient`, already used by `syncPublishPermission`
+for live permission pushes) that `getParticipant(room, identity)` can
+independently, authoritatively answer "is this identity actually
+connected right now" — the same trusted server credential every
+token/permission call already uses, never anything a client sends.
+
+**Part 2 decision**: a new server action, `checkAndEvictDisconnectedSpeaker`
+(room/actions.ts), re-validates via that LiveKit query before calling
+the *same* `endSpeakerSeat` the webhook uses — so a caller invoking it
+early, repeatedly, or against an already-reconnected speaker can never
+force an eviction; the re-check simply finds them present and no-ops.
+This is what answers "how to avoid a malicious client pretending to
+remain connected": authorization for the eviction was never "whoever
+called this," it's "did the server's own independent LiveKit query
+confirm absence" — the same authorization shape the webhook's signature
+check already has, just a different verification mechanism for a
+different caller shape. A new client hook, `useSpeakerReconnectGrace`
+(reusing the exact `setTimeout`-then-re-validated-server-action pattern
+`useAutomaticPromotion`'s own grace-period self-eviction already
+established — not a second, unrelated timer system), watches every
+*other* occupied seat for a gap between the DB's occupancy and LiveKit's
+live participant list; after `RECONNECT_GRACE_PERIOD_MS` (25s, tunable)
+of that gap persisting, it calls the new action. If the participant
+reconnects first, the seat drops out of the "disconnected" set on the
+next render and the pending timer is cleared, never reaching the
+server. The viewer's own seat is explicitly excluded from the watch (a
+tab reconnecting itself would otherwise transiently see *itself* as
+disconnected during the brief window before its own connection
+establishes). Runs for every connected viewer, not just the other
+active speaker — issue #25's own heartbeat is scoped to the two active
+speakers specifically to avoid *continuous* audience-wide polling, but
+this schedules at most one deferred call per genuine disconnect event,
+not a recurring interval, so the cost profile is different; broader
+scope here is also what guarantees a *solo* disconnected speaker (no
+co-speaker to notice) still eventually gets released. UI: `SpeakerTile`
+gained an `isReconnecting` prop — "Speaker reconnecting…" instead of the
+generic "Camera off" for a seat currently in that watched state, wired
+through `SpeakerStage` and all three room compositions. Reclaiming the
+seat without re-entering the queue falls out for free: the seat row is
+never touched during the grace period, so `getActiveSeatForIdentity`
+still finds it the moment the speaker's own client reconnects — nothing
+to "reclaim," it was never released.
+
+**Part 3 investigation**: re-inspected what was actually growing in
+`MobileLandscapeRoom`'s overlay. The chat wrapper's own height genuinely
+did interpolate correctly on drag/tap — the bug was ordering, not math:
+`GuestNameEditor`/`joinSeatMessage` and `RoomControls` sat *between* the
+handle and the chat, so the handle's own immediate, visible neighbor was
+the guest-name control, not the message list — a user's eye and finger
+naturally read "what's right here" as the thing being revealed,
+regardless of what technically resized further down the flex column.
+
+**Part 3 decision**: reordered so `GuestNameEditor`/`joinSeatMessage` and
+`RoomControls` sit *above* the handle — fixed-size, always visible,
+outside the expand/collapse relationship entirely — and the handle now
+sits directly against the chat wrapper it actually controls, nothing
+between them. Same `StageOverlayShell`, same `useCommentsFocus` state;
+only the JSX order changed. `EXPANDED_CHAT_HEIGHT_PX` trimmed from 176
+to 160 to compensate for `RoomControls`/`GuestNameEditor` now
+permanently occupying space above the handle on a still-short viewport.
+Part 4's compact-💬-emblem fallback is deliberately **not built** —
+the instruction was explicit that this is the user's own real-device
+judgment call after testing this correction, not something to
+speculatively build in parallel; flagged in the verification report
+instead.
+
+**Alternatives considered**: (1) for Part 1, adding a second,
+`setCameraEnabled`-aware code path that *also* sets `localVideoTrack` —
+rejected in favor of unifying onto `prepareLocalMedia` entirely, since
+maintaining two acquisition flows that both need to stay in sync with
+`localVideoTrack` is exactly the kind of duplication that caused this
+bug in the first place. (2) For Part 2, a new `event_speakers` column
+(e.g. `disconnected_at`) to track grace-period state server-side —
+rejected: no new SQL was needed once a client-side timer +
+server-re-validated action (the same shape already proven for
+promotion's own grace period) covered it, and a stored timestamp would
+still need something to notice it and act, no different in kind from
+what was built. (3) For Part 2, scoping the reconnect watch to only the
+*other* active speaker's client (mirroring #25's own heartbeat scoping
+more closely) — rejected: it would leave a *solo* disconnected speaker's
+seat stuck forever whenever no co-speaker exists to notice.
+
+**Tradeoffs**: a LiveKit API error in `checkAndEvictDisconnectedSpeaker`
+(not just a genuine "not found") is treated the same as "absent" — a
+transient failure evicts a moment early rather than late, the same
+direction of error the webhook's own immediate, ungraced eviction
+already accepted before this pass; not distinguishing error types is a
+deliberate prototype-scoped simplification, not an oversight.
+`checkAndEvictDisconnectedSpeaker` has no dedicated unit test (this
+file's other server actions don't either — verified instead via
+structural/production checks and the client-side hook's own thorough
+unit coverage of the *trigger* logic). `RECONNECT_GRACE_PERIOD_MS` (25s)
+and the comments-focus overlay's own height constants remain genuinely
+untested against a real device.
+
 ## 2026-08-22 — Fourth checkpoint tagged (`prototype-responsive-mobile-landscape-stable`), then #21's first slice: comments-focus overlay + header-as-overlay for mobile landscape, without ever resizing the stage
 
 **Problem**: real-device testing confirmed the three-composition responsive

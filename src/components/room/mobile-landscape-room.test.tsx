@@ -57,6 +57,7 @@ const baseProps: RoomLayoutProps = {
   mediaError: null,
   localVideoTrack: null,
   onPrepareMedia: vi.fn(async () => {}),
+  reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
 };
@@ -166,6 +167,23 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       render(<MobileLandscapeRoom {...baseProps} />);
       fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
       expect(screen.getByTestId("comments-focus-handle")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("the handle sits directly against the chat it reveals — nothing else between it and the composer (real-device finding: the gesture used to reveal the guest-name editor instead)", () => {
+      render(<MobileLandscapeRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
+      const handle = screen.getByTestId("comments-focus-handle");
+      const composer = screen.getByRole("textbox");
+      // The handle's very next sibling must be the chat wrapper (containing the composer) — not the guest-name editor or RoomControls.
+      const nextSibling = handle.nextElementSibling as HTMLElement;
+      expect(nextSibling).toContainElement(composer);
+    });
+
+    it("the guest-name editor renders above the handle, not between it and the chat", () => {
+      render(<MobileLandscapeRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
+      const handle = screen.getByTestId("comments-focus-handle");
+      const changeNameButton = screen.getByRole("button", { name: /change name/i });
+      // The handle must come *after* the guest-name control in document order, not before it.
+      expect(changeNameButton.compareDocumentPosition(handle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
   });
 });

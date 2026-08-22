@@ -728,6 +728,91 @@ focus interaction and reduced chrome), and desktop (unchanged, plus the
 anti-squashing fix at a few widths). Do not begin #18, #24, #25, voting,
 or the second-level full-comments view until confirmed.
 
+**Real-device testing found three more problems, same session, worked in
+priority order**: (1) a seated speaker who hard-refreshed and tapped
+"Enable camera & mic" published correctly but never saw their own
+self-preview return, recoverable only by leaving and rejoining; (2) that
+same finding exposed a real gap — the LiveKit webhook evicts a seat the
+instant it sees `participant_left`, no application-level grace period at
+all; (3) the comments-focus handle from the previous pass revealed
+`GuestNameEditor`, not comments.
+
+**Part 1 investigated and fixed**: traced the full refresh lifecycle —
+identity/seat/token are all already correct (`page.tsx` calls
+`getLiveKitToken` fresh every request, deriving `canPublish` from
+current `event_speakers` occupancy), and there's no cleanup effect
+wrongly destroying anything — a hard refresh legitimately resets all
+client state by design. The actual bug: `activateMedia()` called
+`applyPublishState(true)` directly, whose fallback branch
+(`setCameraEnabled`/`setMicrophoneEnabled`) acquires and publishes in
+one LiveKit call but never sets `localVideoTrack` — publishing worked,
+self-preview didn't. `activateMedia()` now just delegates to
+`prepareLocalMedia()` (issue #22's own acquisition path) — one
+mechanism for every activation entry point instead of two. Found for
+free in the same trace: a failed attempt used to permanently hide the
+retry button (`mediaActivated` was set unconditionally, immediately);
+now it only flips true on genuine success, so retry stays available.
+
+**Part 2 investigated and implemented**: confirmed via
+`api/livekit/webhook/route.ts` that eviction on `participant_left` is
+immediate, no grace period — and confirmed via the LiveKit server SDK
+(`RoomServiceClient`, already used for live permission pushes) that
+`getParticipant(room, identity)` can independently verify presence.
+New `checkAndEvictDisconnectedSpeaker` (room/actions.ts) re-validates
+via that query before calling the same `endSpeakerSeat` the webhook
+uses — a caller can never force an eviction of a still-connected
+speaker, since only the server's own independent check decides. New
+`useSpeakerReconnectGrace` hook (reusing `useAutomaticPromotion`'s own
+grace-period shape, not a second timer system) watches every other
+occupied seat for a DB-vs-LiveKit presence gap and calls that action
+after 25s (tunable) if it persists; reconnecting first cancels the
+pending call locally, before it ever reaches the server. Runs for every
+connected viewer, not just the other speaker (unlike #25's own
+heartbeat, scoped to avoid *continuous* polling) — this is a one-shot
+deferred call per disconnect, not a recurring interval, and broader
+scope is what guarantees a solo speaker's seat still eventually
+releases. `SpeakerTile` shows "Speaker reconnecting…" during the watch,
+threaded through `SpeakerStage` and all three room compositions. No new
+SQL.
+
+**Part 3 investigated and fixed**: confirmed the chat wrapper's height
+math was already correct — the bug was ordering:
+`GuestNameEditor`/`joinSeatMessage` and `RoomControls` sat between the
+handle and the chat, so the handle's own immediate neighbor was the
+guest-name control. Reordered so that metadata sits above the handle,
+fixed-size, outside the expand/collapse relationship entirely; the
+handle now sits directly against the chat wrapper. Part 4's
+compact-💬-emblem fallback deliberately not built — that's the user's
+own judgment call after testing this correction, per explicit
+instruction, not something to build speculatively in parallel.
+
+One real bug hit and fixed while writing tests: the hook's own
+`setReconnecting` call unconditionally produced a new `Set` reference
+even when contents were unchanged, which combined with an unstable
+`getParticipant` reference in a test (a realistic-enough scenario to
+guard against, not just a test artifact) caused a genuine infinite
+render loop (`node --max-old-space-size` OOM crash during `vitest run`);
+fixed with a content-comparing functional update in the hook itself, not
+just patched around in the test.
+
+23 new/changed tests across 6 files (`use-live-room-connection.test.ts`'s
+`activateMedia` describe block, new `use-speaker-reconnect-grace.test.ts`,
+`speaker-tile.test.tsx`'s reconnecting describe block, `speaker-stage.test.tsx`'s
+reconnect-grace describe block, `mobile-landscape-room.test.tsx`'s
+corrected-focus-target tests). `checkAndEvictDisconnectedSpeaker` itself
+has no dedicated unit test, consistent with this file's other server
+actions — verified structurally/in production instead. lint/tsc/build/test
+all pass (277/277). Merged to `main`, pushed, deployment confirmed via
+the GitHub deployments API, structural production check against the
+deployed test room confirmed no regressions.
+
+**Next task**: stop for the user's own real-device confirmation —
+refresh-while-seated recovery, a real temporary disconnect (grace period
+holding the seat, then releasing it if it doesn't return), and the
+corrected comments-focus target. Do not begin #18, #24, #25, voting, the
+second-level full-comments view, or the compact-💬 fallback until
+confirmed.
+
 ---
 
 ## 2026-08-18 — Session 21: Second checkpoint (two-device AV verified), then participation-friction design work

@@ -207,4 +207,41 @@ describe("SpeakerTile", () => {
       expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
     });
   });
+
+  describe("reconnect grace period (real-device finding: a disconnected-but-still-seated speaker shouldn't just read as 'Camera off')", () => {
+    it("shows 'Speaker reconnecting…' instead of the generic camera-off placeholder when isReconnecting is true", () => {
+      render(
+        <SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} isReconnecting={true} />,
+      );
+      expect(screen.getByTestId("speaker-reconnecting")).toHaveTextContent("Speaker reconnecting…");
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("still shows the seat's own display name below the tile while reconnecting — DB stays authoritative", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ display_name: "Priya" })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("speaker-tile")).toHaveTextContent("Priya");
+    });
+
+    it("defaults to false — ordinary 'Camera off' is unaffected when the prop is omitted", () => {
+      render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
+      expect(screen.getByTestId("no-video-placeholder")).toHaveTextContent("Camera off");
+      expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
+    });
+
+    it("a real published video still wins over isReconnecting — stale/contradictory props never hide a live feed", () => {
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      const { container } = render(
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={false} isReconnecting={true} />,
+      );
+      expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
+      expect(container.querySelector("video")).toBeInTheDocument();
+    });
+  });
 });

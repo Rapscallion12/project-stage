@@ -57,6 +57,7 @@ const baseProps: RoomLayoutProps = {
   mediaError: null,
   localVideoTrack: null,
   onPrepareMedia: vi.fn(async () => {}),
+  reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
 };

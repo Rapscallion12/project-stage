@@ -315,14 +315,6 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     [participantsVersion],
   );
 
-  const activateMedia = useCallback(async () => {
-    mediaActivatedRef.current = true;
-    setMediaActivated(true);
-    const room = roomRef.current;
-    const publish = room ? shouldPublish(room.localParticipant.permissions) : false;
-    await applyPublishStateRef.current(publish);
-  }, []);
-
   const prepareLocalMedia = useCallback(async () => {
     if (preparingRef.current || preparedTracksRef.current.length > 0) return;
     preparingRef.current = true;
@@ -354,6 +346,30 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       preparingRef.current = false;
     }
   }, []);
+
+  /**
+   * Real-device finding: a seated speaker who hard-refreshes keeps their
+   * seat and gets a fresh token with `canPublish: true` server-side (see
+   * DECISIONS.md — refresh destroys nothing here that isn't *supposed*
+   * to reset), but every piece of *this tab's* media state starts over —
+   * `mediaActivated`, `localVideoTrack`, and any prepared tracks are all
+   * back to their initial, empty values. Tapping "Enable camera & mic"
+   * used to call `setCameraEnabled`/`setMicrophoneEnabled` directly —
+   * LiveKit's own convenience methods, which acquire *and* publish in
+   * one step but never touch `localVideoTrack` — so publishing worked
+   * (every other participant saw/heard the recovered speaker correctly)
+   * while this tab's own self-preview stayed empty, indistinguishable
+   * from a broken camera. Routing through `prepareLocalMedia` instead
+   * means every activation path — composer request, direct join, and
+   * this recovery tap — acquires media exactly one way, so
+   * `localVideoTrack` is reconstructed correctly regardless of which one
+   * triggered it; `prepareLocalMedia`'s own tail check
+   * (`shouldPublish` → `applyPublishState(true)`) then publishes
+   * immediately since this tab is already a recognized speaker.
+   */
+  const activateMedia = useCallback(async () => {
+    await prepareLocalMedia();
+  }, [prepareLocalMedia]);
 
   const releaseLocalMedia = useCallback(() => {
     stopPreparedTracks();

@@ -197,4 +197,51 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
     expect(createLocalTracks).toHaveBeenCalledTimes(2);
     expect(result.current.localVideoTrack).not.toBeNull();
   });
+
+  describe("activateMedia (real-device finding: refresh recovery left self-preview empty)", () => {
+    it("reconstructs localVideoTrack — the old setCameraEnabled-only fallback never did", async () => {
+      const video = fakeVideoTrack();
+      createLocalTracks.mockResolvedValue([fakeAudioTrack(), video]);
+      const { result } = renderHook(() => useLiveRoomConnection(null));
+
+      expect(result.current.localVideoTrack).toBeNull();
+      await act(async () => {
+        await result.current.activateMedia();
+      });
+      expect(result.current.localVideoTrack).toBe(video);
+    });
+
+    it("acquires media exactly the same way prepareLocalMedia does — no separate acquisition path", async () => {
+      createLocalTracks.mockResolvedValue([fakeAudioTrack(), fakeVideoTrack()]);
+      const { result } = renderHook(() => useLiveRoomConnection(null));
+
+      await act(async () => {
+        await result.current.activateMedia();
+      });
+      expect(createLocalTracks).toHaveBeenCalledTimes(1);
+      expect(createLocalTracks).toHaveBeenCalledWith({ audio: true, video: true });
+    });
+
+    it("on failure, leaves needsMediaActivation-driving state so the tile's retry affordance stays available (the old design permanently hid it after one failed attempt)", async () => {
+      const error = new Error("simulated NotAllowedError");
+      error.name = "NotAllowedError";
+      createLocalTracks.mockRejectedValue(error);
+      const { result } = renderHook(() => useLiveRoomConnection(null));
+
+      await act(async () => {
+        await result.current.activateMedia();
+      });
+      expect(result.current.mediaError).toEqual({ source: "camera", reason: "permission-denied" });
+      expect(result.current.localVideoTrack).toBeNull();
+      // canPublish is false here (params: null, no room) so needsMediaActivation
+      // itself reads false too — the meaningful assertion is that nothing
+      // here latched mediaActivated permanently true on a failed attempt,
+      // confirmed indirectly: a later activateMedia call still re-attempts
+      // acquisition rather than silently no-op'ing.
+      await act(async () => {
+        await result.current.activateMedia();
+      });
+      expect(createLocalTracks).toHaveBeenCalledTimes(2);
+    });
+  });
 });

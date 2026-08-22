@@ -8,6 +8,7 @@ import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
+import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
 import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
@@ -188,6 +189,18 @@ export function EventRoom({
     onHasPendingRequestChange: setHasPendingRequest,
   });
 
+  // Real-device reconnect-grace-period finding: enabled only once LiveKit
+  // is actually meant to be connected (canConnect/"ready") — before that,
+  // every getParticipant lookup is undefined for reasons unrelated to
+  // anyone disconnecting (see the hook's own doc comment).
+  const reconnectingIdentities = useSpeakerReconnectGrace({
+    eventId: event.id,
+    speakers,
+    getParticipant: connection.getParticipant,
+    myIdentity,
+    enabled: canConnect,
+  });
+
   // Issue #22: "Withdraw" (waiting) and "Cancel" (mid-countdown) both route
   // through cancelPromotion — releasing any held-but-unpublished tracks
   // here too, once, covers both the same way withdrawing already
@@ -251,6 +264,7 @@ export function EventRoom({
     mediaError: connection.mediaError,
     localVideoTrack: connection.localVideoTrack,
     onPrepareMedia: connection.prepareLocalMedia,
+    reconnectingIdentities,
     messages,
     reactions,
   };

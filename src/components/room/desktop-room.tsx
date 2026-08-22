@@ -61,6 +61,7 @@ export function DesktopRoom({
   mediaError,
   localVideoTrack,
   onPrepareMedia,
+  reconnectingIdentities,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -86,6 +87,7 @@ export function DesktopRoom({
             onTapEmptySeat={onTapEmptySeat}
             isJoiningSeat={isJoiningSeat}
             localVideoTrack={localVideoTrack}
+            reconnectingIdentities={reconnectingIdentities}
           />
         </div>
         {joinSeatMessage && (

@@ -81,6 +81,7 @@ export function PortraitRoom({
   mediaError,
   localVideoTrack,
   onPrepareMedia,
+  reconnectingIdentities,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -105,6 +106,7 @@ export function PortraitRoom({
           onTapEmptySeat={onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           localVideoTrack={localVideoTrack}
+          reconnectingIdentities={reconnectingIdentities}
         />
         <StageOverlayShell>
           {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}

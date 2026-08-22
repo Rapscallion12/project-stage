@@ -6,6 +6,7 @@ import { getEventPhase } from "@/lib/events";
 import { getEventById } from "@/lib/repositories/events";
 import {
   claimSpeakerSeat,
+  endSpeakerSeat,
   getActiveSeatForIdentity,
   leaveSpeakerSeat as leaveSpeakerSeatRow,
   leaveSpeakerSeatAsGuest,
@@ -22,8 +23,8 @@ import {
   withdrawSpeakerRequest as withdrawSpeakerRequestRow,
   withdrawSpeakerRequestAsGuest,
 } from "@/lib/repositories/speaker-requests";
-import { mintLiveKitToken } from "@/lib/livekit/token";
-import { syncPublishPermission } from "@/lib/livekit/permissions";
+import { getParticipantIdentity, getRoomName, mintLiveKitToken } from "@/lib/livekit/token";
+import { getClient, syncPublishPermission } from "@/lib/livekit/permissions";
 import { decideClaimEligibility, type ClaimDecision } from "@/lib/speaker-queue";
 
 export type GetLiveKitTokenResult = { token: string } | { error: string };
@@ -368,4 +369,58 @@ export async function submitSpeakerRequest(
   const body = String(formData.get("body") ?? "");
   const result = await requestToSpeak(eventId, body);
   return "error" in result ? { error: result.error } : undefined;
+}
+
+export type CheckSpeakerReconnectResult = { evicted: boolean };
+
+/**
+ * Real-device finding: the LiveKit webhook (api/livekit/webhook/route.ts)
+ * evicts a seat the instant `participant_left` fires — no grace period —
+ * so a seated speaker who merely refreshes, blips offline, or briefly
+ * loses signal loses their seat outright, indistinguishable from someone
+ * who genuinely left. This is the other side of that: a *reconnect grace
+ * period*, called by any connected client's local timer
+ * (`useSpeakerReconnectGrace`) once it's watched a seat's occupant be
+ * absent from the LiveKit room for the grace duration — but the decision
+ * to actually evict never trusts that caller's own timer/claim.
+ *
+ * **Re-validated independently, not client-trusted**: this re-checks via
+ * `RoomServiceClient.getParticipant` — the same trusted server credential
+ * every token/permission call already uses, never anything the client
+ * sends — whether the identity is genuinely absent from the LiveKit room
+ * *right now*, before calling the same `endSpeakerSeat` the webhook
+ * itself uses. A caller invoking this early, repeatedly, or against a
+ * speaker who already reconnected can never force an eviction: the
+ * re-check simply finds them present and no-ops. Idempotent — multiple
+ * viewers' independent grace-period timers firing around the same moment
+ * (expected, not a race to specially guard against) just mean the first
+ * one to actually run this after the grace period wins; every later call
+ * finds the seat already vacated and no-ops too, via the same
+ * `getActiveSeatForIdentity` check `endSpeakerSeat`'s own callers already
+ * rely on elsewhere.
+ *
+ * A LiveKit API error here (not just a genuine "not found") is treated
+ * the same as "absent" — this is a prototype-scoped simplification, not
+ * a claim that every failure mode is a real disconnect; a spurious
+ * transient error would evict a moment early rather than late, the same
+ * direction of error the webhook's own immediate, ungraced eviction
+ * already accepts today.
+ */
+export async function checkAndEvictDisconnectedSpeaker(
+  eventId: string,
+  seatIdentity: SeatIdentity,
+): Promise<CheckSpeakerReconnectResult> {
+  const seat = await getActiveSeatForIdentity(eventId, seatIdentity);
+  if (!seat) return { evicted: false };
+
+  try {
+    await getClient().getParticipant(getRoomName(eventId), getParticipantIdentity(seatIdentity));
+    return { evicted: false };
+  } catch {
+    // Not found (or a transient LiveKit API error, see doc comment above)
+    // — proceed to evict.
+  }
+
+  await endSpeakerSeat(eventId, seatIdentity, "disconnected");
+  return { evicted: true };
 }

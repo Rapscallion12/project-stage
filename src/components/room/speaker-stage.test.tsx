@@ -33,6 +33,7 @@ const baseProps = {
   onTapEmptySeat: vi.fn(),
   isJoiningSeat: false,
   localVideoTrack: null,
+  reconnectingIdentities: new Set<string>(),
 };
 
 describe("SpeakerStage", () => {
@@ -190,6 +191,36 @@ describe("SpeakerStage", () => {
       render(<SpeakerStage speakers={[speaker({ seat_number: 2 })]} orientation="landscape" {...baseProps} />);
       const emptySeat = screen.getByTestId("empty-seat");
       expect(emptySeat.parentElement?.className).toMatch(/\border-first\b/);
+    });
+  });
+
+  describe("reconnect grace period (real-device finding)", () => {
+    it("passes isReconnecting through to the matching seat's tile only", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          reconnectingIdentities={new Set(["profile:p2"])}
+        />,
+      );
+      expect(screen.getByTestId("speaker-reconnecting")).toBeInTheDocument();
+      // Only one tile should show it — the other seat's occupant isn't in the set.
+      expect(screen.getAllByTestId("speaker-reconnecting")).toHaveLength(1);
+    });
+
+    it("shows nothing special when the reconnecting set is empty", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+        />,
+      );
+      expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
     });
   });
 });

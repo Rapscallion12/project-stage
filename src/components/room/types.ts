@@ -79,6 +79,8 @@ export type RoomLayoutProps = {
   localVideoTrack: LocalVideoTrack | null;
   /** Issue #22: acquires camera+mic once, ahead of any seat — triggered from the mic-request composer's own submit gesture (see ChatPanel), never automatically. */
   onPrepareMedia: () => Promise<void>;
+  /** Real-device reconnect-grace-period finding: LiveKit identities currently believed disconnected-but-within-grace — see useSpeakerReconnectGrace and SpeakerTile's own isReconnecting doc comment. */
+  reconnectingIdentities: ReadonlySet<string>;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
 };
