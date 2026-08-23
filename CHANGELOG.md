@@ -9,6 +9,17 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **Focusing the compact Watch Mode composer triggered iOS Safari's
+  auto-zoom-on-focus** — its raw `<input>` used `text-sm` (14px,
+  confirmed via project config — Tailwind's stock scale, no overrides
+  exist), under Safari's 16px threshold. Verified no compounding cause
+  first (no `transform`/`scale`/`zoom` anywhere in the room tree, no
+  app-level `scrollIntoView`/`visualViewport` code anywhere in the
+  codebase) before fixing: `text-sm` → `text-base`, matching the
+  existing convention the shared `<Input>` component already
+  documents. Same input renders for both mic-off and mic-on states, so
+  one change fixes both. No global viewport restriction added.
+
 - **Stale "Request to speak is pending" UI after leaving the stage** —
   a granted request that got claimed (`claimOpenSeat`) never told the
   client its `hasPendingRequest` flag was now stale; leaving the stage

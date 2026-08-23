@@ -141,6 +141,26 @@ describe("ChatPanel", () => {
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
     });
 
+    describe("input font size (real-device finding, 2026-08-23: text-sm/14px triggered iOS Safari's auto-zoom-on-focus)", () => {
+      // This only pins the rendered CSS class, which is what actually
+      // governs the computed font-size — it does not and cannot exercise
+      // real Safari zoom behavior. That's a real-device-only check (see
+      // this session's verification report).
+      it("the input uses text-base (16px+), never text-sm, when commenting normally", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const input = screen.getByPlaceholderText("Add a comment…");
+        expect(input.className).toMatch(/\btext-base\b/);
+        expect(input.className).not.toMatch(/\btext-sm\b/);
+      });
+
+      it("the same is true in Request-to-Speak (mic-on) mode — same input element, same fix applies to both", () => {
+        render(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+        const input = screen.getByPlaceholderText("What's your topic?");
+        expect(input.className).toMatch(/\btext-base\b/);
+        expect(input.className).not.toMatch(/\btext-sm\b/);
+      });
+    });
+
     it("defaults to the comment placeholder; mic mode switches to the request placeholder — same contract as full mode", () => {
       const { rerender } = render(<ChatPanel {...baseProps} compact />);
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();

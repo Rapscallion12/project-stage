@@ -152,6 +152,31 @@ the actual built route.
 fixes specifically. Do not begin Phase 3 or the Speaker View design
 until explicitly approved.
 
+**Real-device retest found a fifth issue**: focusing the compact
+composer triggered iOS Safari's auto-zoom-on-focus, panning the page.
+Investigated before touching anything, per explicit instruction not to
+assume the cause: confirmed (not guessed) that this project has no
+`tailwind.config`/`fontSize` overrides, so Tailwind's stock scale
+genuinely applies — the compact `<input>` was `text-sm` (14px, under
+Safari's 16px threshold). Checked for a compounding cause too: no
+`transform`/`scale`/`zoom` anywhere in the room component tree, no
+`scrollIntoView`/`visualViewport` code anywhere in the codebase — the
+pan is Safari's own zoom mechanism, not a second bug. The shared
+`<Input>` component already documents this exact fix
+(`text-base`, not `text-sm`); the compact composer's raw `<input>`
+(needed for the glass-pill layout `<Input>`'s fixed styling doesn't
+support) had simply drifted from that convention. Fixed with one class
+change, same input for both mic-off/mic-on. No `maximum-scale`/
+`user-scalable` added — explicitly forbidden, and unnecessary once the
+actual cause is fixed. Added a regression test pinning the rendered
+class, explicitly caveated as not proving real Safari behavior.
+lint/tsc/build/test all pass (317/317, 36 files).
+
+**Next task**: stop for the user's own real-device retest of this fix
+specifically, plus a quick pass confirming the four Phase 2 fixes are
+still intact. Do not begin Phase 3 or the Speaker View design until
+explicitly approved.
+
 ---
 
 ## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created

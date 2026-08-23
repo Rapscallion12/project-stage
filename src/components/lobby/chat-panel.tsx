@@ -66,6 +66,25 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * `<input>` (the form, the pill, the input itself) — missing it on just
  * one link breaks the whole chain, since that ancestor's own unshrunk
  * content width becomes the effective floor for everything below it.
+ *
+ * **`text-base`, not `text-sm`, on the compact `<input>`** (real-device
+ * finding, 2026-08-23): focusing the compact composer was triggering
+ * iOS Safari's native auto-zoom-on-focus, panning/shifting the whole
+ * page. Verified, not assumed, before touching anything: no
+ * `fontSize`/root-`html` overrides exist anywhere in this project (no
+ * `tailwind.config`, nothing in `globals.css`), so Tailwind's stock
+ * scale applies — `text-sm` is 14px, under Safari's 16px threshold;
+ * `text-base` is 16px. No `transform`/`scale`/`zoom` exists on any
+ * ancestor in the room tree, and there's no app-level
+ * `scrollIntoView`/`visualViewport` code anywhere in this codebase —
+ * the pan the user saw is Safari's own zoom mechanism, not a second,
+ * compounding bug. The shared `<Input>` component
+ * (`src/components/ui/input.tsx`) already documents this exact
+ * constraint; this raw `<input>` (needed for the compact glass-pill
+ * layout, which `<Input>`'s own fixed styling doesn't support) had
+ * drifted from it. Same input renders for both mic-off and mic-on
+ * states, so this one fix covers both — see the compact `<input>`'s own
+ * className.
  */
 export function ChatPanel({
   eventId,
@@ -177,7 +196,12 @@ export function ChatPanel({
             autoComplete="off"
             maxLength={500}
             required
-            className="min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-white/50 focus:outline-none"
+            // text-base (16px), not text-sm: iOS Safari auto-zooms the
+            // page on focus for any input under 16px — see real-device
+            // finding below. Same convention the shared <Input> component
+            // already documents; this raw <input> (needed for the compact
+            // glass-pill layout) had drifted from it.
+            className="min-w-0 flex-1 bg-transparent text-base text-white placeholder:text-white/50 focus:outline-none"
           />
           <button
             type="submit"

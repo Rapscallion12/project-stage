@@ -3,6 +3,51 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-23 — Compact composer triggered iOS Safari's auto-zoom-on-focus; verified before touching anything
+
+**Problem**: focusing the compact Watch Mode composer on a real iPhone
+made Safari zoom the whole page toward the input, pushing parts of the
+stage/UI out of view. The user's own hypothesis was a sub-16px input
+font-size, but explicitly asked for verification, not an assumed fix.
+
+**Investigation, all done before any code changed**:
+- Computed font-size: no `tailwind.config` file exists (Tailwind v4,
+  CSS-based config) and `globals.css` defines no `fontSize`/root-`html`
+  override — Tailwind's stock scale applies unmodified, meaning
+  `text-sm` really is 14px and `text-base` really is 16px in this
+  project, not a guess.
+- The compact composer's `<input>` (`chat-panel.tsx`) used `text-sm`
+  (14px) — under Safari's 16px auto-zoom threshold.
+- Checked for a compounding cause per the user's explicit checklist:
+  no `transform`/`scale`/`zoom` CSS exists anywhere in the room
+  component tree (`grep` across `src/components/room`), and no
+  `scrollIntoView`/`visualViewport` code exists anywhere in this
+  codebase. The pan the user saw is Safari's own native zoom mechanism
+  operating on the true 14px font-size, not a second, app-level bug
+  compounding it.
+- The shared `<Input>` component (`src/components/ui/input.tsx`)
+  already has this exact fix, with this exact reasoning, in its own
+  comment (`text-base (16px), not text-sm: iOS Safari auto-zooms...`)
+  — Phase 2's compact composer needed a raw `<input>` (the shared
+  component's fixed rounded-rectangle styling doesn't fit the glass
+  pill) and simply didn't carry that established convention over.
+
+**Decision**: `text-sm` → `text-base` on the compact input's
+`className`, nothing else. The same input element renders for both
+mic-off and mic-on states (only the wrapping pill's border/background
+and the placeholder text differ), so this one change fixes both — no
+special-casing needed. Deliberately did **not** add
+`maximum-scale=1`/`user-scalable=no` or any other global viewport
+restriction — explicitly forbidden (breaks pinch-to-zoom
+accessibility), and not necessary here since the real fix addresses
+*why* Safari wants to zoom in the first place, not just the symptom.
+
+**Verification honesty**: added a regression test pinning the rendered
+`className` (`text-base`, never `text-sm`) for both composer states —
+this guards the CSS class going forward, but a jsdom test cannot
+exercise real Safari zoom behavior; that remains a real-device-only
+check, reported as such, not claimed as automated proof.
+
 ## 2026-08-23 — Phase 2 real-device fixes: stale Request-to-Speak state traced to its root, compact pending feedback, bottom-row overflow
 
 **Problem**: real-device testing of Phase 2 found four issues, none of
