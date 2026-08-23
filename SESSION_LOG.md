@@ -4,6 +4,100 @@ Newest entry first.
 
 ---
 
+## 2026-08-24 — Session 24: Speaker View (#18) designed and Phase 1 implemented
+
+**Goal**: Pick up where Session 23 left off — Watch Mode's Phase 3 (ambient
+comments) was confirmed on a real iPhone, and the user explicitly paused
+"05 — Social Stage" Phases 4–7 to design the speaker-dominant role view
+flagged in Session 23. This session covered that whole arc: dependency
+verification, architecture assessment, layout-direction options, plan
+approval, and Phase 1 implementation.
+
+**#16/#17 verified complete and closed**: before touching #18, checked
+both blocking dependencies' actual acceptance criteria against current
+code rather than assuming "looks similar enough" — #16 (guest speaker
+participation: schema, all four guest-specific `service_role` functions,
+generalized app layer, the webhook route's fixed disconnect-cleanup
+regression, PRODUCT.md's documented exception) and #17 (unified event/
+lobby/room lifecycle: single persistent `EventRoom` tree, hooks-above-
+phase-branch, lazy LiveKit, and — checked specifically since it'd be easy
+to silently drop — the `/lobby`/`/room` redirect stubs are still real,
+not deleted) were both fully satisfied. Closed both with a verification
+comment citing the specific files/migrations checked; board cards moved
+to Done.
+
+**Architecture assessment produced, no code**: walked the design through
+before writing anything, per this project's own standing rule for
+data-model/cross-system changes. Found the "own camera small" half of
+Direction B was already built (issue #22's dominant-video corrective
+pass already suppresses a seated speaker's own big video in favor of the
+existing `SelfPreview` corner) — the only real gap is the *other*
+speaker's tile still being equal-sized instead of dominant, already
+named three separate times in ARCHITECTURE.md/DECISIONS.md as deferred
+to #18 specifically. Presented three layout directions (A: corner-swap,
+B: full-bleed remote + floating self-preview, C: asymmetric grid) with
+tradeoffs, without picking one, plus a recommended implementation
+architecture (role as a derived value off already-live `isSpeaker`/
+`hasPendingRequest`, no new hooks; role-branch inside each device
+composition, not a new top-level `EventRoom` branch; same mounted
+`SpeakerStage`/`SpeakerTile`/`SelfPreview` infrastructure, extended not
+duplicated; landscape untouched).
+
+**User chose Direction B** with six concrete decisions: keep commenting
+available to speakers; add real mic/camera toggles using the *existing*
+published LiveKit tracks (`.mute()`/`.unmute()`, never
+`setMicrophoneEnabled`/`setCameraEnabled`'s reacquire-on-enable path);
+`SpeakerControlBar` as a new purpose-built component, not another
+`RoomControls` branch; portrait only; same underlying stage/LiveKit
+infrastructure, not a duplicate room implementation; empty-other-seat
+reuses the existing placeholder, no new "waiting" system. Issue #18
+updated in place (retitled, body rewritten for Direction B, dependencies
+cleared) rather than replaced. A 4-phase implementation plan was written
+and approved, with only Phase 1 authorized to start.
+
+**Phase 1 (static full-bleed layout) implemented on `feature/speaker-view`**
+(branched from `feature/social-stage-shell`, not `main` — #21 Phases 4–7
+are still pending, so `main` isn't ready to receive either branch yet;
+checkpoint tag `prototype-pre-speaker-view-stable` cut at
+`feature/social-stage-shell`'s Phase-3-confirmed HEAD first). `SpeakerStage`
+gained one new optional prop, `soloMode` (default `false`, every existing
+caller/test unaffected) — when the viewer holds a seat, renders only the
+*other* seat's tile at full size via the exact same `renderTile()` used
+for the ordinary two-tile layout (no new tile-rendering logic, no
+divider). `PortraitRoom` gained a role router at the very top —
+`isSpeaker` delegates immediately to a new `PortraitSpeakerView`
+(minimal top chrome + full-bleed `SpeakerStage` only) before any of its
+own Watch Mode JSX runs. `SelfPreview` and the empty-other-seat
+placeholder are both reused completely unchanged — the existing
+"recreated, never reacquired" `<video>` re-attach tolerance already
+proven safe for every orientation/viewport composition swap is the same
+mechanism covering this one; `EventRoom`/`useLiveRoomConnection` are
+untouched, so the underlying LiveKit `Room`/subscriptions never move.
+
+**Known, deliberate Phase 1 gap**: per the approved phase scope (no
+`SpeakerControlBar`, no mic/camera controls yet), a seated speaker
+currently has **no in-UI way to leave the stage** — Watch Mode's
+"Leave the stage" button doesn't render in this composition at all until
+Phase 3. Closing the tab still releases the seat via the existing
+LiveKit-webhook disconnect path. Called out explicitly in the real-device
+report so this isn't mistaken for a bug.
+
+lint/tsc/build/test all pass (339/339, 38 files, +19 new tests: 6 new
+`SpeakerStage` `soloMode` cases, a new `portrait-speaker-view.test.tsx`,
+1 updated `portrait-room.test.tsx` case reflecting the role router).
+Local production smoke test confirmed the built route serves the
+homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of Phase
+1 specifically — full-bleed video for the other speaker on promotion,
+self-preview continuity through the transition, empty-other-seat
+behavior, clean return to Watch Mode on leaving the stage (via
+disconnect, since there's no in-UI button yet), and no landscape
+regression. Do not begin Phase 2 (speaker composer + ambient comments)
+until explicitly approved.
+
+---
+
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)
 
 **Goal**: Continuation of Session 22's Figma-only design-exploration work

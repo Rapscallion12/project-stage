@@ -83,6 +83,20 @@ import type { Orientation } from "@/hooks/use-orientation";
  *
  * `bg-black`, not a theme token — a video stage stays dark regardless of
  * the app's light/dark mode, the same convention any video player uses.
+ *
+ * **`soloMode`** (issue #18, Speaker View Phase 1): when the viewer holds
+ * one of the two seats, `PortraitSpeakerView` passes `true` so the
+ * *other* seat's tile fills this entire box — no divider, no equal-sized
+ * tile for the viewer's own seat (their own feed is already covered by
+ * the self-preview slot below, unconditionally, regardless of this flag).
+ * Deliberately doesn't add a new tile-rendering path: it's the exact same
+ * `renderTile()` used for the ordinary two-tile layout, just called once
+ * instead of twice, so every existing per-tile behavior (empty-seat
+ * placeholder, reconnect grace, media-activation tap target) carries over
+ * unchanged. If the viewer's own seat can't be identified (a defensive
+ * fallback, not an expected path — `PortraitSpeakerView` only renders
+ * this with `soloMode` when `isSpeaker` is already true), this falls back
+ * to the ordinary two-tile layout rather than rendering nothing.
  */
 export function SpeakerStage({
   speakers,
@@ -98,6 +112,7 @@ export function SpeakerStage({
   scrimOpacity = 0,
   scrimInstant = false,
   reconnectingIdentities,
+  soloMode = false,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -117,6 +132,8 @@ export function SpeakerStage({
   scrimInstant?: boolean;
   /** Real-device reconnect-grace-period finding: LiveKit identities `useSpeakerReconnectGrace` is currently watching as disconnected-but-within-grace — passed through to whichever tile matches, see SpeakerTile's own isReconnecting doc comment. */
   reconnectingIdentities: ReadonlySet<string>;
+  /** Issue #18, Speaker View Phase 1 — see this component's own doc comment above. Defaults to false: every existing caller (MobileLandscapeRoom, DesktopRoom, PortraitRoom's Audience/Candidate path) is completely unaffected. */
+  soloMode?: boolean;
 }) {
   const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
   const viewerIsSpeaking = speakers.some((s) => {
@@ -125,6 +142,21 @@ export function SpeakerStage({
     );
     return identity === myIdentity;
   });
+
+  // Issue #18, Speaker View Phase 1: which seat (if any) is the viewer's
+  // own — soloMode uses this to render only the *other* seat's tile. Only
+  // ever non-null when viewerIsSpeaking is also true.
+  const mySeatNumber: 1 | 2 | null = (() => {
+    for (const seatNumber of [1, 2] as const) {
+      const seat = bySeat(seatNumber);
+      if (!seat) continue;
+      const identity = getParticipantIdentity(
+        seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
+      );
+      if (identity === myIdentity) return seatNumber;
+    }
+    return null;
+  })();
 
   // Real-device finding (2026-08-22): exactly one open seat, viewer not
   // already speaking — that seat is this viewer's one actionable target,
@@ -168,16 +200,24 @@ export function SpeakerStage({
     );
   }
 
+  const renderSolo = soloMode && mySeatNumber !== null;
+
   return (
     <div data-testid="room-stage" className="relative z-0 h-full w-full overflow-hidden bg-black">
       <div className={orientation === "landscape" ? "flex h-full w-full flex-row" : "flex h-full w-full flex-col"}>
-        {renderTile(1)}
-        <div
-          data-testid="speaker-divider"
-          aria-hidden="true"
-          className={orientation === "landscape" ? "w-2 shrink-0 bg-border" : "h-2 shrink-0 bg-border"}
-        />
-        {renderTile(2)}
+        {renderSolo ? (
+          renderTile(mySeatNumber === 1 ? 2 : 1)
+        ) : (
+          <>
+            {renderTile(1)}
+            <div
+              data-testid="speaker-divider"
+              aria-hidden="true"
+              className={orientation === "landscape" ? "w-2 shrink-0 bg-border" : "h-2 shrink-0 bg-border"}
+            />
+            {renderTile(2)}
+          </>
+        )}
       </div>
 
       {/* Self-preview slot (issue #22) — hidden entirely, not just an empty placeholder, when there's no local media to show. */}

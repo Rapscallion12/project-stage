@@ -3,6 +3,7 @@ import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
+import { PortraitSpeakerView } from "@/components/room/portrait-speaker-view";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -79,36 +80,54 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * `.stage-overlay`-scoped backing via a wrapper here, rather than
  * editing `RoomControls` itself — it's a fully separate concern from
  * Watch Mode and shouldn't need to know this redesign happened.
+ *
+ * **Role router (issue #18, Speaker View Phase 1)**: everything above
+ * this point in the doc comment describes the Audience/Candidate
+ * composition only. A seated speaker (`isSpeaker`) is delegated entirely
+ * to `PortraitSpeakerView` instead — a different composition, not a
+ * variant of this one — before any of this component's own JSX renders.
+ * See `PortraitSpeakerView`'s own doc comment for what that view does
+ * and doesn't include yet.
  */
-export function PortraitRoom({
-  event,
-  phase,
-  countdownText,
-  speakers,
-  myIdentity,
-  identity,
-  isSpeaker,
-  hasPendingRequest,
-  onHasPendingRequestChange,
-  promotionCountdown,
-  onCancelPromotion,
-  micRequestMode,
-  onMicRequestModeChange,
-  onTapEmptySeat,
-  isJoiningSeat,
-  joinSeatMessage,
-  getParticipant,
-  connectionStatus,
-  canPublish,
-  needsMediaActivation,
-  activateMedia,
-  mediaError,
-  localVideoTrack,
-  onPrepareMedia,
-  reconnectingIdentities,
-  messages,
-  reactions,
-}: RoomLayoutProps) {
+export function PortraitRoom(props: RoomLayoutProps) {
+  // Issue #18, Speaker View Phase 1 — see this component's own doc
+  // comment above. Checked before any of this component's own
+  // destructuring/JSX, so a seated speaker never sees so much as a
+  // flash of the Audience/Candidate composition.
+  if (props.isSpeaker) {
+    return <PortraitSpeakerView {...props} />;
+  }
+
+  const {
+    event,
+    phase,
+    countdownText,
+    speakers,
+    myIdentity,
+    identity,
+    isSpeaker,
+    hasPendingRequest,
+    onHasPendingRequestChange,
+    promotionCountdown,
+    onCancelPromotion,
+    micRequestMode,
+    onMicRequestModeChange,
+    onTapEmptySeat,
+    isJoiningSeat,
+    joinSeatMessage,
+    getParticipant,
+    connectionStatus,
+    canPublish,
+    needsMediaActivation,
+    activateMedia,
+    mediaError,
+    localVideoTrack,
+    onPrepareMedia,
+    reconnectingIdentities,
+    messages,
+    reactions,
+  } = props;
+
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
       <SpeakerStage

@@ -452,6 +452,18 @@ different dependencies. Current order:
       out of scope; per explicit instruction, the Speaker View (#18)
       design checkpoint above stays next after Phase 3's real-device
       confirmation, not Discussion Expanded.
+      **Phase 3 confirmed on a real iPhone. Speaker View (#18) design
+      checkpoint completed**: #16/#17 verified genuinely complete (not
+      just similar) and closed; a 4-phase Speaker View plan approved for
+      Direction B (full-bleed remote speaker). **Speaker View Phase 1
+      shipped, on a new `feature/speaker-view` branch** (off
+      `feature/social-stage-shell`, since `main` doesn't have Phases 1–3
+      yet): a seated speaker now sees the other speaker's video full-bleed
+      via `SpeakerStage`'s new `soloMode` prop, with the existing
+      `SelfPreview` corner and empty-other-seat placeholder both reused
+      unchanged. No composer, ambient comments, or control bar yet — see
+      DECISIONS.md's 2026-08-24 entry. "05 — Social Stage" Phases 4–7
+      remain paused on `feature/social-stage-shell` during this work.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

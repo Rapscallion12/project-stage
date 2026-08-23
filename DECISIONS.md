@@ -3,6 +3,89 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View (#18): #16/#17 verified (not assumed) complete; Direction B chosen; Phase 1 built as a `soloMode` extension, not a new stage implementation
+
+**Problem**: #18 (role-based room UI) was blocked on #16/#17, both still
+open on GitHub despite the code already looking like it implemented
+them. Before starting #18, needed to know whether that was genuinely
+true or just superficially similar — the user explicitly required
+checking actual acceptance criteria, not closing on appearance.
+
+**#16/#17 verification**: read each issue's original body as a checklist
+and checked every item against real code/migrations, not the doc
+comments describing them. #16: migration `00000000000012` has every
+specified schema/function change, `token.ts`/`permissions.ts` are
+identity-shape-generic, and — the item most likely to have been missed
+silently — the LiveKit webhook route's old profile-only early-return
+(the exact regression #16 warned "will silently leak seats forever") is
+gone, with a comment citing #16 directly. #17: `EventRoom` calls every
+live hook unconditionally above the phase branch, LiveKit stays lazy
+until `ready`, and the `/lobby`/`/room` routes are still real `redirect()`
+stubs, not deleted (the issue explicitly required they not be deleted
+outright). No gaps found in either. Both closed with the specific
+evidence in the closing comment; board cards moved to Done.
+
+**Architecture assessment (no code yet)**: found that Direction B's "own
+camera stays small" half was already built — issue #22's dominant-video
+corrective pass already suppresses a seated speaker's own big video,
+`SelfPreview` already gives the small corner treatment, for both
+candidates and speakers, in every composition, today. The only real gap
+is the *other* speaker's tile still being equal-sized — already named
+three times, verbatim, as deferred to #18 in ARCHITECTURE.md/DECISIONS.md
+("literal asymmetric... grid sizing... still #18's territory"). Presented
+three directions (corner-swap / full-bleed-remote / asymmetric-grid)
+without picking one, and a recommended architecture (role derived from
+already-live state, no new hooks; role branch inside each device
+composition; extend the existing `SpeakerStage`/`SpeakerTile`/
+`SelfPreview` trio rather than duplicating it) — the user chose
+**Direction B** (full-bleed remote speaker, floating self-preview) with
+six explicit decisions, most notably: mic/camera toggles must use the
+*already-published* LiveKit tracks, never reacquire.
+
+**Phase 1 decision — extend `SpeakerStage`, don't fork it**: the
+alternative considered was a parallel "solo stage" component that only
+renders one tile. Rejected — `SpeakerStage` already owns every
+seat-tile-rendering concern (empty-seat placeholder, media-activation tap
+target, reconnect grace, `<video>` attach/detach lifecycle), and forking
+it would either duplicate all of that or silently drift out of sync with
+it over time, the exact "duplicate implementation" the user's plan
+explicitly asked to avoid. Instead: one new optional prop, `soloMode`
+(default `false`), which skips the divider and the viewer's own tile,
+calling the *same* `renderTile()` once instead of twice for whichever
+seat isn't the viewer's own. Every existing caller (`MobileLandscapeRoom`,
+`DesktopRoom`, `PortraitRoom`'s own Audience/Candidate path) is
+unaffected by construction, not just by testing — the prop defaults to
+today's exact behavior.
+
+**Why this doesn't destabilize LiveKit**: `EventRoom`/
+`useLiveRoomConnection` are untouched by this change entirely — the role
+router lives in `PortraitRoom`/`PortraitSpeakerView`, both presentation
+components below `EventRoom` in the tree. The only thing that happens at
+the moment `isSpeaker` flips is the other speaker's already-subscribed
+`<video>` element moving from the two-tile grid to the solo slot — a
+one-time re-attach (`track.attach()` on a new DOM node), not a
+resubscription. This is the identical tolerance already proven safe for
+every existing orientation/viewport composition swap (documented in
+ARCHITECTURE.md's Mobile orientation implementation section) — Phase 1
+applies it across one more branch, it doesn't invent a new one.
+
+**Deliberate Phase 1 gap, not an oversight**: per the approved phase
+scope, this build has no `SpeakerControlBar` and no leave-stage control
+of any kind inside Speaker View — a seated speaker can only exit via
+disconnect (closing the tab, which the existing LiveKit webhook already
+turns into a clean seat release). This was flagged explicitly rather than
+silently left for the user to discover on their phone.
+
+**Verification honesty**: automated tests (`speaker-stage.test.tsx`'s new
+`soloMode` cases, `portrait-speaker-view.test.tsx`) cover the tile-count/
+divider/empty-seat/self-preview logic and the defensive fallback when
+`soloMode` is set without the viewer actually holding a seat — they
+cannot verify the actual felt experience of the video re-attach at the
+moment of promotion (a brief flicker vs. seamless, on real hardware) or
+whether `SelfPreview`'s corner position still reads correctly against a
+full-bleed remote video instead of a half-height tile — both remain
+real-device-only checks, reported as such.
+
 ## 2026-08-23 — Phase 3: ambient comments reuse the durable chat stream; ambient lifecycle kept separate from data lifecycle
 
 **Problem**: Watch Mode's persistent composer (Phase 2) can send

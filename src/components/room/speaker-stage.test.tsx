@@ -194,6 +194,105 @@ describe("SpeakerStage", () => {
     });
   });
 
+  describe("soloMode (issue #18, Speaker View Phase 1 — full-bleed remote speaker)", () => {
+    it("renders only the other seat's tile, no divider, when the viewer holds a seat", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          soloMode
+        />,
+      );
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      const tiles = screen.getAllByTestId("speaker-tile");
+      expect(tiles).toHaveLength(1);
+    });
+
+    it("renders the ordinary two-tile layout (with divider) when soloMode is false, same speakers", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+        />,
+      );
+      expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+    });
+
+    it("shows the ordinary empty-seat placeholder, full-size, when the other seat is empty — no separate 'waiting' UI", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          soloMode
+        />,
+      );
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-tile")).not.toBeInTheDocument();
+    });
+
+    it("the empty other seat is not offered as tappable to the seated viewer themselves — same rule soloMode inherits unchanged from the ordinary layout", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          onTapEmptySeat={onTapEmptySeat}
+          soloMode
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.tagName).toBe("DIV");
+      fireEvent.click(emptySeat);
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+    });
+
+    it("still renders the self-preview corner slot in soloMode when a local video track is held", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          localVideoTrack={fakeVideoTrack()}
+          soloMode
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+    });
+
+    it("falls back to the ordinary two-tile layout if soloMode is true but the viewer doesn't actually hold either seat (defensive — should not happen in practice)", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "someone-else" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:not-a-speaker"
+          soloMode
+        />,
+      );
+      expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
+    });
+  });
+
   describe("reconnect grace period (real-device finding)", () => {
     it("passes isReconnecting through to the matching seat's tile only", () => {
       render(
