@@ -7,6 +7,30 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Added
+
+- **"05 — Social Stage" Phase 3: ambient live comments in mobile
+  portrait Watch Mode** — the room's live chat stream now surfaces as a
+  small, self-expiring stack of translucent bubbles in the stage's
+  lower-left, instead of being invisible until Discussion Expanded
+  exists. New `AmbientComments` component reuses the *same*
+  `messages`/`useLobbyRealtime` stream every other room composition
+  already reads — no second comment backend, no duplicated message
+  state. Seeded from the last 3 messages already present at mount (a
+  viewer arriving mid-conversation sees the room is inhabited
+  immediately, not a blank corner); each message gets a single ~7s
+  fade-in/hold/fade-out lifecycle (`ambient-comment-fade` keyframe,
+  `globals.css`) the first time it's seen, tracked independently of the
+  underlying data's own permanence; a burst evicts the oldest visible
+  bubble immediately rather than growing past 3 at once. Own
+  Request-to-Speak comments reuse the existing 🎙 badge treatment. Each
+  bubble carries a stable `data-message-id` — a deliberate seam for a
+  later Discussion Expanded tap handler, not implemented yet (no
+  `onClick`). Positioned as an absolutely-positioned overlay (`bottom-16
+  left-3`, click-through outside the bubbles themselves, matching the
+  room's existing pointer-events pattern) — reserves no layout space and
+  never resizes/reflows the video underneath it. See DECISIONS.md.
+
 ### Fixed
 
 - **Focusing the compact Watch Mode composer triggered iOS Safari's

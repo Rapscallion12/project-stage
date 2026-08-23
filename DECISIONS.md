@@ -3,6 +3,79 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-23 — Phase 3: ambient comments reuse the durable chat stream; ambient lifecycle kept separate from data lifecycle
+
+**Problem**: Watch Mode's persistent composer (Phase 2) can send
+comments, but nothing shows them — the room doesn't yet *feel*
+inhabited the way the approved "05 — Social Stage" design calls for.
+Phase 3's brief: surface recent comments ambiently, without turning
+Watch Mode back into a chat screen, and without building a second
+comment system.
+
+**Decision**: `AmbientComments` reads the *same* `messages` array every
+other room composition already receives from `useLobbyRealtime` — zero
+new Realtime subscription, zero new backend. This is explicitly the
+"reuse an existing durable stream" case, not the "genuinely new
+ephemeral broadcast" case ARCHITECTURE.md's Realtime-traffic-vs-durable-
+writes section describes for the *future* ambient-reactions work
+(Phases 5/6) — comments already persist one row per message on purpose
+(dedup, moderation, history), so there's nothing to avoid persisting
+here.
+
+**Why local component state is still needed despite `messages` being
+the source of truth**: the *ambient* lifecycle (fade in, hold ~7s, fade
+out) is a presentation concern the underlying data doesn't have — a
+message never disappears from `messages` once sent. `AmbientComments`
+tracks which message ids it has already assigned a lifecycle to
+(`shownIds`, a ref) so each message gets exactly one fade timer, the
+first time it's seen, decoupled entirely from the data's own permanence.
+A message re-appearing in a later `messages` prop (it always will,
+since messages don't get removed) does not restart or re-trigger its
+bubble.
+
+**Seeded on mount, not empty**: the last `MAX_VISIBLE` (3) messages
+already in `messages` when the component first mounts are shown
+immediately, each given a *fresh* expiry timer starting from mount time
+(not their original `created_at`) — a viewer arriving mid-conversation
+should see the room is inhabited right away, not wait for the next live
+message.
+
+**Conservative, capped feed size**: never more than 3 bubbles at once —
+a burst evicts the oldest immediately (clearing its now-pointless timer)
+rather than stacking taller. This is the "small number of recent items"
+the approved design calls for; the cap is a single constant
+(`MAX_VISIBLE`), not hard-coded layout math, so a later phase can shrink
+it further (e.g. while a future React/Vote/Gift tray is open) without
+restructuring the component.
+
+**Future click-target seam, deliberately inert today**: each bubble
+carries `data-message-id` — a stable, already-identifiable DOM hook a
+later Discussion Expanded phase can attach a tap handler to — but no
+`onClick`/`onCommentSelect` prop exists yet. Each bubble is
+`pointer-events-auto` even though nothing listens yet (the wrapping
+overlay stays `pointer-events-none`, the same click-through pattern
+already used for the top chrome and `StageOverlayShell`'s decorative
+margin), so a later phase adds a handler, not a rewrite of the
+click-through structure.
+
+**Positioning**: an absolutely-positioned overlay sibling of
+`SpeakerStage` (`bottom-16 left-3`), not a document-flow element — it
+reserves no space and never resizes/reflows the video. `bottom-16`
+(64px) was chosen from the composer row's own worst-case height (44px
+emblem + 12px shell padding = 56px) plus a small margin, keeping the
+overlay clear of the persistent bottom controls in every state observed
+in code (with vs. without the compact `RoomControls` pending-pill above
+the composer); real-device review is still what confirms this against
+an actual device's rendering.
+
+**Verification honesty**: automated tests (`ambient-comments.test.tsx`,
+`portrait-room.test.tsx`) cover the seeding/eviction/expiry logic and
+the click-through/positioning classes using `vi.useFakeTimers()` — they
+cannot verify the *visual* read (whether it genuinely looks ambient
+rather than cluttered, whether the fade timing feels right, whether
+`bottom-16` actually clears every real device's rendered composer
+height) — that remains real-device-only, reported as such.
+
 ## 2026-08-23 — Compact composer triggered iOS Safari's auto-zoom-on-focus; verified before touching anything
 
 **Problem**: focusing the compact Watch Mode composer on a real iPhone

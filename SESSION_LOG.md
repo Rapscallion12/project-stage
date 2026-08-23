@@ -177,6 +177,42 @@ specifically, plus a quick pass confirming the four Phase 2 fixes are
 still intact. Do not begin Phase 3 or the Speaker View design until
 explicitly approved.
 
+**Phase 2 confirmed on a real iPhone**: the zoom fix holds, keyboard
+behavior is acceptable, Request-to-Speak works, and the stale
+pending-request bug stays fixed.
+
+**Phase 3 (ambient live comments) implemented, same branch**: new
+`AmbientComments` component renders the last few live comments as a
+small, self-expiring stack of translucent bubbles in Watch Mode's
+lower-left, reusing the *same* `messages`/`useLobbyRealtime` stream
+every other room composition already reads — no second comment
+backend, no duplicated message state (see DECISIONS.md for the full
+ambient-vs-data-lifecycle reasoning). Seeded from the last 3 messages
+already present at mount; each message gets one ~7s fade-in/hold/fade-
+out lifecycle the first time it's seen (`ambient-comment-fade` keyframe
+in `globals.css`), tracked independently of the data's own permanence;
+a burst evicts the oldest bubble immediately rather than growing past
+3. Request-to-Speak comments reuse the existing 🎙 badge treatment.
+Each bubble carries `data-message-id` — a deliberate seam for a later
+Discussion Expanded tap handler, not implemented yet (no `onClick`).
+Wired into `PortraitRoom` as an absolutely-positioned overlay
+(`bottom-16 left-3`, click-through outside the bubbles, same pattern as
+the existing top chrome), clear of the composer row and the speaker
+identity treatment, reserving no layout space. lint/tsc/build/test all
+pass (328/328, 37 files, +14 new tests). Local production smoke test
+confirmed the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device review of Phase 3
+specifically — another device's comment appearing ambiently; the
+user's own comment appearing as quick confirmation; several comments in
+succession staying readable with natural fade/expire; comments never
+covering the composer or speaker identity; no video resize/reflow;
+keyboard/sending and Request-to-Speak still working; portrait →
+landscape → portrait regression check. Per explicit instruction, do
+**not** auto-continue to Discussion Expanded after approval — the next
+step is pausing to design/plan the Speaker View (issue #18) before any
+further social-system phases.
+
 ---
 
 ## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created

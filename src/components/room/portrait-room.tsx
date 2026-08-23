@@ -2,6 +2,7 @@ import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
+import { AmbientComments } from "@/components/room/ambient-comments";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -146,6 +147,29 @@ export function PortraitRoom({
             <GuestNameEditor initialName={identity.displayName} variant="chip" />
           </div>
         )}
+      </div>
+
+      {/*
+        Ambient comments (issue #21, Phase 3) — lower-left, absolutely
+        positioned against this component's own `relative` root, same
+        click-through pattern as the top chrome above: the outer wrapper
+        is `pointer-events-none` (so a tap in its margin still reaches
+        `SpeakerStage`/`onTapEmptySeat` underneath), each individual
+        bubble opts back into `pointer-events-auto` itself (see
+        AmbientComments's own doc comment on why — the future
+        Discussion-Expanded tap target).
+
+        `bottom-16` (64px) clears the composer row's own worst case
+        (44px emblem height + 12px shell padding = 56px from the
+        viewport bottom) with a few px of breathing room, and sits
+        below the top chrome and the self-preview slot, so it never
+        touches the persistent controls or either speaker tile's
+        identity treatment. Not reserving layout space — this is an
+        overlay, not a flow sibling, so it never resizes/reflows the
+        video underneath it.
+      */}
+      <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
+        <AmbientComments messages={messages} />
       </div>
 
       <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">

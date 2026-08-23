@@ -265,4 +265,58 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
     render(<PortraitRoom {...baseProps} />);
     expect(document.querySelector("[data-gesture-ignore]")).not.toBeInTheDocument();
   });
+
+  describe("ambient live comments (issue #21, Phase 3 — reuses the existing chat stream, no second backend)", () => {
+    it("renders nothing when there are no messages yet", () => {
+      render(<PortraitRoom {...baseProps} messages={[]} />);
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
+
+    it("shows a recent message ambiently, lower-left, click-through outside the bubbles themselves", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "great show",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      const bubble = screen.getByTestId("ambient-comment");
+      expect(bubble).toHaveTextContent("great show");
+      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      expect(wrapper.className).toMatch(/\bpointer-events-none\b/);
+      expect(bubble.className).toMatch(/\bpointer-events-auto\b/);
+    });
+
+    it("positions the ambient overlay clear of the persistent bottom composer row", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "hi",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      expect(wrapper.className).toMatch(/\babsolute\b/);
+      expect(wrapper.className).toMatch(/\bbottom-16\b/);
+      expect(wrapper.className).toMatch(/\bleft-3\b/);
+    });
+  });
 });

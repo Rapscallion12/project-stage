@@ -443,6 +443,15 @@ different dependencies. Current order:
       found a seated speaker's UI still looks like the audience Watch
       interface, which needs to be settled before the remaining phases
       decide their audience-vs-speaker placement.
+      **Phase 2 confirmed on a real iPhone. Phase 3 (ambient live
+      comments) shipped**: recent comments now render as a small,
+      self-expiring stack of translucent bubbles lower-left on the
+      stage, reusing the existing `messages`/`useLobbyRealtime` stream
+      with no new backend — see DECISIONS.md's 2026-08-23 entry.
+      Discussion Expanded, reactions, and voting/gifting remain fully
+      out of scope; per explicit instruction, the Speaker View (#18)
+      design checkpoint above stays next after Phase 3's real-device
+      confirmation, not Discussion Expanded.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
