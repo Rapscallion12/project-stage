@@ -4,6 +4,89 @@ Newest entry first.
 
 ---
 
+## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)
+
+**Goal**: Continuation of Session 22's Figma-only design-exploration work
+(00 → 05e across the `Virtual Stage — UI Exploration` file). This session
+finished that exploration, got it approved, then began translating it
+into real code.
+
+**Figma work completed this session** (all in the existing exploration
+file, no Virtual Stage code touched until the implementation phase
+below): installed the official Figma MCP plugin and, separately, the
+official Playwright MCP server (needed for external-URL capture — the
+Figma capture tool only supports localhost via script injection or
+external URLs via Playwright, and editing source code to inject a
+capture script was explicitly off-limits); captured the real deployed
+production Watch Mode into Figma as the `00` baseline; built `01`
+(Minimal Video-First), `02` (Social Video), `03` (Immersive Stage) and a
+`03b` Discussion-Mode sketch; iterated based on user feedback into a
+`04` "Social Stage" family (04/04a/04b/04c) merging the strongest ideas
+from `02`/`03`/`03b`; then a final `05` family
+(05/05a/05b/05c/05d/05e) incorporating: always-accessible quick
+commenting (no mode gate), ambient ampule comments left / reactions
+right, a persistent glass-style bottom row (composer · React · Vote ·
+Gift), targeted double-tap reactions, and Gift as the fourth
+participation action replacing a since-removed standalone Comments
+emblem. Hit and recovered from a Figma Starter-plan rate limit
+(20 calls/month) mid-session — user upgraded to a Pro/Dev seat
+(200/day) to unblock. Caught and fixed several construction-only bugs
+along the way (ambiguous `findOne` matches tinting the wrong node,
+default-white auto-layout fills, an errant `resize()` locking a
+callout to 1px) — all caught via screenshot review before being
+reported as done, never left in the file.
+
+**Real-device implementation approved and begun**: full architectural
+survey before any code changed (see DECISIONS.md's 2026-08-23 entry for
+the complete findings) — confirmed reactions today are durable/
+per-message with no ambient concept, voting is entirely unbuilt (#25
+territory), the composer's request-to-speak/send logic must be reused
+not duplicated, `useLiveRoomConnection` already sits correctly above
+all composition branching, and the "ephemeral broadcast, no row per
+event" principle documented in ARCHITECTURE.md has zero existing
+implementations. Produced a 7-phase implementation plan (static shell →
+composer → ambient comments → Discussion Expanded → emoji broadcast →
+double-tap targeting → Vote/Gift shells), approved with clarifications:
+Discussion Expanded is an explicit, scoped exception to "Watch Mode
+never resizes video" (governing invariant there is stable media
+identity, not immutable geometry); Vote/Gift stay local-UI prototype
+shells with zero backend; the emoji quick-set stays replaceable data,
+not the final reaction architecture; ambient reactions need rate
+protection when built. Checkpoint tagged
+(`prototype-pre-05-implementation-stable` at `5c36d8b`, identical
+content to `prototype-pre-figma-stable` — tagged again because it marks
+a different milestone). Issue #21 retitled/re-scoped (kept, not
+replaced — same underlying problem, mechanism changed twice) to own
+Phases 1–4; Phases 5–6 and 7 proposed as two new issues to be created
+only once those phases actually start, per explicit instruction not to
+create speculative board churn.
+
+**Phase 1 (static shell) implemented on `feature/social-stage-shell`**:
+`PortraitRoom` rebuilt — video-first, minimal top chrome replacing
+`RoomHeader` for this composition, lightweight top-anchored speaker
+identity (portrait-only; landscape's own header-overlay would collide
+with it, left unchanged), and the new persistent
+composer/React/Vote/Gift control row (`WatchModeControls`, new), all
+functionally inert (`disabled`) in this phase. `StageOverlayShell`
+gained an opt-in `gradient={false}` and `GuestNameEditor` gained an
+opt-in `variant="chip"` — both additive, no existing caller's
+appearance changes. The old Comments Mode toggle/panel is removed from
+`PortraitRoom` entirely (not run in parallel) — commenting/reading are
+temporarily unavailable on this branch until Phases 2/4 restore them.
+lint/tsc/build/test all pass (293/293, 35 files). Structural local
+production smoke test confirmed `watch-composer`/`watch-status-pill`
+present, `comments-toggle` gone, from the actual server-rendered route.
+
+**Next task**: stop for the user's own real-device confirmation of
+Phase 1's static layout on mobile portrait specifically — no chat/react/
+vote/gift functionality to test yet, only that the video-first
+hierarchy, top chrome, and inert control row look and feel right, and
+that nothing existing (tap-to-join, camera/mic activation, leave-stage/
+promotion-countdown, guest name editing) regressed. Do not begin Phase 2
+until explicitly approved.
+
+---
+
 ## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created
 
 **Goal**: Continuation of Session 21's participation-friction design work,

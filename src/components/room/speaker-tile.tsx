@@ -2,8 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
+import { cn } from "@/lib/utils";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { Orientation } from "@/hooks/use-orientation";
 
 function initials(name: string): string {
   return name.trim().slice(0, 2).toUpperCase() || "?";
@@ -58,6 +60,8 @@ export function SpeakerTile({
   onTapEmptySeat,
   isJoiningSeat = false,
   isReconnecting = false,
+  orientation = "landscape",
+  clearTopChrome = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -72,6 +76,23 @@ export function SpeakerTile({
   isJoiningSeat?: boolean;
   /** Real-device reconnect-grace-period finding: true when `useSpeakerReconnectGrace` has been watching this seat's occupant be absent from LiveKit for a while, still within the grace period — always false for the local viewer's own seat (see that hook's own doc comment for why). Shown as "Speaker reconnecting…" instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
   isReconnecting?: boolean;
+  /**
+   * Issue #21 (05 interaction model): portrait gets the new lightweight
+   * top-anchored identity treatment (a small presence dot + name with a
+   * drop-shadow, no background bar) — landscape keeps today's original
+   * bottom-gradient name label completely unchanged. Landscape's own
+   * `RoomHeader`-as-overlay already occupies the top of both tiles (they
+   * sit side by side, both starting at y=0), so moving the label there
+   * would collide with it; that's out of scope for this pass ("no
+   * landscape redesign beyond avoiding regressions" — see DECISIONS.md).
+   * Optional, defaulting to `"landscape"` (today's original treatment) —
+   * the one real caller, `SpeakerStage`, always passes this explicitly;
+   * the default only matters for tests that don't care which identity
+   * treatment renders.
+   */
+  orientation?: Orientation;
+  /** Only meaningful in portrait: true for whichever tile renders visually first (seat 1, or the promoted-open-seat's sibling when reordered) — offsets the identity label below the room's own top-chrome status pill/guest chip so they don't overlap. The second tile has nothing above it and needs no offset. */
+  clearTopChrome?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -200,12 +221,28 @@ export function SpeakerTile({
         </div>
       )}
       {!isLocal && <audio ref={audioRef} autoPlay />}
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
-        <p className="truncate text-sm font-medium text-white">
-          {speaker.display_name}
-          {isLocal ? " (you)" : ""}
-        </p>
-      </div>
+      {orientation === "portrait" ? (
+        <div
+          data-testid="speaker-identity"
+          className={cn("absolute left-3 flex items-center gap-1.5", clearTopChrome ? "top-12" : "top-3")}
+        >
+          <span
+            aria-hidden="true"
+            className="h-[7px] w-[7px] shrink-0 rounded-full bg-emerald-400 [filter:drop-shadow(0_1px_2px_rgb(0_0_0/0.65))]"
+          />
+          <p className="truncate text-sm font-semibold text-white [text-shadow:0_1px_4px_rgb(0_0_0/0.65)]">
+            {speaker.display_name}
+            {isLocal ? " (you)" : ""}
+          </p>
+        </div>
+      ) : (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
+          <p className="truncate text-sm font-medium text-white">
+            {speaker.display_name}
+            {isLocal ? " (you)" : ""}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

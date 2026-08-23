@@ -7,6 +7,24 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`PortraitRoom` rebuilt for the approved "05 — Social Stage" model,
+  Phase 1 of 7 (static shell only)** — video-first Watch Mode replaces
+  the tap-toggle Watch Mode / Comments Mode split entirely (not
+  alongside it). `RoomHeader` replaced by a minimal top-chrome status
+  pill + guest-identity chip; `SpeakerTile`'s name label moved from a
+  bottom gradient bar to a lightweight top-anchored dot+name in
+  portrait (landscape unchanged — its own header overlay would collide
+  with the new style); new `WatchModeControls` renders the persistent
+  composer + React/Vote/Gift emblems, all `disabled` in this phase.
+  `StageOverlayShell` gained an opt-in `gradient={false}` and
+  `GuestNameEditor` gained an opt-in `variant="chip"` — both additive,
+  every existing caller unaffected. Commenting/reading are temporarily
+  unavailable on this feature branch until Phases 2/4 restore them —
+  not merged to `main` yet. See DECISIONS.md for the full architecture
+  survey and 7-phase plan this begins.
+
 ### Fixed
 
 - **`GuestNameEditor` no longer gets stuck in editing mode after tapping

@@ -377,7 +377,7 @@ different dependencies. Current order:
       built here, composing rather than being replaced. **Not checked
       off** — pending the user's own real-device confirmation. See
       SESSION_LOG.md and DECISIONS.md.
-- [x] Chat/voting focus interactions (issue #21) — **gesture retired;
+- [ ] Social Stage (05) interaction shell (issue #21) — **gesture retired;
       rebuilt as Watch Mode / Comments Mode, a plain tap toggle
       (2026-08-22), both mobile orientations**: real-device testing of
       the room-level drag gesture (previous approach, kept below for
@@ -415,8 +415,22 @@ different dependencies. Current order:
       remains deliberately unbuilt until that redesign happens. A small
       same-day follow-up fixed `GuestNameEditor` not exiting its editing
       state on blur/outside-tap (unrelated to the mode toggle itself —
-      see the entry below). See ARCHITECTURE.md, DECISIONS.md, and
-      SESSION_LOG.md.
+      see the entry below).
+      **Superseded (2026-08-23), unchecked again**: the confirmed
+      tap-based Watch Mode / Comments Mode above went through a full
+      Figma exploration pass (00 → 05e) and the resulting "05 — Social
+      Stage" interaction model is now being implemented as real code in
+      its place, phased across 7 stages, one real-device-tested
+      milestone at a time. **Phase 1 (static shell) shipped**: video-first
+      Watch Mode, minimal top chrome (replacing `RoomHeader` for this
+      composition), lightweight top-anchored speaker identity (portrait
+      only — landscape unchanged), and the persistent
+      composer/React/Vote/Gift control row — all visually final, all
+      functionally inert until their own later phase. Commenting/reading
+      are both temporarily unavailable on the feature branch until
+      Phases 2/4 restore them with the new model — not merged to `main`
+      until real-device confirmed. See DECISIONS.md's 2026-08-23 entry
+      for the full architecture survey, phased plan, and issue mapping.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

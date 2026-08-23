@@ -35,4 +35,24 @@ describe("StageOverlayShell (real-device finding: an actionable tile could end u
     expect(overlay.className).toMatch(/\bbottom-0\b/);
     expect(overlay.className).toMatch(/\bz-10\b/);
   });
+
+  describe("gradient opt-out (issue #21, 05 interaction model: small glass emblems carry their own legibility, not a full-height wash)", () => {
+    it("defaults to the existing gradient wash — unchanged for callers that don't opt out", () => {
+      render(<StageOverlayShell>content</StageOverlayShell>);
+      expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bfrom-black\/90\b/);
+    });
+
+    it("omits the gradient entirely when gradient={false}, keeping the click-through structure intact", () => {
+      render(
+        <StageOverlayShell gradient={false}>
+          <button type="button">Do something</button>
+        </StageOverlayShell>,
+      );
+      const overlay = screen.getByTestId("stage-bottom-overlay");
+      expect(overlay.className).not.toMatch(/\bfrom-black\/90\b/);
+      expect(overlay.className).toMatch(/\bpointer-events-none\b/);
+      const inner = overlay.firstElementChild as HTMLElement;
+      expect(inner.className).toMatch(/\bpointer-events-auto\b/);
+    });
+  });
 });

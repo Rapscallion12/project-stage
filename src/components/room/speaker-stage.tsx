@@ -161,6 +161,8 @@ export function SpeakerStage({
           onTapEmptySeat={viewerIsSpeaking ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           isReconnecting={identity !== null && reconnectingIdentities.has(identity)}
+          orientation={orientation}
+          clearTopChrome={seatNumber === 1}
         />
       </div>
     );

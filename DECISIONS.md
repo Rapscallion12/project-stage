@@ -3,6 +3,120 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-23 — "05 — Social Stage" real-device implementation begins: architecture survey, phased plan, Phase 1 (static shell)
+
+**Problem**: the approved Figma "05" interaction model (video-first Watch
+Mode, ambient comments/reactions, a persistent bottom control row,
+Discussion Expanded) needed to move from static design into real code
+without destabilizing the stable Watch Mode / Comments Mode
+implementation it replaces, and without redoing work the app already
+has (request-to-speak, the composer's actions, LiveKit connection
+ownership).
+
+**Investigation** (full architectural survey before any code changed):
+confirmed reactions today are durable, per-message, DB-backed
+(`event_chat_message_reactions` — one row per (message, emoji,
+identity)) with no ambient/floating concept and no double-tap handling
+anywhere; confirmed voting is entirely unbuilt (issue #25 territory —
+no table, no action, only planning prose); confirmed the composer's
+mic-request/send unification (`ChatPanel`, `micRequestMode` as a
+controlled prop lifted to `EventRoom`, the synchronous
+`onPrepareMedia()` call inside `onSubmit` for Safari's gesture
+requirement) is exactly right and must be reused, not duplicated;
+confirmed `useLiveRoomConnection` already lives strictly above all
+orientation/composition branching, exactly where it needs to stay;
+confirmed `SpeakerStage`'s tiles have existing tap-to-join/tile-activate
+buttons a new double-tap handler must coexist with via
+`event.target`-based exclusion, not replace; confirmed
+`ARCHITECTURE.md`'s "ephemeral broadcast, no row per event" principle
+is documented but has zero implementations anywhere in the codebase —
+ambient reactions will be the first; confirmed no gifting/payment code
+exists anywhere, and `PRODUCT.md`/`ROADMAP.md` list donations/payments
+as explicitly out of scope (the approved gift *UI shell*, with no
+backend at all, is a deliberate, scoped exception to that list, not a
+reversal of it).
+
+**Decision — phased implementation, one real-device-testable milestone
+at a time**, stopping for the user's own approval after each:
+
+1. Static layout shell (this entry)
+2. Compact composer / Request-to-Speak, wired to the *existing* actions
+3. Ambient comment feed (presentation-only, off the existing chat
+   stream — no new backend)
+4. Discussion Expanded (05d) — compressed video + discussion surface
+5. Emoji quick-tray, ambient-only (first real ephemeral-broadcast
+   implementation)
+6. Double-tap targeting, layered onto the proven broadcast plumbing
+7. Vote/Gift quick-access trays — local-UI prototype shells only, no
+   persistence, no backend, explicitly not #25's real voting system and
+   not a real monetization system
+
+**Governing invariant restated** (user's explicit clarification): the
+long-standing "Watch Mode never shrinks/rearranges video" rule still
+holds for Watch Mode and its lightweight expansions (React/Vote/Gift
+trays). Discussion Expanded is now an intentional, explicit exception —
+the *invariant that must hold there* is stable media identity (same
+`SpeakerStage`/tile instances mounted throughout, no LiveKit
+reconnect/republish/reacquire, self-preview intact, Watch Mode restores
+without rebuilding the media session), not immutable CSS geometry. This
+replaces, not just refines, the older "video geometry is stable, only
+what's layered over it changes" phrasing everywhere it appears in this
+project's docs going forward, for this one transition specifically.
+
+**Rollback**: `prototype-pre-05-implementation-stable` tagged at
+`5c36d8b` (identical commit to `prototype-pre-figma-stable` — no code
+had changed between them, only Figma work — tagged again because it
+marks a different milestone: start of real implementation, not start of
+design exploration). Implementation proceeds on `feature/social-stage-shell`,
+never directly on `main`.
+
+**Issue mapping** (per explicit instruction not to mechanically split
+work into new issues): Phases 1–4 stay under #21 — retitled from its
+original "dead-zone gesture" premise (already twice-superseded within
+this same issue's own history) to reflect the approved 05 model; the
+underlying problem never changed, only the mechanism, twice. Phases 5–6
+(ambient reactions) and Phase 7 (Vote/Gift shells) are proposed as two
+*new* issues once those phases actually begin — deliberately not
+created yet, to avoid "unnecessary board churn" for work that hasn't
+started. Neither #25 (real voting) nor #18 (role-based views) is
+touched by any of this.
+
+### Phase 1 (static shell) — what shipped
+
+`PortraitRoom` rebuilt: `RoomHeader` replaced by a minimal top-chrome
+status pill (live dot + title, connection-status word appended only
+when not "connected" — the one safety-relevant piece of `RoomHeader`'s
+job worth keeping) plus a guest-identity chip (`GuestNameEditor`'s new
+opt-in `variant="chip"` — additive, every existing caller keeps its
+exact current appearance). `StageOverlayShell` gained an opt-in
+`gradient={false}` — the old always-on wash was sized for a
+permanently-visible chat block; the new design's controls carry their
+own individual translucent backgrounds, and every existing caller
+(`MobileLandscapeRoom`) is unaffected since the prop defaults to `true`.
+New `WatchModeControls`: the composer + React/Vote/Gift emblems, all
+`disabled` in this phase — real markup, inert behavior, so later phases
+only remove `disabled` and add handlers rather than restructure
+anything. `SpeakerTile`'s identity label moved from a bottom gradient
+bar to a lightweight top-anchored dot+name (portrait only — landscape
+keeps its original treatment unchanged, since `MobileLandscapeRoom`'s
+own header-as-overlay already occupies the top of both its
+side-by-side tiles and would collide with the new style; a
+`clearTopChrome` flag additionally offsets seat 1's label below the new
+top-chrome row specifically, since only whichever tile renders visually
+first in portrait can ever be under it). The old Comments Mode toggle,
+`RoomChatPanel` mount, and `useCommentsMode` call are removed from
+`PortraitRoom` entirely for this phase — commenting/reading are both
+temporarily unavailable on this branch (not merged to `main`) until
+Phases 2 and 4 restore them with the new model. The reserved
+conversation-seam slot (`speaker-divider`) is untouched, no fabricated
+timer added.
+
+**Tradeoffs accepted for this phase**: participant/viewer count is
+dropped from the persistent chrome, matching the approved Figma
+design's explicit minimalism — not lost (still received as a prop),
+just not surfaced yet; trivial to add back if real-device review misses
+it.
+
 ## 2026-08-22 — Watch Mode / Comments Mode confirmed stable on real devices; `GuestNameEditor` blur-commit fix
 
 **Status update, not a design change**: the tap-based Watch Mode /

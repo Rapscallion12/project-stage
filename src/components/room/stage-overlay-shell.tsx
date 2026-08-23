@@ -18,21 +18,36 @@ import type { ReactNode } from "react";
  * is `pointer-events-auto`. `topClassName` controls how tall that
  * decorative spacer is — portrait can afford more of it than the
  * shorter, more space-constrained mobile-landscape composition.
+ *
+ * `gradient` (issue #21, 05 interaction model): the always-on wash was
+ * sized for a permanently-visible chat strip/control block underneath
+ * it. The 05 design's bottom controls are small individual translucent
+ * "glass" emblems that carry their own legibility, not one tall panel —
+ * a full-height gradient behind them would reintroduce exactly the
+ * "video isn't the dominant surface" look that redesign was rejecting.
+ * Defaults to `true` (today's existing wash, unchanged) so every
+ * existing caller (`MobileLandscapeRoom`) keeps its current appearance;
+ * only a caller that explicitly wants the lighter treatment opts out.
+ * The click-through-outer/interactive-inner structure — the actual bug
+ * fix this component exists for — is identical either way.
  */
 export function StageOverlayShell({
   children,
   topClassName = "pt-14",
   className,
+  gradient = true,
 }: {
   children: ReactNode;
   topClassName?: string;
   className?: string;
+  gradient?: boolean;
 }) {
   return (
     <div
       data-testid="stage-bottom-overlay"
       className={cn(
-        "stage-overlay pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/90 via-black/60 to-transparent",
+        "stage-overlay pointer-events-none absolute inset-x-0 bottom-0 z-10",
+        gradient && "bg-gradient-to-t from-black/90 via-black/60 to-transparent",
         topClassName,
       )}
     >
