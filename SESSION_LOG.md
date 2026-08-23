@@ -85,6 +85,41 @@ that nothing existing (tap-to-join, camera/mic activation, leave-stage/
 promotion-countdown, guest name editing) regressed. Do not begin Phase 2
 until explicitly approved.
 
+**Phase 1 confirmed on a real iPhone** — video-first direction, minimal
+chrome, and the inert bottom controls all landed as intended; camera/mic
+activation and being on stage both still work.
+
+**Phase 2 (functional composer) implemented, same branch**: gave
+`ChatPanel` an opt-in `compact` prop rather than a second component —
+same `sendMessage`/`submitSpeakerRequest` actions, same
+`micRequestMode` contract, same synchronous `onPrepareMedia()` submit
+order, only the surrounding chrome differs (no message list, no
+quick-emoji row, glass-pill styling). `WatchModeControls` gained a
+`composer` slot; `PortraitRoom` wires the compact `ChatPanel` into it
+using the same `RoomLayoutProps` fields `RoomChatPanel` already used
+elsewhere. Mic-on state tints the pill/mic-icon accent-colored, no size
+change. React/Vote/Gift remain `disabled`; no ambient comments,
+Discussion Expanded, reactions, or voting/gifting yet — still out of
+scope. lint/tsc/build/test all pass (305/305, 35 files). Local
+production smoke test confirmed the real composer/mic-toggle markup
+renders from the actual built route.
+
+**Speaker View flagged as the next checkpoint, not started**: the
+user's real-device Phase 1 test surfaced that a seated speaker's UI
+still looks like the audience Watch interface, which isn't the intended
+final behavior — scoped to existing issue #18, to be designed *after*
+Phase 2 is confirmed and *before* Phases 3–7, since ambient comments/
+Discussion Expanded/reactions/voting/gifting may need different
+placement depending on audience-vs-speaker role.
+
+**Next task**: stop for the user's own real-device confirmation of
+Phase 2 specifically — ordinary comment sending, keyboard open/close
+behavior, Request-to-Speak toggle/submission, that plain commenting
+never triggers a camera/mic prompt, existing seat/stage behavior,
+portrait → landscape → portrait, and returning to Watch after keyboard
+dismissal. Do not begin Phase 3 or the Speaker View design/
+implementation until explicitly approved.
+
 ---
 
 ## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created

@@ -9,6 +9,16 @@ separate release cadence to track here.
 
 ### Changed
 
+- **"05 — Social Stage" Phase 2: the persistent Watch Mode composer is
+  now functional** — real sending, real Request-to-Speak, reusing
+  `ChatPanel`'s existing actions/gesture-safety logic verbatim via a
+  new opt-in `compact` prop (message list and quick-emoji row hidden,
+  form re-styled as a small glass pill) rather than duplicating any of
+  it. `WatchModeControls` gained a `composer` slot for this.
+  Mic-on state tints the pill/mic-icon accent-colored without changing
+  size. React/Vote/Gift remain inert; no ambient comments, Discussion
+  Expanded, reactions, or voting/gifting yet. See DECISIONS.md.
+
 - **`PortraitRoom` rebuilt for the approved "05 — Social Stage" model,
   Phase 1 of 7 (static shell only)** — video-first Watch Mode replaces
   the tap-toggle Watch Mode / Comments Mode split entirely (not

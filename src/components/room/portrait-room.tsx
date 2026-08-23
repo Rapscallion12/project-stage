@@ -3,26 +3,33 @@ import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
+import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * "05 — Social Stage" (issue #21, approved Figma interaction model,
- * Phase 1 — static shell only): video-first Watch Mode with minimal
- * top chrome and a persistent bottom control row, replacing the
- * previous Watch Mode / Comments Mode split entirely rather than
- * running the two side by side. See DECISIONS.md for the full
- * investigation/plan this implements and the phased rollout it's part
- * of — this file is Phase 1 of 7.
+ * "05 — Social Stage" (issue #21, approved Figma interaction model):
+ * video-first Watch Mode with minimal top chrome and a persistent
+ * bottom control row, replacing the previous Watch Mode / Comments
+ * Mode split entirely rather than running the two side by side. See
+ * DECISIONS.md for the full investigation/plan this implements and the
+ * phased rollout it's part of.
  *
- * **What Phase 1 deliberately does NOT do yet** (later phases, each
- * gated on the user's own real-device approval of the previous one):
- * - The composer, React/Vote/Gift emblems (`WatchModeControls`) are
- *   real, final markup but functionally inert (`disabled`) — no send,
- *   no request-to-speak, no reactions, no voting, no gifting yet.
- * - There is no way to read or open the discussion surface yet
- *   (Discussion Expanded is Phase 4) — commenting/reading are both
- *   temporarily unavailable on this branch, not merged to `main`.
+ * **Phase 1 (static shell)** shipped the layout with every control
+ * inert. **Phase 2 (this revision)** makes the composer real: the
+ * `WatchModeControls` composer slot now renders `ChatPanel`'s
+ * `compact` mode directly — the *same* `sendMessage`/
+ * `submitSpeakerRequest` actions, the *same* `micRequestMode` contract,
+ * the *same* synchronous `onPrepareMedia()` submit order ChatPanel
+ * already had (see its own doc comment) — nothing about that logic is
+ * duplicated here, only the surrounding chrome differs. React/Vote/Gift
+ * stay `disabled` placeholders until their own later phase.
+ *
+ * **What still doesn't exist yet** (later phases, each gated on the
+ * user's own real-device approval of the previous one):
+ * - There is no way to *read* comments or open a discussion surface
+ *   yet (Discussion Expanded is Phase 4) — only sending is live.
  * - No ambient comment/reaction layers yet (Phases 3, 5, 6).
+ * - React/Vote/Gift emblems are still inert (Phases 5/6, 7).
  * - Desktop and mobile landscape are untouched — this file only
  *   affects `PortraitRoom`.
  *
@@ -70,8 +77,11 @@ export function PortraitRoom({
   identity,
   isSpeaker,
   hasPendingRequest,
+  onHasPendingRequestChange,
   promotionCountdown,
   onCancelPromotion,
+  micRequestMode,
+  onMicRequestModeChange,
   onTapEmptySeat,
   isJoiningSeat,
   joinSeatMessage,
@@ -84,6 +94,8 @@ export function PortraitRoom({
   localVideoTrack,
   onPrepareMedia,
   reconnectingIdentities,
+  messages,
+  reactions,
 }: RoomLayoutProps) {
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -153,7 +165,20 @@ export function PortraitRoom({
             />
           </div>
         )}
-        <WatchModeControls />
+        <WatchModeControls
+          composer={
+            <ChatPanel
+              eventId={event.id}
+              messages={messages}
+              reactions={reactions}
+              micRequestMode={micRequestMode}
+              onMicRequestModeChange={onMicRequestModeChange}
+              onHasPendingRequestChange={onHasPendingRequestChange}
+              onPrepareMedia={onPrepareMedia}
+              compact
+            />
+          }
+        />
       </StageOverlayShell>
     </div>
   );

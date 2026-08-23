@@ -431,6 +431,18 @@ different dependencies. Current order:
       Phases 2/4 restore them with the new model — not merged to `main`
       until real-device confirmed. See DECISIONS.md's 2026-08-23 entry
       for the full architecture survey, phased plan, and issue mapping.
+      **Phase 1 confirmed on a real iPhone.** **Phase 2 (functional
+      composer) shipped**: the persistent bottom composer now sends
+      real comments and Request-to-Speak submissions, reusing
+      `ChatPanel`'s existing actions/gesture-safety logic verbatim (a
+      new opt-in `compact` prop, not a duplicate implementation).
+      React/Vote/Gift still inert; ambient comments, Discussion
+      Expanded, reactions, and voting/gifting all still out of scope.
+      A **Speaker View** design checkpoint (scoped to existing #18) is
+      now queued between Phase 2 and Phase 3 — real-device testing
+      found a seated speaker's UI still looks like the audience Watch
+      interface, which needs to be settled before the remaining phases
+      decide their audience-vs-speaker placement.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

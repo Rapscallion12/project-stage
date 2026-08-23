@@ -38,7 +38,21 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * state or a `.then()` — same Safari gesture requirement as
  * `activateMedia` (see useLiveRoomConnection). It never calls
  * `preventDefault()`, so React's `action` still submits the request
- * normally; the two just both react to the same click.
+ * normally; the two just both react to the same click. Ordinary
+ * comment submission never touches `onPrepareMedia` at all — only the
+ * `micRequestMode` branch's `onSubmit` calls it, so a plain "just
+ * commenting" viewer is never prompted for camera/mic permission.
+ *
+ * `compact` (issue #21, "05 — Social Stage" Phase 2): renders only the
+ * form itself — no message history, no quick-emoji row — as a small
+ * translucent "glass" pill for Watch Mode's persistent bottom
+ * composer. Same two `useActionState` hooks, same `micRequestMode`
+ * contract, same synchronous `onPrepareMedia()` submit order as above
+ * — nothing about the actions/gesture-safety logic is duplicated or
+ * reimplemented, only the JSX differs. `messages`/`reactions` are
+ * simply unused in this mode (still required props so callers that
+ * already have them in scope — `RoomLayoutProps` — don't need a
+ * separate code path to obtain them).
  */
 export function ChatPanel({
   eventId,
@@ -48,6 +62,7 @@ export function ChatPanel({
   onMicRequestModeChange,
   onHasPendingRequestChange,
   onPrepareMedia,
+  compact = false,
 }: {
   eventId: string;
   messages: LobbyMessage[];
@@ -56,6 +71,7 @@ export function ChatPanel({
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
   onPrepareMedia: () => Promise<void>;
+  compact?: boolean;
 }) {
   const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
   const [requestState, requestFormAction, requestPending] = useActionState(
@@ -107,6 +123,105 @@ export function ChatPanel({
     inputRef.current.focus();
   }
 
+  const form = (
+    <form
+      data-testid="chat-composer-form"
+      action={micRequestMode ? requestFormAction : sendFormAction}
+      onSubmit={
+        micRequestMode
+          ? () => {
+              void onPrepareMedia();
+            }
+          : undefined
+      }
+      className={compact ? "flex items-center gap-2" : "flex gap-2"}
+    >
+      {compact ? (
+        <div
+          className={cn(
+            "flex h-11 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors",
+            micRequestMode ? "border-accent/60 bg-accent/15" : "border-white/30 bg-white/[0.14]",
+          )}
+        >
+          <button
+            type="button"
+            data-testid="watch-composer-mic"
+            onClick={() => onMicRequestModeChange(!micRequestMode)}
+            disabled={pending}
+            aria-pressed={micRequestMode}
+            aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
+            className={cn(
+              "flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-xs transition-colors disabled:opacity-50",
+              micRequestMode ? "bg-accent text-white" : "bg-white/10 text-white/80",
+            )}
+          >
+            🎙
+          </button>
+          <input
+            ref={inputRef}
+            name="body"
+            placeholder={micRequestMode ? "What do you want to talk about?" : "Add a comment…"}
+            autoComplete="off"
+            maxLength={500}
+            required
+            className="min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-white/50 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={pending}
+            aria-label={micRequestMode ? "Send speaker request" : "Send comment"}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs text-white disabled:opacity-50"
+          >
+            ↑
+          </button>
+        </div>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => onMicRequestModeChange(!micRequestMode)}
+            disabled={pending}
+            aria-pressed={micRequestMode}
+            aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
+            className={cn(
+              "flex min-h-11 w-11 shrink-0 items-center justify-center rounded-full border text-base transition-colors disabled:opacity-50",
+              micRequestMode
+                ? "border-accent bg-accent/15 text-accent"
+                : "border-border text-muted hover:bg-foreground/5",
+            )}
+          >
+            🎤
+          </button>
+          <Input
+            ref={inputRef}
+            name="body"
+            placeholder={micRequestMode ? "What do you want to talk about?" : "Say something…"}
+            autoComplete="off"
+            maxLength={500}
+            required
+            className="flex-1"
+          />
+          <Button type="submit" disabled={pending}>
+            {micRequestMode ? (pending ? "Requesting…" : "Request") : pending ? "Sending…" : "Send"}
+          </Button>
+        </>
+      )}
+    </form>
+  );
+
+  if (compact) {
+    return (
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {form}
+        {error && (
+          <p className="rounded-lg bg-black/35 px-3 py-1.5 text-xs text-red-400" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-2">
@@ -137,45 +252,7 @@ export function ChatPanel({
             </button>
           ))}
         </div>
-        <form
-          action={micRequestMode ? requestFormAction : sendFormAction}
-          onSubmit={
-            micRequestMode
-              ? () => {
-                  void onPrepareMedia();
-                }
-              : undefined
-          }
-          className="flex gap-2"
-        >
-          <button
-            type="button"
-            onClick={() => onMicRequestModeChange(!micRequestMode)}
-            disabled={pending}
-            aria-pressed={micRequestMode}
-            aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
-            className={cn(
-              "flex min-h-11 w-11 shrink-0 items-center justify-center rounded-full border text-base transition-colors disabled:opacity-50",
-              micRequestMode
-                ? "border-accent bg-accent/15 text-accent"
-                : "border-border text-muted hover:bg-foreground/5",
-            )}
-          >
-            🎤
-          </button>
-          <Input
-            ref={inputRef}
-            name="body"
-            placeholder={micRequestMode ? "What do you want to talk about?" : "Say something…"}
-            autoComplete="off"
-            maxLength={500}
-            required
-            className="flex-1"
-          />
-          <Button type="submit" disabled={pending}>
-            {micRequestMode ? (pending ? "Requesting…" : "Request") : pending ? "Sending…" : "Send"}
-          </Button>
-        </form>
+        {form}
         {error && (
           <p className="mt-1.5 text-xs text-red-500" role="alert">
             {error}

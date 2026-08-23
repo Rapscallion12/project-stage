@@ -3,6 +3,62 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-23 — "05 — Social Stage" Phase 2: functional composer, reusing `ChatPanel` verbatim; Speaker View flagged as the next checkpoint
+
+**Problem**: Phase 1's persistent bottom composer was a static, `disabled`
+placeholder. Phase 2 needed to make it real — actual sending, actual
+Request-to-Speak — without duplicating `ChatPanel`'s existing
+send/request actions, its `micRequestMode` controlled-prop contract, or
+its synchronous `onPrepareMedia()` submit order (the Safari
+user-gesture requirement issue #22 already solved once).
+
+**Decision**: gave `ChatPanel` itself an opt-in `compact` prop rather
+than building a second composer component or extracting a new shared
+hook. `compact` skips the message list and quick-emoji row and renders
+the form as a small translucent "glass" pill instead of the full
+Input/Button treatment — but it's the *same* `useActionState` pair, the
+same `micRequestMode` branch, the same `onSubmit` calling
+`onPrepareMedia()` synchronously only in the request branch. Nothing
+about the actions or gesture-safety logic is duplicated; only the JSX
+differs. `ChatPanel` is imported by exactly one thing
+(`RoomChatPanel`, used by `MobileLandscapeRoom`/`DesktopRoom`), and
+`compact` defaults to `false`, so neither existing caller is affected.
+
+`WatchModeControls` gained a `composer?: ReactNode` slot (defaulting to
+Phase 1's original inert placeholder when omitted) rather than special-
+casing the composer internally — `PortraitRoom` now passes the compact
+`ChatPanel` instance into that slot, wired to the same
+`RoomLayoutProps` fields (`messages`, `reactions`, `micRequestMode`,
+`onMicRequestModeChange`, `onHasPendingRequestChange`, `onPrepareMedia`)
+`RoomChatPanel` already threads through elsewhere.
+
+**Mic-on visual distinction, kept small on purpose**: the pill's own
+border/background tints accent-colored and the mic glyph's own
+26×26 circle fills solid accent — no new element, no size change, per
+the explicit "visually unmistakable without making the composer
+substantially larger" requirement.
+
+**Reason**: "reuse or extend, don't duplicate" — `ChatPanel`'s compact
+mode is the only place `sendMessage`/`submitSpeakerRequest`/
+`onPrepareMedia` wiring exists now, for both the full chat surface and
+the new persistent composer.
+
+**Tradeoffs**: none identified. React/Vote/Gift remain exactly as
+Phase 1 left them (`disabled`); no ambient comments, no Discussion
+Expanded, no realtime reactions, no voting/gifting behavior — all still
+explicitly out of scope for this phase.
+
+**Speaker View flagged, not designed, this pass**: real-device testing
+of Phase 1 surfaced that a seated speaker's UI still behaves like the
+audience Watch interface — not the intended final behavior. Per
+explicit instruction, this is a distinct checkpoint to design *after*
+Phase 2 is verified and *before* Phases 3–7 (ambient comments, Discussion
+Expanded, reactions, voting, gifting) — those systems may need
+different placement depending on audience-vs-speaker role, so the
+speaker composition should settle first. Scoped to #18 (already
+existing, role-based room UI) rather than a new issue. Explicitly not
+started in this pass.
+
 ## 2026-08-23 — "05 — Social Stage" real-device implementation begins: architecture survey, phased plan, Phase 1 (static shell)
 
 **Problem**: the approved Figma "05" interaction model (video-first Watch

@@ -1,20 +1,30 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 
+const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
+  vi.hoisted(() => ({
+    leaveSpeakerSeat: vi.fn(),
+    withdrawSpeakerRequest: vi.fn(),
+    submitSpeakerRequest: vi.fn(),
+    sendMessage: vi.fn(),
+    addReaction: vi.fn(),
+    setGuestName: vi.fn(),
+  }));
+
 vi.mock("@/app/events/[id]/room/actions", () => ({
-  leaveSpeakerSeat: vi.fn(),
-  withdrawSpeakerRequest: vi.fn(),
-  submitSpeakerRequest: vi.fn(),
+  leaveSpeakerSeat,
+  withdrawSpeakerRequest,
+  submitSpeakerRequest,
 }));
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({
-  sendMessage: vi.fn(),
-  addReaction: vi.fn(),
-  setGuestName: vi.fn(),
+  sendMessage,
+  addReaction,
+  setGuestName,
 }));
 
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
@@ -61,7 +71,11 @@ const baseProps: RoomLayoutProps = {
   reactions: {},
 };
 
-describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model, Phase 1: static shell)", () => {
+describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("gives the stage the full space, with chrome/controls layered over it as overlays — not separate blocks consuming a share of it", () => {
     render(<PortraitRoom {...baseProps} />);
     const stageWrapper = screen.getByTestId("room-stage").parentElement;
@@ -133,31 +147,89 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model, Phas
     });
   });
 
-  describe("persistent Watch Mode controls (composer + React + Vote + Gift) — visually final, functionally inert in this phase", () => {
-    it("renders all four controls", () => {
+  describe("persistent Watch Mode controls — composer real as of Phase 2, React/Vote/Gift still inert", () => {
+    it("React, Vote, and Gift stay disabled — only the composer is functional in this phase", () => {
       render(<PortraitRoom {...baseProps} />);
-      expect(screen.getByTestId("watch-composer")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-vote-emblem")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
-    });
-
-    it("every control is disabled — no send, no reactions, no voting, no gifting yet", () => {
-      render(<PortraitRoom {...baseProps} />);
-      expect(screen.getByTestId("watch-composer")).toBeDisabled();
       expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
       expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
       expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
-    it("there is no functioning text composer anywhere in this phase — commenting returns in a later phase", () => {
-      render(<PortraitRoom {...baseProps} />);
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    });
-
-    it("there is no Discussion Expanded entry point yet — no comments-toggle, no chat panel", () => {
+    it("there is no Discussion Expanded entry point yet — no comments-toggle", () => {
       render(<PortraitRoom {...baseProps} />);
       expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
+    });
+
+    describe("the composer (issue #21, '05 — Social Stage' Phase 2: reuses ChatPanel's existing send/request logic verbatim)", () => {
+      it("renders a real, focusable text field with the 'Add a comment…' placeholder — not the Phase 1 disabled placeholder", () => {
+        render(<PortraitRoom {...baseProps} />);
+        const input = screen.getByPlaceholderText("Add a comment…");
+        expect(input).toBeInTheDocument();
+        expect(input).not.toBeDisabled();
+      });
+
+      it("sending a normal comment calls the existing sendMessage action, never submitSpeakerRequest or onPrepareMedia", async () => {
+        sendMessage.mockResolvedValue(undefined);
+        const onPrepareMedia = vi.fn();
+        render(<PortraitRoom {...baseProps} onPrepareMedia={onPrepareMedia} />);
+
+        fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello room" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+
+        await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+        expect(submitSpeakerRequest).not.toHaveBeenCalled();
+        expect(onPrepareMedia).not.toHaveBeenCalled();
+      });
+
+      it("tapping the mic toggle switches to Request-to-Speak mode, changing the placeholder without enlarging the composer", () => {
+        render(<PortraitRoom {...baseProps} micRequestMode={true} />);
+        expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
+      });
+
+      it("the mic-on pill is visually distinct (accent border) from mic-off", () => {
+        const { rerender } = render(<PortraitRoom {...baseProps} micRequestMode={false} />);
+        const pillOff = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pillOff.className).not.toMatch(/\bborder-accent/);
+
+        rerender(<PortraitRoom {...baseProps} micRequestMode={true} />);
+        const pillOn = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pillOn.className).toMatch(/\bborder-accent/);
+      });
+
+      it("submitting a speaker request still calls onPrepareMedia synchronously — the existing Safari-gesture-safe submit order is preserved", () => {
+        submitSpeakerRequest.mockResolvedValue(undefined);
+        const onPrepareMedia = vi.fn();
+        render(<PortraitRoom {...baseProps} micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
+
+        fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+          target: { value: "AI and creativity" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
+
+        expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+      });
+
+      it("a successful request flips hasPendingRequest and drops the composer back to normal mode", async () => {
+        submitSpeakerRequest.mockResolvedValue(undefined);
+        const onHasPendingRequestChange = vi.fn();
+        const onMicRequestModeChange = vi.fn();
+        render(
+          <PortraitRoom
+            {...baseProps}
+            micRequestMode={true}
+            onHasPendingRequestChange={onHasPendingRequestChange}
+            onMicRequestModeChange={onMicRequestModeChange}
+          />,
+        );
+        fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+          target: { value: "AI and creativity" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
+
+        await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(true));
+        expect(onMicRequestModeChange).toHaveBeenCalledWith(false);
+      });
     });
   });
 

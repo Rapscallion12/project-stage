@@ -124,4 +124,69 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(screen.getByText("You already have a pending request.")).toBeInTheDocument());
     expect(onMicRequestModeChange).not.toHaveBeenCalledWith(false);
   });
+
+  describe("compact mode (issue #21, '05 — Social Stage' Phase 2: Watch Mode's persistent composer)", () => {
+    it("renders only the form — no message history, no quick-emoji row", () => {
+      render(<ChatPanel {...baseProps} compact messages={[{
+        id: "m1",
+        author_display_name: "Sam",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      }]} />);
+      expect(screen.queryByText("hello")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/^Insert /)).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+    });
+
+    it("defaults to the comment placeholder; mic mode switches to the request placeholder — same contract as full mode", () => {
+      const { rerender } = render(<ChatPanel {...baseProps} compact />);
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+
+      rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+      expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
+    });
+
+    it("tapping the mic toggle requests mode-change — same controlled-prop contract as full mode", () => {
+      const onMicRequestModeChange = vi.fn();
+      render(<ChatPanel {...baseProps} compact onMicRequestModeChange={onMicRequestModeChange} />);
+      fireEvent.click(screen.getByTestId("watch-composer-mic"));
+      expect(onMicRequestModeChange).toHaveBeenCalledWith(true);
+    });
+
+    it("sending a normal comment calls sendMessage, never submitSpeakerRequest or onPrepareMedia", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      const onPrepareMedia = vi.fn();
+      render(<ChatPanel {...baseProps} compact onPrepareMedia={onPrepareMedia} />);
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "nice point" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitSpeakerRequest).not.toHaveBeenCalled();
+      expect(onPrepareMedia).not.toHaveBeenCalled();
+    });
+
+    it("submitting a request in mic mode still calls onPrepareMedia synchronously, same as full mode", () => {
+      submitSpeakerRequest.mockResolvedValue(undefined);
+      const onPrepareMedia = vi.fn();
+      render(<ChatPanel {...baseProps} compact micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
+      fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+        target: { value: "AI and creativity" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
+      expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+    });
+
+    it("the mic-on state is visually distinct from mic-off, without a second/larger control appearing", () => {
+      const { rerender } = render(<ChatPanel {...baseProps} compact />);
+      const pillOff = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+      expect(pillOff.className).not.toMatch(/\bborder-accent/);
+
+      rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+      const pillOn = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+      expect(pillOn.className).toMatch(/\bborder-accent/);
+      expect(screen.getAllByRole("button")).toHaveLength(2); // mic + send only, no third control appears
+    });
+  });
 });
