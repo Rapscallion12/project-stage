@@ -7,7 +7,33 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stale "Request to speak is pending" UI after leaving the stage** —
+  a granted request that got claimed (`claimOpenSeat`) never told the
+  client its `hasPendingRequest` flag was now stale; leaving the stage
+  afterward resurrected the old pending-request UI for a request that
+  no longer existed. Root-caused and fixed in `useAutomaticPromotion`
+  (clears the flag on a successful claim) and `withdrawSpeakerRequest`/
+  `withdrawSpeakerRequestAsGuest` (treat "no pending request found" as
+  success, not a thrown error, matching what "Withdraw" should do when
+  there's genuinely nothing left to withdraw).
+- **Bottom control row (composer + React/Vote/Gift) could clip the
+  rightmost emblem on narrow phones** — a broken flexbox `min-width`
+  shrink chain, not an actual width shortage; fixed by adding `min-w-0`
+  at every nested flex level between the row and the composer's input.
+
 ### Changed
+
+- **Compact pending-request feedback** — `RoomControls`' two
+  `hasPendingRequest` states render as a single-line "🎙 Request sent ·
+  Cancel" pill in Watch Mode instead of the original paragraph+button
+  block, which real-device testing found occupied too much of the
+  video. Same information, same action; `isSpeaker`/Leave-the-stage
+  unaffected.
+- **Request-to-Speak composer placeholder shortened** to "What's your
+  topic?" (was truncating on narrower phones) — compact mode only; the
+  full `ChatPanel` keeps its original text.
 
 - **"05 — Social Stage" Phase 2: the persistent Watch Mode composer is
   now functional** — real sending, real Request-to-Speak, reusing

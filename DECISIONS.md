@@ -3,6 +3,82 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-23 — Phase 2 real-device fixes: stale Request-to-Speak state traced to its root, compact pending feedback, bottom-row overflow
+
+**Problem**: real-device testing of Phase 2 found four issues, none of
+them cosmetic-only — see the user's own report. The most important was
+issue 2: after leaving the stage, the room still showed "Your request
+is live in chat..." plus a Withdraw button that "appeared to do
+nothing." Per explicit instruction, this needed the actual lifecycle
+traced, not a UI-level hide.
+
+**Root cause, traced**: `useAutomaticPromotion`'s countdown-reaches-zero
+effect calls `claimOpenSeat`, which marks the underlying
+`speaker_requests` row `'granted'` server-side — but never told the
+caller. `hasPendingRequest` stayed stuck `true` in `EventRoom`'s state,
+merely *hidden* because `RoomControls`' `isSpeaker` branch takes
+priority while seated. The moment the speaker left the stage
+(`isSpeaker` → false again), the untouched, stale `hasPendingRequest`
+resurrected the "still pending" UI for a request that had already been
+consumed by a promotion the speaker didn't even use anymore.
+
+Compounding it: pressing "Withdraw" called the existing
+`withdrawSpeakerRequest`, whose underlying RPCs (migrations
+00000000000011/00000000000012) `raise exception` "no pending request
+found..." when the row's status isn't `'pending'` — exactly the state a
+granted-then-abandoned request is in. That exception surfaced as a
+generic UI error, and critically, `useAutomaticPromotion.cancel()` only
+cleared `hasPendingRequest` on a *successful* result, so the flag never
+cleared — the button "did nothing" because it was failing silently.
+
+**Decision — two independent fixes, not one band-aid**:
+1. **Root fix**: `claimOpenSeat` succeeding now calls
+   `onHasPendingRequestChange(false)` immediately (a failed/lost-race
+   claim still does *not* clear it — silently resets to waiting, per
+   this hook's own pre-existing documented intent). This is what
+   prevents the stale state from ever arising in the first place.
+2. **Recovery fix**: `withdrawSpeakerRequest`/`withdrawSpeakerRequestAsGuest`
+   (repository layer) now return `null` — not a thrown error — when the
+   RPC's specific "no pending request found" exception fires, matching
+   this codebase's existing pattern of matching specific RPC exception
+   text (`requestToSpeak`'s own catch block does the same). "Nothing
+   left to withdraw" and "successfully withdrew" both mean the same
+   thing to the caller (no pending request remains), so the action layer
+   now returns `{ok: true}` either way, and Withdraw/Cancel always
+   correctly clears the flag even if the root fix's timing is somehow
+   missed (multi-tab, a stale client, etc.).
+
+**Compact pending-request feedback**: `RoomControls` gained an opt-in
+`compact` prop, applied only to its two `hasPendingRequest` states (not
+`isSpeaker`/Leave-the-stage, which real-device testing didn't flag) —
+same information, same `onCancelPromotion` action, same
+`mediaErrorNotice`, rendered as a single-line "🎙 Request sent · Cancel"
+pill instead of a paragraph+button block. `PortraitRoom` wraps only the
+`isSpeaker` case in its own background box now; the compact pill already
+carries its own.
+
+**Bottom-row overflow on narrow phones**: the actual cause was a broken
+flexbox shrink chain, not a genuine width shortage — `WatchModeControls`'
+three emblems are deliberately `shrink-0` (comfortable tap targets,
+never compressed), leaving the composer as the only element allowed to
+shrink. A flex item's default `min-width` is `auto` (its own content's
+size), not `0`; the composer's form and its inner pill were both
+missing an explicit `min-w-0`, capping how far they could actually
+compress before the row's total width exceeded the viewport — pushing
+Gift (the last item) partially off-screen. Fixed by adding `min-w-0` at
+every nested flex level between the row and the `<input>` — the chain
+only needs to be broken once to cap the whole thing.
+
+**Placeholder truncation**: the compact composer's Request-to-Speak
+placeholder shortened from "What do you want to talk about?" to "What's
+your topic?" — compact-mode-only; the full `ChatPanel` (landscape/
+desktop, more width available) keeps the original text unchanged.
+
+**Deliberately not built**: any comment-sent confirmation UI (toast,
+inline acknowledgment, etc.) — the user was explicit that Phase 3's
+approved ambient-comment feed is the intended feedback mechanism, and a
+temporary duplicate would just be thrown away next phase.
+
 ## 2026-08-23 — "05 — Social Stage" Phase 2: functional composer, reusing `ChatPanel` verbatim; Speaker View flagged as the next checkpoint
 
 **Problem**: Phase 1's persistent bottom composer was a static, `disabled`

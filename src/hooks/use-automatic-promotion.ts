@@ -87,11 +87,29 @@ export function useAutomaticPromotion(params: {
       // The real, independently-revalidated claim — see
       // checkPromotionEligibility's doc comment for why this can't
       // itself be trusted from the countdown having merely reached zero.
-      void claimOpenSeat(eventId).finally(() => setCountdown(null));
+      //
+      // Real-device finding (2026-08-23): a successful claim marks the
+      // request "granted" server-side (see claimOpenSeat), so it is no
+      // longer pending in any meaningful sense — but nothing here used
+      // to tell the caller that. `hasPendingRequest` stayed stuck true
+      // in the background (merely hidden behind RoomControls' `isSpeaker`
+      // branch taking priority while seated), and resurfaced a stale
+      // "still pending" UI the moment the speaker later left the stage
+      // and `isSpeaker` went false again. A failed/lost-race claim
+      // deliberately does NOT clear it — see this hook's own doc comment
+      // ("a stale/lost-race outcome... just silently resets to waiting").
+      void claimOpenSeat(eventId)
+        .then((result) => {
+          if ("ok" in result) onHasPendingRequestChange(false);
+        })
+        .finally(() => setCountdown(null));
       return;
     }
     const timeout = setTimeout(() => setCountdown((seconds) => (seconds === null ? null : seconds - 1)), 1000);
     return () => clearTimeout(timeout);
+    // onHasPendingRequestChange is a stable setState-style callback from
+    // EventRoom, not something whose identity changes meaningfully here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [countdown, eventId]);
 
   useEffect(() => {

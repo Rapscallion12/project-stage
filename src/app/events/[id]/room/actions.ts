@@ -134,7 +134,19 @@ export async function requestToSpeak(eventId: string, body: string): Promise<Spe
   }
 }
 
-/** Self-service withdrawal of the caller's own pending request (issue #14), extended to guests by issue #16 the same way requestToSpeak was. */
+/**
+ * Self-service withdrawal of the caller's own pending request (issue
+ * #14), extended to guests by issue #16 the same way requestToSpeak was.
+ *
+ * Real-device finding (2026-08-23): the repository layer now returns
+ * `null` (not a thrown error) when there's no matching *pending* row —
+ * e.g. the request was already granted and consumed by `claimOpenSeat`.
+ * That's success from this action's own contract too: either way, the
+ * caller has no pending request left, which is the only thing
+ * `useAutomaticPromotion`'s `cancel()` actually checks before clearing
+ * `hasPendingRequest`. Treating "nothing to withdraw" as an error was
+ * exactly what left a "Withdraw" button that appeared to do nothing.
+ */
 export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRequestActionResult> {
   const identity = await resolveIdentity();
   try {

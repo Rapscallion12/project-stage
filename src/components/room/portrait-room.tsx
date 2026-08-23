@@ -24,6 +24,17 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * duplicated here, only the surrounding chrome differs. React/Vote/Gift
  * stay `disabled` placeholders until their own later phase.
  *
+ * **Phase 2 real-device fix pass, same day**: `RoomControls` renders
+ * `compact` here for its `hasPendingRequest` states specifically (not
+ * `isSpeaker`, which keeps its original block treatment) — a one-line
+ * pill instead of a paragraph+button block, since real-device testing
+ * found the original treatment "occupies far too much of the video"
+ * against this composition's now-minimal chrome. The actual stale-state
+ * bug this surfaced (a granted-then-abandoned request resurrecting a
+ * "still pending" UI after leaving the stage) was fixed at its root in
+ * `useAutomaticPromotion`/`withdrawSpeakerRequest`, not here — see
+ * DECISIONS.md.
+ *
  * **What still doesn't exist yet** (later phases, each gated on the
  * user's own real-device approval of the previous one):
  * - There is no way to *read* comments or open a discussion surface
@@ -146,7 +157,7 @@ export function PortraitRoom({
             {joinSeatMessage}
           </p>
         )}
-        {(isSpeaker || hasPendingRequest) && (
+        {isSpeaker && (
           <div className="rounded-2xl bg-black/35">
             <RoomControls
               eventId={event.id}
@@ -164,6 +175,24 @@ export function PortraitRoom({
               countdownText={countdownText}
             />
           </div>
+        )}
+        {!isSpeaker && hasPendingRequest && (
+          <RoomControls
+            eventId={event.id}
+            isSpeaker={isSpeaker}
+            hasPendingRequest={hasPendingRequest}
+            promotionCountdown={promotionCountdown}
+            onCancelPromotion={onCancelPromotion}
+            canPublish={canPublish}
+            needsMediaActivation={needsMediaActivation}
+            activateMedia={activateMedia}
+            onPrepareMedia={onPrepareMedia}
+            mediaError={mediaError}
+            connectionStatus={connectionStatus}
+            phase={phase}
+            countdownText={countdownText}
+            compact
+          />
         )}
         <WatchModeControls
           composer={

@@ -146,7 +146,7 @@ describe("ChatPanel", () => {
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
 
       rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
-      expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("What's your topic?")).toBeInTheDocument();
     });
 
     it("tapping the mic toggle requests mode-change — same controlled-prop contract as full mode", () => {
@@ -171,7 +171,7 @@ describe("ChatPanel", () => {
       submitSpeakerRequest.mockResolvedValue(undefined);
       const onPrepareMedia = vi.fn();
       render(<ChatPanel {...baseProps} compact micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
-      fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+      fireEvent.change(screen.getByPlaceholderText("What's your topic?"), {
         target: { value: "AI and creativity" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));

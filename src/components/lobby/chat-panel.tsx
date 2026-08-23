@@ -53,6 +53,19 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * simply unused in this mode (still required props so callers that
  * already have them in scope — `RoomLayoutProps` — don't need a
  * separate code path to obtain them).
+ *
+ * `min-w-0` at every level of the compact form (real-device finding,
+ * 2026-08-23): the row this composer sits in (`WatchModeControls`) has
+ * three `shrink-0` emblems beside it by design — the composer is the
+ * only thing allowed to shrink to make room. A flex item's default
+ * `min-width` is `auto` (its own content's natural size), not `0` — on
+ * a narrow phone that silently capped how far the composer could
+ * actually shrink, pushing the rightmost emblem (Gift) partially
+ * off-screen instead of compressing the composer further. `min-w-0` has
+ * to be set on every nested flex container between the row and the
+ * `<input>` (the form, the pill, the input itself) — missing it on just
+ * one link breaks the whole chain, since that ancestor's own unshrunk
+ * content width becomes the effective floor for everything below it.
  */
 export function ChatPanel({
   eventId,
@@ -134,12 +147,12 @@ export function ChatPanel({
             }
           : undefined
       }
-      className={compact ? "flex items-center gap-2" : "flex gap-2"}
+      className={compact ? "flex min-w-0 items-center gap-2" : "flex gap-2"}
     >
       {compact ? (
         <div
           className={cn(
-            "flex h-11 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors",
+            "flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors",
             micRequestMode ? "border-accent/60 bg-accent/15" : "border-white/30 bg-white/[0.14]",
           )}
         >
@@ -160,7 +173,7 @@ export function ChatPanel({
           <input
             ref={inputRef}
             name="body"
-            placeholder={micRequestMode ? "What do you want to talk about?" : "Add a comment…"}
+            placeholder={micRequestMode ? "What's your topic?" : "Add a comment…"}
             autoComplete="off"
             maxLength={500}
             required

@@ -183,7 +183,7 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
 
       it("tapping the mic toggle switches to Request-to-Speak mode, changing the placeholder without enlarging the composer", () => {
         render(<PortraitRoom {...baseProps} micRequestMode={true} />);
-        expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
+        expect(screen.getByPlaceholderText("What's your topic?")).toBeInTheDocument();
         expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
       });
 
@@ -202,7 +202,7 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
         const onPrepareMedia = vi.fn();
         render(<PortraitRoom {...baseProps} micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
 
-        fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+        fireEvent.change(screen.getByPlaceholderText("What's your topic?"), {
           target: { value: "AI and creativity" },
         });
         fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
@@ -222,7 +222,7 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
             onMicRequestModeChange={onMicRequestModeChange}
           />,
         );
-        fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
+        fireEvent.change(screen.getByPlaceholderText("What's your topic?"), {
           target: { value: "AI and creativity" },
         });
         fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
@@ -233,21 +233,31 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
     });
   });
 
-  describe("RoomControls (leave stage / promotion countdown / withdraw) — unaffected by this redesign", () => {
+  describe("RoomControls — leave stage unchanged, pending-request states compact (issue #21, Phase 2 fix)", () => {
     it("renders nothing for a plain audience member with no pending request", () => {
       render(<PortraitRoom {...baseProps} />);
       expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /withdraw/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
     });
 
-    it("renders the leave-stage control for a seated speaker", () => {
+    it("renders the leave-stage control, full treatment, for a seated speaker", () => {
       render(<PortraitRoom {...baseProps} isSpeaker={true} canPublish={true} />);
       expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
     });
 
-    it("renders the withdraw control for a pending requester", () => {
+    it("renders the compact 'Request sent · Cancel' pill for a pending requester, not the old paragraph+Withdraw block", () => {
       render(<PortraitRoom {...baseProps} hasPendingRequest={true} />);
-      expect(screen.getByRole("button", { name: /withdraw/i })).toBeInTheDocument();
+      expect(screen.getByText("Request sent")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      expect(screen.queryByText(/you'll go live automatically/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /withdraw/i })).not.toBeInTheDocument();
+    });
+
+    it("Cancel on the compact pill calls onCancelPromotion", () => {
+      const onCancelPromotion = vi.fn();
+      render(<PortraitRoom {...baseProps} hasPendingRequest={true} onCancelPromotion={onCancelPromotion} />);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
     });
   });
 

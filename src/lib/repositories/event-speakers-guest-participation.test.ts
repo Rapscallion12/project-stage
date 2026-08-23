@@ -174,7 +174,11 @@ describe.skipIf(!hasServiceCredentials)("guest speaker participation (issue #16)
     await requestToSpeakAsGuest(eventId, guestId, "Eager Rabbit", "Pick me");
 
     const withdrawn = await withdrawSpeakerRequestAsGuest(eventId, guestId);
-    expect(withdrawn.status).toBe("withdrawn");
+    // Non-null here: a request was just created above, so there's
+    // genuinely something pending to withdraw — null only means "nothing
+    // was pending" (see withdrawSpeakerRequestAsGuest's own doc comment).
+    expect(withdrawn).not.toBeNull();
+    expect(withdrawn?.status).toBe("withdrawn");
 
     // A withdrawn request frees the guest to request again.
     await expect(requestToSpeakAsGuest(eventId, guestId, "Eager Rabbit", "Again")).resolves.toBeTruthy();

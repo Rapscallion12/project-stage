@@ -120,6 +120,38 @@ portrait → landscape → portrait, and returning to Watch after keyboard
 dismissal. Do not begin Phase 3 or the Speaker View design/
 implementation until explicitly approved.
 
+**Phase 2 real-device testing found four issues, all fixed on the same
+branch** (no Phase 3 work started): (1) the mic-on placeholder truncated
+on the user's iPhone — shortened to "What's your topic?", compact mode
+only. (2) A stale "still pending" UI with a non-functional Withdraw
+persisted after leaving the stage — traced to its actual root, not
+hidden cosmetically: `claimOpenSeat` succeeding never told the client
+`hasPendingRequest` was stale (fixed in `useAutomaticPromotion`), and
+`withdrawSpeakerRequest`'s underlying RPC raises an exception ("no
+pending request found") when there's nothing pending to withdraw, which
+used to surface as a silent-looking failure that never cleared the flag
+(fixed in the repository layer, treating that specific exception as
+`null`/success rather than an error). (3) The pending-request UI was
+too visually heavy for Watch Mode — `RoomControls` gained a `compact`
+mode for its two `hasPendingRequest` states specifically (not
+`isSpeaker`), rendering a single-line "🎙 Request sent · Cancel" pill
+instead. (4) The Gift emblem could clip on narrow phones — a broken
+flexbox `min-width` shrink chain (the composer, the only element meant
+to shrink, was missing `min-w-0` at two nested levels), not a genuine
+width shortage; fixed by completing the `min-w-0` chain down to the
+input. Deliberately not built: any comment-sent confirmation UI — the
+user was explicit that Phase 3's ambient-comment feed is the intended
+feedback mechanism, not a temporary duplicate.
+
+lint/tsc/build/test all pass (315/315, 36 files, +10 new tests
+targeting these fixes specifically). Local production smoke test
+confirmed the `min-w-0` classes and new placeholder text render from
+the actual built route.
+
+**Next task**: stop for the user's own real-device retest of these four
+fixes specifically. Do not begin Phase 3 or the Speaker View design
+until explicitly approved.
+
 ---
 
 ## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created
