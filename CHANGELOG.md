@@ -43,6 +43,23 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **Speaker View had no way to re-enable camera/mic after navigating away
+  and back** — a fresh `useLiveRoomConnection` instance (any real route
+  remount, e.g. leaving via the site header link and returning while
+  still entitled to the seat) always needs one gesture-triggered
+  `activateMedia()` call before it auto-publishes, by design — but
+  neither `PortraitSpeakerView` nor `MobileLandscapeSpeakerView` rendered
+  any control that could trigger it (`SpeakerStage`'s `soloMode` never
+  shows the viewer's own tile, where that affordance normally lives, and
+  neither view renders `RoomControls`). Not just cosmetic — camera/mic
+  were never actually republished, so the *other* participant kept
+  seeing "Camera off" too. New shared `SpeakerMediaActivationPrompt`
+  (visible only when needed) calls the exact same `activateMedia` already
+  wired through both views — no new acquisition logic. Confirmed, not
+  assumed: seat-vacate-on-navigation itself is already the intended,
+  already-documented lifecycle (the existing LiveKit-webhook disconnect
+  path) — unchanged by this fix. See DECISIONS.md.
+
 - **Self-preview actually disappeared after committing a guest-name edit
   while seated — traced to a real LiveKit reconnect, not a CSS issue.**
   A previous pass fixed two real but unrelated defects (a corner overlap

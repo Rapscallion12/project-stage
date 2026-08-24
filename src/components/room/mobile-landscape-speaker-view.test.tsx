@@ -97,5 +97,22 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
     render(<MobileLandscapeSpeakerView {...baseProps} />);
     expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
     expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("speaker-view-activate-media")).not.toBeInTheDocument();
+  });
+
+  describe("media-activation recovery (same lifecycle fix as portrait)", () => {
+    it("shows the activate-media prompt when needsMediaActivation is true", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} needsMediaActivation={true} />);
+      expect(screen.getByTestId("speaker-view-activate-media")).toBeInTheDocument();
+    });
+
+    it("tapping it calls the same activateMedia already wired through this view's props", () => {
+      const activateMedia = vi.fn(async () => {});
+      render(
+        <MobileLandscapeSpeakerView {...baseProps} needsMediaActivation={true} activateMedia={activateMedia} />,
+      );
+      screen.getByTestId("speaker-view-activate-media").click();
+      expect(activateMedia).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -6,8 +6,14 @@ import { leaveSpeakerSeat } from "@/app/events/[id]/room/actions";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import type { EventPhase } from "@/lib/events";
 
-/** Specific, named copy per failure reason — see MediaErrorReason's doc comment for why these are distinguished instead of a generic "camera off". */
-function mediaErrorMessage(error: NonNullable<MediaError>): string {
+/**
+ * Specific, named copy per failure reason — see MediaErrorReason's doc
+ * comment for why these are distinguished instead of a generic "camera
+ * off". Exported (issue #18, Speaker View lifecycle fix) so
+ * `SpeakerMediaActivationPrompt` can surface the same specific copy
+ * rather than duplicating this switch.
+ */
+export function mediaErrorMessage(error: NonNullable<MediaError>): string {
   const device = error.source === "camera" ? "Camera" : "Microphone";
   switch (error.reason) {
     case "permission-denied":

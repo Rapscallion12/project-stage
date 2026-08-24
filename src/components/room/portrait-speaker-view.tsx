@@ -1,5 +1,6 @@
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
+import { SpeakerMediaActivationPrompt } from "@/components/room/speaker-media-activation-prompt";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
@@ -37,20 +38,28 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * self-preview appear to vanish after editing the name — see
  * DECISIONS.md.
  *
+ * **Media-activation recovery** (real-device lifecycle finding, same
+ * pass): `SpeakerMediaActivationPrompt` — see its own doc comment for
+ * why this is a *required* piece, not an optional nicety. Without it, a
+ * fresh `useLiveRoomConnection` instance that finds itself already
+ * seated (e.g. navigating away and back through the site header, which
+ * genuinely tears down and reconnects LiveKit) had no way to ever
+ * re-publish camera/mic or restore the self-preview — `soloMode` never
+ * renders the local tile's own activation button, and this view
+ * deliberately doesn't render `RoomControls` either.
+ *
  * **Empty other seat**: also free — `soloMode` still calls the same
  * `renderTile()` used for the ordinary two-tile layout, which already
  * renders the existing "Seat open" placeholder when that seat has no
  * occupant. No separate "waiting for a partner" UI.
  *
  * **What's deliberately not here yet** (later Speaker View phases, each
- * gated on real-device approval): no `SpeakerControlBar` (mic/camera
- * toggles, a purpose-built "Leave the stage") — Phase 3. No speaker
- * composer or ambient comments — Phase 2. Concretely, that means this
- * Phase 1 build has **no in-UI way to leave the stage or recover from a
- * mid-session media-activation prompt** (e.g. after a page refresh) —
- * closing the tab or navigating away still releases the seat via the
- * existing LiveKit-webhook disconnect path (issue #13), just not from a
- * button in this view yet.
+ * gated on real-device approval): no `SpeakerControlBar` (live mic/camera
+ * mute toggles, a purpose-built "Leave the stage") — Phase 3. No speaker
+ * composer or ambient comments — Phase 2. Concretely, that still means
+ * this Phase 1 build has no in-UI way to *voluntarily leave* the stage —
+ * navigating away is the only path, and does so via the existing
+ * LiveKit-webhook disconnect route (issue #13), same as before.
  */
 export function PortraitSpeakerView({
   event,
@@ -84,6 +93,12 @@ export function PortraitSpeakerView({
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
+
+      <SpeakerMediaActivationPrompt
+        needsMediaActivation={needsMediaActivation}
+        activateMedia={activateMedia}
+        mediaError={mediaError}
+      />
     </div>
   );
 }

@@ -3,6 +3,93 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View: navigating away and back left no way to re-enable camera/mic — a missing UI entry point, not a state-loss bug; seat-vacate-on-navigation confirmed as already-expected behavior
+
+**Problem**: after leaving the room via the site header's "VIRTUAL STAGE"
+link and returning, the self-preview stayed gone even though the viewer
+could still land back in Speaker View as a seated speaker. Instructed to
+trace the actual navigation/remount lifecycle — what happens to
+`localVideoTrack` on route teardown, what state exists on remount,
+whether `isSpeaker` is restored before media, whether the self-preview
+depends on a client-only reference that isn't repopulated, and whether
+publication is actually restored for the *other* participant or only the
+local preview is missing — and to explicitly verify, not assume, whether
+seat persistence across navigation is even the intended lifecycle before
+changing anything.
+
+**Seat-vacate-on-navigation is already the intended, already-documented
+lifecycle — verified, not assumed.** Navigating to `/` unmounts
+`EventRoom` (it lives inside the route's own tree; `SiteHeader` lives in
+the shared root layout and doesn't unmount). `useLiveRoomConnection`'s
+connect effect's cleanup runs on that unmount: `room.disconnect()` — a
+real LiveKit disconnect. LiveKit's own webhook (`participant_left` →
+`endSpeakerSeat`, `app/api/livekit/webhook/route.ts`, issue #13) then
+vacates the `event_speakers` row server-side. This was already explicit,
+stated policy — Phase 1's own doc comments already said "closing the tab
+or navigating away still releases the seat via the existing
+LiveKit-webhook disconnect path" — so the *product* behavior here needed
+no change. What the user observed as "returning to a speaker state" is
+the webhook's own network latency: if the return navigation happens
+before the webhook finishes processing, the DB row (and therefore the
+fresh page load's `isSpeaker` computation) can still show the seat as
+active. This is a timing artifact of an already-correct mechanism, not a
+second, competing seat-retention feature — nothing in this pass changes
+it.
+
+**The actual bug, traced through the full lifecycle**: whether the
+returning session finds itself seated by genuine re-promotion or by this
+timing window, it always lands on a *fresh* `useLiveRoomConnection`
+instance — `mediaActivatedRef`/`preparedTracksRef` reset to their
+initial values, `localVideoTrack` starts `null`, by design, on every real
+remount (this is the same "every piece of this tab's media state starts
+over" fact already documented for the hard-refresh case, see the
+2026-08-22 refresh-recovery entry below). On `RoomEvent.Connected`,
+`syncCanPublish()` correctly sets `canPublish: true` (the server-side
+grant is real), but deliberately does **not** auto-publish —
+`mediaActivatedRef.current || !publish` is `false || false` when neither
+has happened yet in this fresh tab, which is the same Safari-gesture
+protection every other activation path in this app already relies on.
+`needsMediaActivation` becomes `true`, exactly as designed.
+
+The actual defect: **Speaker View Phase 1 has no UI that can ever act on
+`needsMediaActivation`.** `SpeakerStage`'s `soloMode` never renders the
+viewer's own seat's tile (the whole point of full-bleed Speaker View),
+which is where the ordinary "tap to enable camera & mic" affordance
+lives (`SpeakerTile`'s own `isLocal && needsMediaActivation` branch).
+Neither `PortraitSpeakerView` nor `MobileLandscapeSpeakerView` render
+`RoomControls` either (Phase 1 deliberately excludes it). Every *other*
+room composition has one of those two paths; Speaker View had neither —
+so `activateMedia()` could never be called, camera/mic were never
+re-published (not just the local preview — the *other* participant would
+also have kept seeing this speaker's tile as "Camera off," since nothing
+was actually being published), and the self-preview had nothing to ever
+repopulate it from.
+
+**Decision**: added `SpeakerMediaActivationPrompt`, a small shared
+component rendered by both Speaker Views, visible only when
+`needsMediaActivation` is true (`null` otherwise — invisible in the
+common case). Calls the *exact same* `activateMedia` prop already
+flowing through both views, directly from its own `onClick` (the same
+gesture-safe pattern as every other activation tap target in this app) —
+no new acquisition logic, no new server call, idempotent by construction
+via `prepareLocalMedia`'s own existing guard. This is not "forcing the
+preview visible" — it restores the one missing trigger for an
+already-correct mechanism, then lets that mechanism do exactly what it
+already does everywhere else.
+
+**Explicitly not changed**: seat-vacate-on-navigation behavior itself,
+`useLiveRoomConnection`'s activation logic, `SpeakerStage`/`SpeakerTile`,
+or the landscape corrections from the prior pass. `RoomControls` wasn't
+reused wholesale specifically to avoid also introducing "Leave the
+stage" as a side effect — that's still explicitly Phase 3's job, not
+bundled into a lifecycle bug fix.
+
+**Verification honesty**: automated tests confirm the prompt renders
+only when needed and calls the correct `activateMedia` reference. They
+cannot verify the actual real-device round trip (navigate away, wait a
+realistic amount of time, return, tap, confirm the *other* participant
+sees video resume) — that remains the user's own check.
+
 ## 2026-08-24 — Speaker View: the self-preview bug was a token-refresh-triggered LiveKit reconnect, not a CSS issue; site header hidden in landscape while speaking
 
 **Problem**: the previous corrective pass (repositioning the guest-name

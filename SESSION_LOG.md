@@ -177,6 +177,49 @@ header genuinely gone/collapsed while speaking, and no regression to
 audience landscape or the LiveKit connection generally. Do not begin
 Phase 2 until explicitly approved.
 
+**The name-edit bug is confirmed fixed. A separate lifecycle bug found**:
+leaving the room via the site header's "VIRTUAL STAGE" link and
+returning left the self-preview gone, even when still landing back in
+Speaker View as a seated speaker. Instructed to trace the actual
+navigation/remount lifecycle and explicitly verify whether
+seat-persistence-across-navigation was even intended before changing
+anything, rather than assume.
+
+**Verified, not assumed**: navigating away already vacates the seat as
+designed — `EventRoom` unmounts (it lives inside the route's own tree,
+`SiteHeader` doesn't), `useLiveRoomConnection`'s cleanup calls
+`room.disconnect()`, and the existing LiveKit webhook
+(`participant_left` → `endSpeakerSeat`) vacates the DB row. This was
+already documented policy from Phase 1 itself. What looked like
+"returning to a speaker state" is that webhook's own network latency —
+a timing artifact of an already-correct mechanism, not a competing
+feature. Nothing about this lifecycle was changed.
+
+**The actual bug**: any fresh `useLiveRoomConnection` instance that
+finds itself already seated (via that timing window, or genuine
+re-promotion) needs one gesture-triggered `activateMedia()` call before
+it republishes — by design, the same Safari-gesture protection used
+everywhere else. But Speaker View Phase 1 has no UI that can ever
+trigger it: `soloMode` never renders the local tile where that
+affordance normally lives, and neither Speaker View renders
+`RoomControls`. Not cosmetic — camera/mic were never actually
+republished, so the *other* participant kept seeing "Camera off" too.
+Fixed with a new shared `SpeakerMediaActivationPrompt` (visible only
+when `needsMediaActivation` is true), calling the exact same
+`activateMedia` already wired through both views — no new acquisition
+logic, `RoomControls` deliberately not reused wholesale (would have also
+introduced "Leave the stage" as a side effect, still explicitly Phase
+3's job). lint/tsc/build/test all pass (364/364, 41 files, +11 new
+tests). Local production smoke test confirmed the built route serves the
+homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation —
+navigate away and back while still entitled to the seat, confirm the
+activate-media prompt appears and restores both the self-preview and
+actual publication (checkable from the other participant's view), and
+confirm the landscape corrections from the previous pass are still
+intact. Do not begin Phase 2 until explicitly approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

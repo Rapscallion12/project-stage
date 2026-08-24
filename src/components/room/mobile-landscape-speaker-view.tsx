@@ -1,5 +1,6 @@
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
+import { SpeakerMediaActivationPrompt } from "@/components/room/speaker-media-activation-prompt";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
@@ -35,11 +36,18 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * touch `EventRoom`/`useLiveRoomConnection`" tolerance already relied on
  * for the ordinary Audience/Candidate portrait↔landscape rotation.
  *
+ * **Media-activation recovery**: same `SpeakerMediaActivationPrompt` as
+ * `PortraitSpeakerView` — see that component's own doc comment and
+ * `SpeakerMediaActivationPrompt`'s for why this is required, not
+ * optional (a fresh `useLiveRoomConnection` instance that finds itself
+ * already seated has no other way to re-publish camera/mic or restore
+ * the self-preview in this composition).
+ *
  * **What's deliberately not here** (same phase boundary as
  * `PortraitSpeakerView`): no `SpeakerControlBar`, no speaker composer, no
- * ambient comments, no desktop equivalent. No in-UI way to leave the
- * stage yet — closing the tab still releases the seat via the existing
- * disconnect webhook.
+ * ambient comments, no desktop equivalent. No in-UI way to *voluntarily*
+ * leave the stage yet — navigating away still releases the seat via the
+ * existing disconnect webhook.
  */
 export function MobileLandscapeSpeakerView({
   event,
@@ -73,6 +81,12 @@ export function MobileLandscapeSpeakerView({
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
+
+      <SpeakerMediaActivationPrompt
+        needsMediaActivation={needsMediaActivation}
+        activateMedia={activateMedia}
+        mediaError={mediaError}
+      />
     </div>
   );
 }

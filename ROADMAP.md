@@ -480,6 +480,15 @@ different dependencies. Current order:
       value. Landscape's site-wide header is now hidden outright (not
       just shrunk) while actively speaking. See DECISIONS.md's third
       2026-08-24 entry.
+      **Third corrective pass**: name-edit bug confirmed fixed;
+      real-device testing found leaving and returning to the room left
+      no way to re-enable camera/mic. Verified (not assumed) that
+      seat-vacate-on-navigation is already the intended lifecycle —
+      unchanged. The real bug was a missing UI trigger: Speaker View had
+      no control that could ever call `activateMedia()` for a fresh
+      connection instance that's still seated. Fixed with a new shared
+      `SpeakerMediaActivationPrompt`, reusing the existing activation
+      path verbatim. See DECISIONS.md's fourth 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
