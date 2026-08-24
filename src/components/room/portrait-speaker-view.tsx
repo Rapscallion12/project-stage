@@ -1,13 +1,17 @@
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { SpeakerMediaActivationPrompt } from "@/components/room/speaker-media-activation-prompt";
+import { SpeakerControlBar } from "@/components/room/speaker-control-bar";
+import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
+import { WatchModeControls } from "@/components/room/watch-mode-controls";
+import { AmbientComments } from "@/components/room/ambient-comments";
+import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
- * "Speaker View" (issue #18, Direction B — full-bleed remote speaker),
- * Phase 1: the static layout only. Rendered by `PortraitRoom`'s
- * role-router whenever `isSpeaker` is true, in place of the ordinary
- * Watch Mode content — never alongside it.
+ * "Speaker View" (issue #18, Direction B — full-bleed remote speaker).
+ * Rendered by `PortraitRoom`'s role-router whenever `isSpeaker` is true,
+ * in place of the ordinary Watch Mode content — never alongside it.
  *
  * **Full-bleed video, no new track handling**: `SpeakerStage` already
  * owns every seat-tile-rendering concern (empty-seat placeholder, media
@@ -29,37 +33,37 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * regardless of role — `soloMode` doesn't touch that logic at all, so
  * the viewer's own floating camera preview needs no changes here.
  *
- * **Top chrome** (real-device corrective pass, same day): shared with
- * `MobileLandscapeSpeakerView` via `SpeakerViewTopChrome` — see that
- * component's own doc comment for why its layout deliberately never
- * shares `SelfPreview`'s top-right corner. This view originally
- * duplicated Watch Mode's top chrome inline, putting the guest-name chip
- * in that exact corner; real-device testing found that made the
- * self-preview appear to vanish after editing the name — see
- * DECISIONS.md.
+ * **Top chrome**: shared with `MobileLandscapeSpeakerView` via
+ * `SpeakerViewTopChrome` — see that component's own doc comment for why
+ * its layout deliberately never shares `SelfPreview`'s top-right corner.
  *
- * **Media-activation recovery** (real-device lifecycle finding, same
- * pass): `SpeakerMediaActivationPrompt` — see its own doc comment for
- * why this is a *required* piece, not an optional nicety. Without it, a
- * fresh `useLiveRoomConnection` instance that finds itself already
- * seated (e.g. navigating away and back through the site header, which
- * genuinely tears down and reconnects LiveKit) had no way to ever
- * re-publish camera/mic or restore the self-preview — `soloMode` never
- * renders the local tile's own activation button, and this view
- * deliberately doesn't render `RoomControls` either.
+ * **Media-activation recovery**: `SpeakerMediaActivationPrompt` — see its
+ * own doc comment for why this is a *required* piece, not an optional
+ * nicety. `soloMode` never renders the local tile's own activation
+ * button, and this view never renders `RoomControls`.
+ *
+ * **Leave the stage, composer, ambient comments** (issue #18, Phase 2 —
+ * added specifically so the join/leave cycle could be stress-tested
+ * without navigating away each time): `SpeakerControlBar` reuses the
+ * *same* `leaveSpeakerSeat` Server Action `RoomControls` already uses —
+ * no new mutation path. The composer is the *same* `ChatPanel` compact
+ * mode Watch Mode already uses, with `allowMicRequest={false}` (a
+ * seated speaker already holds the seat a mic request would be for) —
+ * same `sendMessage` action, same gesture-safety logic, nothing
+ * duplicated. `AmbientComments` reads the *same* `messages` array every
+ * other composition already receives — being on stage doesn't remove
+ * the ability to read or post comments. React/Vote/Gift stay inert via
+ * the unchanged `WatchModeControls`. Positioned via the *same*
+ * `StageOverlayShell`/`bottom-16 left-3` conventions Watch Mode already
+ * established, so nothing new needed to keep them clear of the video.
  *
  * **Empty other seat**: also free — `soloMode` still calls the same
  * `renderTile()` used for the ordinary two-tile layout, which already
  * renders the existing "Seat open" placeholder when that seat has no
  * occupant. No separate "waiting for a partner" UI.
  *
- * **What's deliberately not here yet** (later Speaker View phases, each
- * gated on real-device approval): no `SpeakerControlBar` (live mic/camera
- * mute toggles, a purpose-built "Leave the stage") — Phase 3. No speaker
- * composer or ambient comments — Phase 2. Concretely, that still means
- * this Phase 1 build has no in-UI way to *voluntarily leave* the stage —
- * navigating away is the only path, and does so via the existing
- * LiveKit-webhook disconnect route (issue #13), same as before.
+ * **Still deliberately not here**: live mic/camera mute toggles — a
+ * planned follow-up to `SpeakerControlBar` itself, not a new component.
  */
 export function PortraitSpeakerView({
   event,
@@ -74,6 +78,9 @@ export function PortraitSpeakerView({
   localVideoTrack,
   isJoiningSeat,
   reconnectingIdentities,
+  messages,
+  reactions,
+  onPrepareMedia,
 }: RoomLayoutProps) {
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -99,6 +106,29 @@ export function PortraitSpeakerView({
         activateMedia={activateMedia}
         mediaError={mediaError}
       />
+
+      <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
+        <AmbientComments messages={messages} />
+      </div>
+
+      <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
+        <SpeakerControlBar eventId={event.id} />
+        <WatchModeControls
+          composer={
+            <ChatPanel
+              eventId={event.id}
+              messages={messages}
+              reactions={reactions}
+              micRequestMode={false}
+              onMicRequestModeChange={() => {}}
+              onHasPendingRequestChange={() => {}}
+              onPrepareMedia={onPrepareMedia}
+              allowMicRequest={false}
+              compact
+            />
+          }
+        />
+      </StageOverlayShell>
     </div>
   );
 }

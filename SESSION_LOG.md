@@ -303,6 +303,42 @@ exercised different seat numbers at all, which the automated evidence
 here couldn't settle on its own. Do not begin Phase 2 until explicitly
 approved.
 
+**The split-screen bug didn't reproduce on retest** — the user needs a
+better way to stress-test the join/leave cycle to catch the actual
+trigger, and explicitly paused further split-screen changes. Instead:
+restored **Leave the stage**, the **composer**, and **ambient comments**
+to Speaker View (both orientations) as stress-testing infrastructure.
+New `SpeakerControlBar` (currently one pill) calls the *exact same*
+`leaveSpeakerSeat` Server Action `RoomControls` already uses — no new
+mutation path — deliberately not `RoomControls` itself (its `isSpeaker`
+branch is the padded legacy block the user explicitly said not to bring
+back). `ChatPanel` gained one new prop, `allowMicRequest` (default
+`true`, no existing caller affected) — `false` hides the 🎙 toggle
+entirely, since a seated speaker already holds the seat a request would
+be for. Both Speaker Views now wrap `WatchModeControls`/`ChatPanel`/
+`AmbientComments` in the same `StageOverlayShell`/`bottom-16 left-3`
+positioning Watch Mode already established — zero new layout logic.
+`SpeakerMediaActivationPrompt` moved from the bottom edge to vertically
+centered, so it stays clear of the new bottom row regardless of its
+rendered height. Landscape got the same additions (not portrait-only) —
+the stress-test plan explicitly includes rotating mid-test, and leaving
+landscape without a leave/composer would itself look like a new bug.
+
+Two role-router tests (`portrait-room.test.tsx`,
+`mobile-landscape-room.test.tsx`) had asserted "no composer/no leave
+button" for a seated speaker — now stale, updated to assert the real
+leave button exists while the legacy `RoomControls` block's text still
+doesn't. lint/tsc/build/test all pass (402/402, 42 files, +22 new
+tests). Local production smoke test confirmed the built route serves the
+homepage (200).
+
+**Next task**: stop for the user's own real-device stress-testing —
+repeated join (top/bottom)/leave cycles, rotating during different
+states, watching for exactly what precedes the split-screen issue if it
+reappears. No further split-screen changes until a clearer trigger is
+identified from that session. Do not begin further Speaker View scope
+until explicitly approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

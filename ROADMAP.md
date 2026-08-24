@@ -511,6 +511,14 @@ different dependencies. Current order:
       which tile is tapped, so confirming which seat the "bottom" test
       actually landed in is the open question. See DECISIONS.md's sixth
       2026-08-24 entry.
+      **Speaker View Phase 2**: the seat-index bug didn't reproduce on
+      retest, so further investigation paused pending a better stress-
+      testing setup. Restored Leave the stage (new `SpeakerControlBar`,
+      reusing `leaveSpeakerSeat` verbatim), the compact composer
+      (`ChatPanel`'s new `allowMicRequest` prop), and ambient comments to
+      both portrait and landscape Speaker View — the real interface
+      needed to stress-test join/leave cycles repeatedly. React/Vote/Gift
+      stay inert. See DECISIONS.md's seventh 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -36,6 +36,12 @@ import type { MediaError } from "@/hooks/use-live-room-connection";
  * (`prepareLocalMedia` no-ops if tracks are already held or an
  * acquisition is already in flight), so this can't cause a duplicate
  * `getUserMedia` prompt even if tapped more than once.
+ *
+ * **Positioned mid-stage, not pinned to the bottom edge** (issue #18,
+ * Phase 2): the bottom of the stage is now `SpeakerControlBar`'s "Leave
+ * the stage" pill and the composer row — both only present once actually
+ * publishing, but this prompt needs to stay clear of them regardless,
+ * without needing to know their exact rendered height.
  */
 export function SpeakerMediaActivationPrompt({
   needsMediaActivation,
@@ -49,7 +55,7 @@ export function SpeakerMediaActivationPrompt({
   if (!needsMediaActivation) return null;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex flex-col items-center gap-1.5 px-4">
+    <div className="pointer-events-none absolute inset-x-0 top-1/2 z-10 flex -translate-y-1/2 flex-col items-center gap-1.5 px-4">
       <button
         type="button"
         data-testid="speaker-view-activate-media"

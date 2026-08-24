@@ -208,5 +208,25 @@ describe("ChatPanel", () => {
       expect(pillOn.className).toMatch(/\bborder-accent/);
       expect(screen.getAllByRole("button")).toHaveLength(2); // mic + send only, no third control appears
     });
+
+    describe("allowMicRequest (issue #18, Speaker View Phase 2: a seated speaker has no use for requesting the mic they already hold)", () => {
+      it("defaults to true — every existing caller keeps the mic toggle", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        expect(screen.getByTestId("watch-composer-mic")).toBeInTheDocument();
+      });
+
+      it("false hides the mic toggle entirely, not just disables it", () => {
+        render(<ChatPanel {...baseProps} compact allowMicRequest={false} />);
+        expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
+      });
+
+      it("still submits an ordinary comment via sendMessage with the toggle hidden", async () => {
+        sendMessage.mockResolvedValue(undefined);
+        render(<ChatPanel {...baseProps} compact allowMicRequest={false} />);
+        fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+        await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      });
+    });
   });
 });

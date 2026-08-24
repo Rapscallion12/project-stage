@@ -1,12 +1,25 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileLandscapeSpeakerView } from "./mobile-landscape-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
-vi.mock("@/app/events/[id]/lobby/actions", () => ({ setGuestName: vi.fn() }));
+const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
+  leaveSpeakerSeat: vi.fn(),
+  sendMessage: vi.fn(),
+}));
+
+vi.mock("@/app/events/[id]/room/actions", () => ({
+  leaveSpeakerSeat,
+  submitSpeakerRequest: vi.fn(),
+}));
+
+vi.mock("@/app/events/[id]/lobby/actions", () => ({
+  sendMessage,
+  setGuestName: vi.fn(),
+}));
 
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
 
@@ -68,6 +81,10 @@ const baseProps: RoomLayoutProps = {
 };
 
 describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape corrective pass)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders the stage full-bleed, with only the other speaker's tile (no divider), side-by-side orientation", () => {
     render(<MobileLandscapeSpeakerView {...baseProps} />);
     expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
@@ -86,18 +103,66 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
     expect(screen.getByTestId("watch-status-pill")).toHaveTextContent("Late Night Debate");
   });
 
-  it("has none of the audience landscape composition's chrome — no RoomHeader participant count, no Comments toggle, no full RoomControls block", () => {
+  it("has none of the audience landscape composition's chrome — no RoomHeader participant count, no Comments toggle, no full legacy RoomControls block", () => {
     render(<MobileLandscapeSpeakerView {...baseProps} />);
     expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByText(/setting up your mic access/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enable camera/i })).not.toBeInTheDocument();
   });
 
-  it("has no composer, ambient comments, or control bar yet (same phase boundary as portrait)", () => {
+  it("shows no activation prompt when media is already active", () => {
     render(<MobileLandscapeSpeakerView {...baseProps} />);
-    expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
     expect(screen.queryByTestId("speaker-view-activate-media")).not.toBeInTheDocument();
+  });
+
+  describe("Leave the stage, composer, ambient comments (issue #18, Phase 2 — same as portrait, restored for stress-testing)", () => {
+    it("renders a Leave the stage control, calling the same leaveSpeakerSeat action", async () => {
+      leaveSpeakerSeat.mockResolvedValue({ ok: true });
+      render(<MobileLandscapeSpeakerView {...baseProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /leave the stage/i }));
+      await waitFor(() => expect(leaveSpeakerSeat).toHaveBeenCalledWith("e1"));
+    });
+
+    it("renders a real comment field, no mic-request toggle", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} />);
+      expect(screen.getByPlaceholderText("Add a comment…")).not.toBeDisabled();
+      expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
+    });
+
+    it("sending a comment calls the existing sendMessage action", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<MobileLandscapeSpeakerView {...baseProps} />);
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+    });
+
+    it("renders ambient comments from the same messages stream", () => {
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "great show",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      expect(screen.getByTestId("ambient-comment")).toHaveTextContent("great show");
+    });
+
+    it("React/Vote/Gift stay inert", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} />);
+      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
+    });
   });
 
   describe("local-seat permutation symmetry (same coverage as portrait/SpeakerStage)", () => {

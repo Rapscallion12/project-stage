@@ -54,6 +54,13 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * already have them in scope — `RoomLayoutProps` — don't need a
  * separate code path to obtain them).
  *
+ * `allowMicRequest` (issue #18, Speaker View Phase 2): defaults to `true`
+ * (every existing caller unaffected). `false` hides the 🎙 toggle button
+ * entirely in compact mode — not just disables it — since a seated
+ * speaker has no use for requesting the mic they already hold. The
+ * caller is responsible for also keeping `micRequestMode` false; this
+ * prop only controls whether the toggle is offered at all.
+ *
  * `min-w-0` at every level of the compact form (real-device finding,
  * 2026-08-23): the row this composer sits in (`WatchModeControls`) has
  * three `shrink-0` emblems beside it by design — the composer is the
@@ -95,6 +102,7 @@ export function ChatPanel({
   onHasPendingRequestChange,
   onPrepareMedia,
   compact = false,
+  allowMicRequest = true,
 }: {
   eventId: string;
   messages: LobbyMessage[];
@@ -104,6 +112,7 @@ export function ChatPanel({
   onHasPendingRequestChange: (value: boolean) => void;
   onPrepareMedia: () => Promise<void>;
   compact?: boolean;
+  allowMicRequest?: boolean;
 }) {
   const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
   const [requestState, requestFormAction, requestPending] = useActionState(
@@ -175,20 +184,22 @@ export function ChatPanel({
             micRequestMode ? "border-accent/60 bg-accent/15" : "border-white/30 bg-white/[0.14]",
           )}
         >
-          <button
-            type="button"
-            data-testid="watch-composer-mic"
-            onClick={() => onMicRequestModeChange(!micRequestMode)}
-            disabled={pending}
-            aria-pressed={micRequestMode}
-            aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
-            className={cn(
-              "flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-xs transition-colors disabled:opacity-50",
-              micRequestMode ? "bg-accent text-white" : "bg-white/10 text-white/80",
-            )}
-          >
-            🎙
-          </button>
+          {allowMicRequest && (
+            <button
+              type="button"
+              data-testid="watch-composer-mic"
+              onClick={() => onMicRequestModeChange(!micRequestMode)}
+              disabled={pending}
+              aria-pressed={micRequestMode}
+              aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
+              className={cn(
+                "flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-xs transition-colors disabled:opacity-50",
+                micRequestMode ? "bg-accent text-white" : "bg-white/10 text-white/80",
+              )}
+            >
+              🎙
+            </button>
+          )}
           <input
             ref={inputRef}
             name="body"

@@ -215,8 +215,11 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       render(<MobileLandscapeRoom {...baseProps} isSpeaker={true} canPublish={true} />);
       expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
       expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Late Night Debate" })).not.toBeInTheDocument();
+      // Speaker View has its own leave control (issue #18, Phase 2) — a
+      // real button exists, just not the legacy audience composition's
+      // RoomHeader/Comments toggle above.
+      expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
     });
 
     it("still calls useCommentsMode unconditionally — toggling isSpeaker on the same mounted instance doesn't throw a Rules-of-Hooks error", () => {

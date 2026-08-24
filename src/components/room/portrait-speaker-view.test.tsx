@@ -1,10 +1,24 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PortraitSpeakerView } from "./portrait-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+
+const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
+  leaveSpeakerSeat: vi.fn(),
+  sendMessage: vi.fn(),
+}));
+
+vi.mock("@/app/events/[id]/room/actions", () => ({
+  leaveSpeakerSeat,
+  submitSpeakerRequest: vi.fn(),
+}));
+
+vi.mock("@/app/events/[id]/lobby/actions", () => ({
+  sendMessage,
+}));
 
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
 
@@ -65,7 +79,11 @@ const baseProps: RoomLayoutProps = {
   reactions: {},
 };
 
-describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B, Phase 1)", () => {
+describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders the stage full-bleed, with only the other speaker's tile (no divider)", () => {
     render(<PortraitSpeakerView {...baseProps} />);
     expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
@@ -92,12 +110,85 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B, Phase 1)",
     expect(screen.getByRole("button", { name: "Cheerful Raven" })).toBeInTheDocument();
   });
 
-  it("has no composer, no ambient comments, and no control bar yet (Phase 1 scope)", () => {
+  it("shows no activation prompt when media is already active — the only Phase 1 gap remaining", () => {
     render(<PortraitSpeakerView {...baseProps} />);
-    expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
     expect(screen.queryByTestId("speaker-view-activate-media")).not.toBeInTheDocument();
+  });
+
+  describe("Leave the stage (issue #18, Phase 2 — restored for stress-testing the join/leave cycle)", () => {
+    it("renders a Leave the stage control", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
+    });
+
+    it("tapping it calls the same leaveSpeakerSeat Server Action RoomControls already uses", async () => {
+      leaveSpeakerSeat.mockResolvedValue({ ok: true });
+      render(<PortraitSpeakerView {...baseProps} />);
+      fireEvent.click(screen.getByRole("button", { name: /leave the stage/i }));
+      await waitFor(() => expect(leaveSpeakerSeat).toHaveBeenCalledWith("e1"));
+    });
+
+    it("is not the old legacy RoomControls block — no 'Enable camera & mic'/status text alongside it", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.queryByText(/setting up your mic access/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /enable camera/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("composer (issue #18, Phase 2 — reuses ChatPanel verbatim, comments-only for a seated speaker)", () => {
+    it("renders a real, focusable comment field", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      const input = screen.getByPlaceholderText("Add a comment…");
+      expect(input).toBeInTheDocument();
+      expect(input).not.toBeDisabled();
+    });
+
+    it("has no mic-request toggle — a seated speaker already holds the seat a request would be for", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
+    });
+
+    it("sending a comment calls the existing sendMessage action", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<PortraitSpeakerView {...baseProps} />);
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello from the stage" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+    });
+
+    it("React/Vote/Gift stay inert, unchanged", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
+    });
+  });
+
+  describe("ambient comments (issue #18, Phase 2 — reuses the same messages stream)", () => {
+    it("renders a recent comment ambiently", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "great show",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      expect(screen.getByTestId("ambient-comment")).toHaveTextContent("great show");
+    });
+
+    it("renders nothing when there are no messages yet", () => {
+      render(<PortraitSpeakerView {...baseProps} messages={[]} />);
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
   });
 
   describe("local-seat permutation symmetry (real-device report, issue #18: claiming seat 1 worked, claiming seat 2 didn't) — same coverage as SpeakerStage's own matrix, exercised through the full role-router path", () => {

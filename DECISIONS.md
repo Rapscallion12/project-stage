@@ -3,6 +3,66 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View Phase 2: restored Leave/composer/ambient comments as stress-testing infrastructure, paused split-screen investigation
+
+**Problem**: the seat-index investigation didn't reproduce on retest —
+the user needs a better way to stress-test the join/leave cycle
+repeatedly to catch the actual trigger, but Speaker View had no in-UI
+way to leave the stage at all (only navigating away, which is slow and
+introduces its own confound — the lifecycle/token-refresh behavior from
+earlier passes). Explicitly asked to pause further split-screen changes
+and restore real interface pieces instead.
+
+**Leave the stage**: new `SpeakerControlBar`, currently just one pill,
+calling the *exact same* `leaveSpeakerSeat` Server Action `RoomControls`
+already uses — no new mutation path, no new authorization logic.
+Deliberately not `RoomControls` itself: its `isSpeaker` branch is the
+padded, bordered legacy block the user explicitly said not to bring
+back. Once `leaveSpeakerSeat` succeeds, nothing further needs wiring —
+`useActiveSpeakers`' existing Realtime subscription flips `isSpeaker`
+false, the role router in `PortraitRoom`/`MobileLandscapeRoom` returns to
+the Audience/Candidate composition on its own, and the existing
+`canPublish → false` reaction inside `useLiveRoomConnection` (unchanged)
+stops the published camera/mic and clears `localVideoTrack`, hiding
+`SelfPreview` — this is the same mechanism already relied on everywhere
+else a speaker's seat is ended, not new behavior.
+
+**Composer + ambient comments**: `ChatPanel` gained one new prop,
+`allowMicRequest` (default `true`, every existing caller unaffected) —
+`false` hides the 🎙 toggle in compact mode entirely, since a seated
+speaker already holds the seat a mic request would be for. Both Speaker
+Views now wrap `WatchModeControls`/`ChatPanel`(`allowMicRequest={false}`)/
+`AmbientComments` in the *same* `StageOverlayShell`/`bottom-16 left-3`
+positioning Watch Mode already established — zero new layout logic, same
+`sendMessage` action, same gesture-safety logic. React/Vote/Gift stay
+inert via the unchanged `WatchModeControls`.
+
+**`SpeakerMediaActivationPrompt` repositioned**: was pinned to the
+bottom edge (`bottom-6`), which would now collide with the new
+composer/leave row. Moved to vertically centered on the stage
+(`top-1/2 -translate-y-1/2`) so it stays clear regardless of the bottom
+overlay's actual rendered height, without needing to calculate it.
+
+**Landscape gets the same additions, not portrait-only**: the user's ask
+didn't restrict this to portrait, and the stress-test plan explicitly
+includes rotating between states — leaving out landscape would mean
+rotating mid-test loses the ability to leave or comment, a real
+functional gap that could itself look like a new bug during testing.
+
+**Explicitly not done this pass**: no further split-screen
+investigation or fix — paused per instruction, pending a cleaner
+reproduction from the user's own stress-testing session with these
+tools now available. No live mic/camera mute toggles — still a planned
+follow-up to `SpeakerControlBar` itself.
+
+**Test updates**: two role-router tests (in `portrait-room.test.tsx` and
+`mobile-landscape-room.test.tsx`) had asserted "no composer/no leave
+button" for a seated speaker — now stale, since Speaker View genuinely
+has both. Updated to assert the *real* leave button exists while the
+*legacy* `RoomControls` block's text (`"Setting up your mic access…"`,
+"Enable camera & mic") still doesn't — preserving the actual intent
+(no legacy block) while fixing the outdated absence claim.
+
 ## 2026-08-24 — Speaker View "top seat vs. bottom seat" report: confirmed no seat-index asymmetry exists, via an actual empirical test run, not just re-reading the code
 
 **Problem**: a precise real-device report — claiming the top seat lands

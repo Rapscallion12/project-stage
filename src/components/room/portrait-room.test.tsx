@@ -240,15 +240,17 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
     });
 
-    it("a seated speaker is routed to Speaker View instead of Watch Mode's own leave-stage treatment (issue #18, Phase 1)", () => {
+    it("a seated speaker is routed to Speaker View instead of Watch Mode's own leave-stage treatment (issue #18)", () => {
       render(<PortraitRoom {...baseProps} isSpeaker={true} canPublish={true} />);
       // Still SpeakerStage underneath (via PortraitSpeakerView) — not a blank page.
       expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
-      // None of Watch Mode's own chrome — composer, React/Vote/Gift, or
-      // RoomControls' leave-stage button — renders in this composition.
-      expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
+      // Speaker View has its own composer/leave control (issue #18, Phase
+      // 2) — a real leave button exists, just not the old legacy
+      // RoomControls block (no "Enable camera & mic"/status text
+      // alongside it) — see portrait-speaker-view.test.tsx for the full
+      // Speaker View composer/leave/ambient-comments coverage.
+      expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
+      expect(screen.queryByText(/setting up your mic access/i)).not.toBeInTheDocument();
     });
 
     it("renders the compact 'Request sent · Cancel' pill for a pending requester, not the old paragraph+Withdraw block", () => {

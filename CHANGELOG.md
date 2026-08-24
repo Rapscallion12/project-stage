@@ -9,6 +9,20 @@ separate release cadence to track here.
 
 ### Added
 
+- **Speaker View (issue #18) Phase 2: Leave the stage, commenting,
+  ambient comments** — a seated speaker can now leave voluntarily via a
+  new `SpeakerControlBar` pill, reusing the *same* `leaveSpeakerSeat`
+  Server Action `RoomControls` already uses (no new mutation path). The
+  compact `ChatPanel` composer and `AmbientComments` are both restored
+  in Speaker View (portrait and landscape), reusing the exact components
+  Watch Mode already uses, positioned the same way. `ChatPanel` gained
+  one new prop, `allowMicRequest` (default `true`, no existing caller
+  affected) — `false` hides the 🎙 request-to-speak toggle entirely,
+  since a seated speaker already holds the seat a request would be for.
+  React/Vote/Gift remain inert. `SpeakerMediaActivationPrompt` moved from
+  the bottom edge to vertically centered, to stay clear of the new
+  bottom row. See DECISIONS.md.
+
 - **Speaker View (issue #18) Phase 1: full-bleed remote speaker, portrait
   and landscape** — when the viewer holds a seat, both `PortraitRoom` and
   `MobileLandscapeRoom` now route to a dedicated Speaker View composition
