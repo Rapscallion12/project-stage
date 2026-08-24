@@ -519,6 +519,15 @@ different dependencies. Current order:
       both portrait and landscape Speaker View — the real interface
       needed to stress-test join/leave cycles repeatedly. React/Vote/Gift
       stay inert. See DECISIONS.md's seventh 2026-08-24 entry.
+      **Everything above approved on real-device stress testing** —
+      top/bottom join, self-preview, Leave the stage, commenting/ambient
+      comments, and landscape all confirmed working; the split-screen
+      issue did not reproduce and further investigation is paused pending
+      a clearer trigger. **Live mic/camera mute toggles shipped** (the
+      original plan's remaining Phase 3 content) — `SpeakerControlBar`
+      gained mic/camera buttons backed by `LocalTrack.mute()`/`.unmute()`
+      on the already-published track, never `setMicrophoneEnabled`/
+      `setCameraEnabled`. See DECISIONS.md's eighth 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

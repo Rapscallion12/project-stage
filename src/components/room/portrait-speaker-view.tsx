@@ -62,8 +62,13 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * renders the existing "Seat open" placeholder when that seat has no
  * occupant. No separate "waiting for a partner" UI.
  *
- * **Still deliberately not here**: live mic/camera mute toggles — a
- * planned follow-up to `SpeakerControlBar` itself, not a new component.
+ * **Live mic/camera mute toggles** (issue #18, Phase 2 continued):
+ * `SpeakerControlBar` now also takes `microphoneMuted`/`cameraMuted` and
+ * `onToggleMicrophone`/`onToggleCamera` — passed straight through from
+ * `useLiveRoomConnection` via `EventRoom`'s `layoutProps`, no new state
+ * owned here. `canToggleMedia` (`canPublish && !needsMediaActivation`)
+ * gates the buttons to only once actually publishing — before that
+ * there's no published track to mute at all.
  */
 export function PortraitSpeakerView({
   event,
@@ -72,6 +77,7 @@ export function PortraitSpeakerView({
   identity,
   getParticipant,
   connectionStatus,
+  canPublish,
   needsMediaActivation,
   activateMedia,
   mediaError,
@@ -81,6 +87,10 @@ export function PortraitSpeakerView({
   messages,
   reactions,
   onPrepareMedia,
+  microphoneMuted,
+  cameraMuted,
+  toggleMicrophone,
+  toggleCamera,
 }: RoomLayoutProps) {
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -112,7 +122,14 @@ export function PortraitSpeakerView({
       </div>
 
       <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
-        <SpeakerControlBar eventId={event.id} />
+        <SpeakerControlBar
+          eventId={event.id}
+          microphoneMuted={microphoneMuted}
+          cameraMuted={cameraMuted}
+          onToggleMicrophone={toggleMicrophone}
+          onToggleCamera={toggleCamera}
+          canToggleMedia={canPublish && !needsMediaActivation}
+        />
         <WatchModeControls
           composer={
             <ChatPanel

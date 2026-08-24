@@ -315,6 +315,10 @@ export function EventRoom({
     reconnectingIdentities,
     messages,
     reactions,
+    microphoneMuted: connection.microphoneMuted,
+    cameraMuted: connection.cameraMuted,
+    toggleMicrophone: connection.toggleMicrophone,
+    toggleCamera: connection.toggleCamera,
   };
 
   return (

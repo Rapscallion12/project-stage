@@ -339,3 +339,116 @@ describe("useLiveRoomConnection — a refreshed token must never force a reconne
     expect(roomInstances[0].disconnect).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Issue #18, Speaker View Phase 2 — mic/camera mute toggles must mute in
+ * place on the already-published track, never reacquire it. These tests
+ * assert `toggleMicrophone`/`toggleCamera` call `LocalTrack.mute()`/
+ * `.unmute()` directly and never `setMicrophoneEnabled`/`setCameraEnabled`
+ * (which would stop/reacquire the underlying hardware track).
+ */
+describe("useLiveRoomConnection — mic/camera mute toggles mute in place, never reacquire", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    roomInstances.length = 0;
+  });
+
+  function fakeLocalTrack(initialMuted = false) {
+    const track = {
+      isMuted: initialMuted,
+      mute: vi.fn(async () => {
+        track.isMuted = true;
+      }),
+      unmute: vi.fn(async () => {
+        track.isMuted = false;
+      }),
+    };
+    return track;
+  }
+
+  it("starts unmuted on a fresh hook instance", () => {
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    expect(result.current.microphoneMuted).toBe(false);
+    expect(result.current.cameraMuted).toBe(false);
+  });
+
+  it("toggleMicrophone mutes the existing published microphone track, never calls setMicrophoneEnabled", async () => {
+    const track = fakeLocalTrack(false);
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    const room = roomInstances[0];
+    room.localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Microphone ? { track } : undefined,
+    );
+
+    await act(async () => {
+      await result.current.toggleMicrophone();
+    });
+
+    expect(track.mute).toHaveBeenCalledTimes(1);
+    expect(track.unmute).not.toHaveBeenCalled();
+    expect(room.localParticipant.setMicrophoneEnabled).not.toHaveBeenCalled();
+    expect(result.current.microphoneMuted).toBe(true);
+  });
+
+  it("toggling a second time unmutes", async () => {
+    const track = fakeLocalTrack(false);
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    roomInstances[0].localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Microphone ? { track } : undefined,
+    );
+
+    await act(async () => {
+      await result.current.toggleMicrophone();
+    });
+    await act(async () => {
+      await result.current.toggleMicrophone();
+    });
+
+    expect(track.mute).toHaveBeenCalledTimes(1);
+    expect(track.unmute).toHaveBeenCalledTimes(1);
+    expect(result.current.microphoneMuted).toBe(false);
+  });
+
+  it("toggleCamera mutes the existing published camera track, never calls setCameraEnabled", async () => {
+    const track = fakeLocalTrack(false);
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    const room = roomInstances[0];
+    room.localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Camera ? { track } : undefined,
+    );
+
+    await act(async () => {
+      await result.current.toggleCamera();
+    });
+
+    expect(track.mute).toHaveBeenCalledTimes(1);
+    expect(room.localParticipant.setCameraEnabled).not.toHaveBeenCalled();
+    expect(result.current.cameraMuted).toBe(true);
+  });
+
+  it("is a safe no-op when nothing is published for that source yet", async () => {
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    roomInstances[0].localParticipant.getTrackPublication.mockReturnValue(undefined);
+
+    await act(async () => {
+      await result.current.toggleMicrophone();
+    });
+
+    expect(result.current.microphoneMuted).toBe(false);
+  });
+
+  it("createLocalTracks is never called by either toggle — no new getUserMedia acquisition", async () => {
+    const track = fakeLocalTrack(false);
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    roomInstances[0].localParticipant.getTrackPublication.mockImplementation(() => ({ track }));
+
+    await act(async () => {
+      await result.current.toggleMicrophone();
+    });
+    await act(async () => {
+      await result.current.toggleCamera();
+    });
+
+    expect(createLocalTracks).not.toHaveBeenCalled();
+  });
+});

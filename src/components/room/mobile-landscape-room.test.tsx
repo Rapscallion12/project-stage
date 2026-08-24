@@ -60,6 +60,10 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  microphoneMuted: false,
+  cameraMuted: false,
+  toggleMicrophone: vi.fn(async () => {}),
+  toggleCamera: vi.fn(async () => {}),
 };
 
 describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is not a small desktop)", () => {

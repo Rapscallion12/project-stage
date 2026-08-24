@@ -54,8 +54,10 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * since there was previously no way to leave the stage at all once
  * rotated to landscape.
  *
- * **Still deliberately not here**: live mic/camera mute toggles, no
- * desktop equivalent.
+ * **Live mic/camera mute toggles**: same `SpeakerControlBar` props as
+ * `PortraitSpeakerView` — see that component's own doc comment.
+ *
+ * **Still deliberately not here**: no desktop equivalent.
  */
 export function MobileLandscapeSpeakerView({
   event,
@@ -64,6 +66,7 @@ export function MobileLandscapeSpeakerView({
   identity,
   getParticipant,
   connectionStatus,
+  canPublish,
   needsMediaActivation,
   activateMedia,
   mediaError,
@@ -73,6 +76,10 @@ export function MobileLandscapeSpeakerView({
   messages,
   reactions,
   onPrepareMedia,
+  microphoneMuted,
+  cameraMuted,
+  toggleMicrophone,
+  toggleCamera,
 }: RoomLayoutProps) {
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -104,7 +111,14 @@ export function MobileLandscapeSpeakerView({
       </div>
 
       <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
-        <SpeakerControlBar eventId={event.id} />
+        <SpeakerControlBar
+          eventId={event.id}
+          microphoneMuted={microphoneMuted}
+          cameraMuted={cameraMuted}
+          onToggleMicrophone={toggleMicrophone}
+          onToggleCamera={toggleCamera}
+          canToggleMedia={canPublish && !needsMediaActivation}
+        />
         <WatchModeControls
           composer={
             <ChatPanel

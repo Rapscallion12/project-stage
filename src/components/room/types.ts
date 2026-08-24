@@ -83,4 +83,10 @@ export type RoomLayoutProps = {
   reconnectingIdentities: ReadonlySet<string>;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /** Issue #18, Speaker View Phase 2: whether the local participant's own published microphone/camera are currently muted — see useLiveRoomConnection's own doc comment. */
+  microphoneMuted: boolean;
+  cameraMuted: boolean;
+  /** Toggles mute in place on the already-published track — see useLiveRoomConnection's own doc comment for why this is never setMicrophoneEnabled/setCameraEnabled. */
+  toggleMicrophone: () => Promise<void>;
+  toggleCamera: () => Promise<void>;
 };

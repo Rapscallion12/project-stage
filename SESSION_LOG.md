@@ -339,6 +339,45 @@ reappears. No further split-screen changes until a clearer trigger is
 identified from that session. Do not begin further Speaker View scope
 until explicitly approved.
 
+**Phase 1 (everything shipped so far) approved on real-device stress
+testing** — top/bottom join both work, self-preview works, Leave the
+stage and commenting/ambient comments hold up under repeated cycles,
+landscape is acceptable with the header hidden. The split-screen issue
+did not reproduce; the user explicitly paused further investigation of
+it pending a clearer trigger, rather than more speculative changes.
+
+**Asked to "proceed to Phase 2"** — reconciled phase numbering before
+writing code, per instruction: the original 4-phase plan's Phase 2
+(composer + ambient comments) and Phase 3's leave-stage half were both
+already delivered in the prior pass, framed as stress-testing
+infrastructure rather than by their original numbers. The user's
+"Phase 2" now maps to the plan's remaining **Phase 3 content: live
+mic/camera mute toggles** — stated this mapping explicitly before
+touching code.
+
+**Implemented**: `useLiveRoomConnection` gained `microphoneMuted`/
+`cameraMuted` state and `toggleMicrophone`/`toggleCamera`, backed by
+`LocalTrack.mute()`/`.unmute()` on the already-published track — never
+`setMicrophoneEnabled`/`setCameraEnabled`, which would stop and
+reacquire the hardware track (a real `getUserMedia` call, the same class
+of risk already investigated and avoided twice this session).
+`SpeakerControlBar` (already existed with just the leave pill, whose own
+doc comment had already anticipated this exact follow-up) gained two
+toggle buttons, disabled until actually publishing
+(`canPublish && !needsMediaActivation`). Mute state resets alongside
+`localVideoTrack` on leaving, so a same-session rejoin's freshly
+acquired track never inherits a stale mute flag. New `Room`-mocking
+tests assert `.mute()`/`.unmute()` are called and `setMicrophoneEnabled`/
+`setCameraEnabled`/`createLocalTracks` are not. lint/tsc/build/test all
+pass (414/414, 42 files, +12 new tests). Local production smoke test
+confirmed the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of the
+mic/camera toggles specifically — mute/unmute actually stops/resumes
+audio and video for the other participant, no permission re-prompt, no
+reconnect, buttons correctly disabled before publishing starts. Do not
+begin the next Speaker View scope until explicitly approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

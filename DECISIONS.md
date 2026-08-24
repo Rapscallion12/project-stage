@@ -3,6 +3,70 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View live mic/camera mute toggles (the original plan's remaining Phase 3 half, approved by the user as "Phase 2")
+
+**Phase-numbering reconciliation**: the originally approved 4-phase plan
+was Phase 1 (static full-bleed layout), Phase 2 (composer + ambient
+comments), Phase 3 (`SpeakerControlBar` — leave-stage first, then
+mic/camera toggles), Phase 4 (real-device buffer pass). The prior
+corrective pass already delivered the plan's Phase 2 content (composer,
+ambient comments) *and* Phase 3's leave-stage half together, framed as
+"stress-testing infrastructure" rather than by their original phase
+numbers. The user's current "Phase 1 approved, proceed to Phase 2"
+message treats everything already shipped as one approved unit and asks
+for the next piece — which maps to the original plan's **remaining
+Phase 3 content: live mic/camera mute toggles**, not a second delivery
+of Phase 2's composer/ambient-comments (already done). Confirmed and
+stated this mapping explicitly before writing any code, per instruction.
+
+**Reused**: `SpeakerControlBar` (already exists, currently just the
+leave pill) — extended in place rather than building a second bar,
+matching what the component's own doc comment already anticipated
+("Mic/camera toggles are a deliberate, separate follow-up to this same
+component, not a different one"). `leaveSpeakerSeat` untouched. No new
+LiveKit connection/subscription — same `Room` instance `EventRoom`
+already owns.
+
+**Added**: `useLiveRoomConnection` gained `microphoneMuted`/`cameraMuted`
+state and `toggleMicrophone`/`toggleCamera` — implemented via
+`LocalTrack.mute()`/`.unmute()` on the already-published track
+(`room.localParticipant.getTrackPublication(Track.Source.Microphone /
+Camera)?.track`), **not** `setMicrophoneEnabled`/`setCameraEnabled`,
+exactly as the original plan specified: those convenience methods
+unpublish-and-stop the underlying hardware track on disable and
+re-acquire it via `createLocalTracks`/`getUserMedia` on re-enable — a
+real reacquisition, and on iOS Safari specifically not guaranteed to
+succeed without a fresh gesture at all (the same class of issue already
+found and fixed twice this session). `mute()`/`unmute()` instead toggles
+send state on the exact same `MediaStreamTrack` already held — no new
+hardware access, correctly notifies the other participant via
+`TrackMuted`/`TrackUnmuted`. A no-op if nothing is published for that
+source yet (`getTrackPublication` returns `undefined`) — `canToggleMedia`
+(`canPublish && !needsMediaActivation`, computed by the caller) gates
+the buttons to disabled rather than silently no-op'ing on tap in that
+state.
+
+**Mute state resets alongside `localVideoTrack`** when `applyPublishState(false)`
+runs (leaving the stage) — a later republish within the *same* mounted
+hook instance (leave-then-rejoin, not a fresh page load) acquires a
+genuinely new track via `prepareLocalMedia`, which always starts
+unmuted; without this reset, a prior mute toggle could otherwise appear
+to carry over onto a track that was never actually muted.
+
+**Threaded through** `RoomLayoutProps`/`EventRoom`'s `layoutProps` the
+same mechanical way every other `connection.*` field already flows —
+four new fields, no new decisions there.
+
+**Verification**: new `Room`-mocking tests in `use-live-room-connection.test.ts`
+assert `toggleMicrophone`/`toggleCamera` call `.mute()`/`.unmute()` on a
+fake track and *never* `setMicrophoneEnabled`/`setCameraEnabled`, that
+`createLocalTracks` is never called by either toggle (no reacquisition),
+and the no-op/disabled-when-not-publishing cases. These are strong
+code-level guarantees against regressing the reacquisition invariant —
+they cannot verify the actual felt experience (whether muting reads as
+instant on a real device, whether the other participant's audio/video
+actually stops), which remains the user's own real-device check.
+
 ## 2026-08-24 — Speaker View Phase 2: restored Leave/composer/ambient comments as stress-testing infrastructure, paused split-screen investigation
 
 **Problem**: the seat-index investigation didn't reproduce on retest —

@@ -78,6 +78,10 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  microphoneMuted: false,
+  cameraMuted: false,
+  toggleMicrophone: vi.fn(async () => {}),
+  toggleCamera: vi.fn(async () => {}),
 };
 
 describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape corrective pass)", () => {

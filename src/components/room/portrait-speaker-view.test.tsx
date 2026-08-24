@@ -77,6 +77,10 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  microphoneMuted: false,
+  cameraMuted: false,
+  toggleMicrophone: vi.fn(async () => {}),
+  toggleCamera: vi.fn(async () => {}),
 };
 
 describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {

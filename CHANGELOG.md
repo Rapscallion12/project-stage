@@ -9,6 +9,18 @@ separate release cadence to track here.
 
 ### Added
 
+- **Speaker View (issue #18): live microphone/camera mute toggles** — the
+  remaining half of the original plan's Phase 3 (leave-stage already
+  shipped). `SpeakerControlBar` gained two toggle buttons alongside
+  "Leave the stage," calling new `toggleMicrophone`/`toggleCamera` on
+  `useLiveRoomConnection`. Implemented via `LocalTrack.mute()`/`.unmute()`
+  on the already-published track, never `setMicrophoneEnabled`/
+  `setCameraEnabled` — those would stop and reacquire the underlying
+  hardware track (a real `getUserMedia` call, not guaranteed to succeed
+  without a fresh gesture on iOS Safari). Buttons disable when nothing is
+  actually publishing yet (`canPublish && !needsMediaActivation`). See
+  DECISIONS.md.
+
 - **Speaker View (issue #18) Phase 2: Leave the stage, commenting,
   ambient comments** — a seated speaker can now leave voluntarily via a
   new `SpeakerControlBar` pill, reusing the *same* `leaveSpeakerSeat`

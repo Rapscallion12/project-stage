@@ -122,6 +122,26 @@ export type LiveRoomConnection = {
    * with nothing held.
    */
   releaseLocalMedia: () => void;
+  /** Issue #18, Speaker View Phase 2 (mic/camera toggles): whether the local participant's own published microphone/camera are currently muted. Both start `false` on every fresh hook instance, matching a newly-published track's real default state. */
+  microphoneMuted: boolean;
+  cameraMuted: boolean;
+  /**
+   * Toggles mute on the *already-published* microphone/camera track in
+   * place — `LocalTrack.mute()`/`.unmute()`, never
+   * `setMicrophoneEnabled`/`setCameraEnabled`. Those convenience methods
+   * unpublish-and-stop the underlying hardware track on disable and
+   * re-run `createLocalTracks`/`getUserMedia` on re-enable — a real
+   * reacquisition, and on iOS Safari specifically, one that isn't
+   * guaranteed to succeed without a fresh gesture at all (see
+   * DECISIONS.md). `mute()`/`unmute()` instead toggles the send state on
+   * the exact same `MediaStreamTrack` already held — no new hardware
+   * access, no new permission prompt, and it's what correctly notifies
+   * every other participant via `TrackMuted`/`TrackUnmuted`. A no-op if
+   * there's no published track for that source yet (not currently
+   * publishing).
+   */
+  toggleMicrophone: () => Promise<void>;
+  toggleCamera: () => Promise<void>;
 };
 
 /**
@@ -156,6 +176,8 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
   const [canPublish, setCanPublish] = useState(false);
   const [mediaActivated, setMediaActivated] = useState(false);
   const [localVideoTrack, setLocalVideoTrack] = useState<LocalVideoTrack | null>(null);
+  const [microphoneMuted, setMicrophoneMuted] = useState(false);
+  const [cameraMuted, setCameraMuted] = useState(false);
   const roomRef = useRef<Room | null>(null);
   const mediaActivatedRef = useRef(false);
   const applyPublishStateRef = useRef<(publish: boolean) => Promise<void>>(async () => {});
@@ -239,8 +261,15 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       // clear the state so the self-preview slot hides again, same as an
       // ordinary audience member with no local media. A no-op for anyone
       // who never held a track (the common publish=false case on initial
-      // connect).
-      if (!publish) setLocalVideoTrack(null);
+      // connect). Mute state resets alongside it — a later republish (a
+      // leave-then-rejoin within the same mounted session, not a fresh
+      // page load) acquires a genuinely new track, which always starts
+      // unmuted, so any prior mute toggle here must not carry over.
+      if (!publish) {
+        setLocalVideoTrack(null);
+        setMicrophoneMuted(false);
+        setCameraMuted(false);
+      }
     }
     applyPublishStateRef.current = applyPublishState;
 
@@ -414,6 +443,42 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     stopPreparedTracks();
   }, [stopPreparedTracks]);
 
+  /**
+   * Issue #18, Speaker View Phase 2: toggles mute in place on the
+   * already-published microphone track — see `LiveRoomConnection`'s own
+   * doc comment for why this calls `LocalTrack.mute()`/`.unmute()`
+   * rather than `setMicrophoneEnabled`, which would stop/reacquire the
+   * hardware track instead. A no-op if nothing is actually published yet
+   * for this source (e.g. `needsMediaActivation` still true) — there's
+   * no track to mute.
+   */
+  const toggleMicrophone = useCallback(async () => {
+    const room = roomRef.current;
+    const track = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    if (!track) return;
+    const nextMuted = !track.isMuted;
+    if (nextMuted) {
+      await track.mute();
+    } else {
+      await track.unmute();
+    }
+    setMicrophoneMuted(nextMuted);
+  }, []);
+
+  /** Same as `toggleMicrophone`, for the camera track. */
+  const toggleCamera = useCallback(async () => {
+    const room = roomRef.current;
+    const track = room?.localParticipant.getTrackPublication(Track.Source.Camera)?.track;
+    if (!track) return;
+    const nextMuted = !track.isMuted;
+    if (nextMuted) {
+      await track.mute();
+    } else {
+      await track.unmute();
+    }
+    setCameraMuted(nextMuted);
+  }, []);
+
   return {
     status,
     participantCount,
@@ -425,5 +490,9 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     localVideoTrack,
     prepareLocalMedia,
     releaseLocalMedia,
+    microphoneMuted,
+    cameraMuted,
+    toggleMicrophone,
+    toggleCamera,
   };
 }

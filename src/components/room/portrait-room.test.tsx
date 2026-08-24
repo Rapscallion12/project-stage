@@ -69,6 +69,10 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  microphoneMuted: false,
+  cameraMuted: false,
+  toggleMicrophone: vi.fn(async () => {}),
+  toggleCamera: vi.fn(async () => {}),
 };
 
 describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", () => {
