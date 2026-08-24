@@ -3,6 +3,105 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — First-load composition-hydration race fixed; reconnect prompt shows the real remaining grace time (issue #18)
+
+**Problem 1 — intermittent Speaker View failure on first/fresh load**:
+a seated speaker occasionally landed in the ordinary two-seat/split
+composition instead of Speaker View, most reproducible right after a
+fresh deployment.
+
+**Investigation**: traced the exact first-load lifecycle the user asked
+for. Server-side data (`initialSpeakers`, `identity`) is not the
+culprit — `page.tsx` resolves identity via `cookies()` before every
+Supabase call (`lib/supabase/server.ts`'s `createClient()` reads
+`cookies()` on every invocation), which makes the whole route
+dynamically rendered per request; ruled out via Next.js's own bundled
+docs for *this* installed version rather than assumed from training
+data (Cache Components is off in this project's `next.config.ts`, so
+the "previous model" applies, and `fetchCache: 'auto'`'s "cache fetches
+before the first Request-time API" exception never applies here either,
+since `cookies()` is always called first). `EventRoom`'s `isSpeaker`/
+`participantRole` are synchronous, single-source values (previous
+entries) — also ruled out.
+
+The real cause: `useOrientation`/`useIsDesktopViewport` are correctly
+`useSyncExternalStore`-based (genuinely external, mutable browser
+state), but their `getServerSnapshot` — used for the server render
+*and* the client's first hydration pass, to avoid a mismatch — returns
+a fixed guess (`"portrait"`, `false`/mobile), not "unknown." On a real
+desktop browser, that guess means the first client render always picks
+a *mobile* composition first (which has its own role router, so Speaker
+View can render correctly for one instant); React then corrects the
+snapshot to the real client value, and `EventRoom` switches to
+`DesktopRoom` — which has no role router at all (an intentional,
+already-approved scope boundary: Speaker View has no desktop
+equivalent) and never reconsiders role again. A seated speaker's first
+paint could show Speaker View, then get silently replaced by
+`DesktopRoom`'s ordinary layout for the rest of the session. The same
+mechanism could also cause an unnecessary Portrait↔MobileLandscape
+composition swap right after mount (both of those do have role
+routers, so this direction doesn't get stuck, but is still an
+unnecessary remount/flash).
+
+**Decision**: new `useHasMountedOnClient()` (deliberately
+`useSyncExternalStore`-based too — `getSnapshot` always `true`,
+`getServerSnapshot` always `false` — not `useState`+`useEffect`, which
+the codebase's own `react-hooks/set-state-in-effect` lint rule already
+steers away from for this exact "recompute something the initial
+render already knew" shape). React settles every `useSyncExternalStore`
+correction in a commit before any passive `useEffect` runs, so by the
+time this hook's own corrected value lands, `useOrientation`/
+`useIsDesktopViewport` already have theirs too — no coordination with
+those hooks' internals required, and neither hook's own contract
+changes. `EventRoom` now renders a brief neutral state ("Reconnecting
+to stage…" when the authoritative data already says speaker, silent
+otherwise) instead of any of the three compositions while this is
+`false` — the *only* render that ever picks a composition is the one
+where viewport/orientation are already known, so a wrong composition
+is never even briefly committed to (not "fixed after a flash" — never
+rendered at all). Dev-only `console.debug` logs the exact
+ordering (`hasMountedOnClient`, `isDesktopViewport`, `orientation`,
+`participantRole`, `isSpeaker`, `mySeatNumber`) on every relevant
+change, so a recurrence leaves a concrete trace.
+
+**Problem 2 — reconnect prompt needed an accurate countdown**: "Tap to
+reconnect" gave no sense of how much of the 11-second grace period
+remained.
+
+**Decision**: `EventRoom` now also threads the viewer's own active-seat
+`disconnected_at` down (`myDisconnectedAt` — found from the same
+Realtime-subscribed `speakers` state already used everywhere else, not
+a new fetch). New `useReconnectCountdown`/`remainingGraceSeconds`
+(`lib/speaker-reconnect.ts`'s `SPEAKER_DISCONNECT_GRACE_MS`) compute the
+display purely from `disconnectedAt + grace period` — never a fresh
+client-invented 11-second timer — so a reopened tab partway through an
+existing grace window shows the correct remainder immediately, ticking
+is a `setInterval` inside the effect body (not a raw `setState` call
+there, for the same lint reason as above), and the countdown disappears
+the instant `disconnectedAt` clears (reconnect) or the whole Speaker
+View unmounts (seat released — the existing role-consistency guarantee
+already covers that transition, so no new mechanism was needed for it).
+Crossing zero is display-only, clamped, and never implies the seat is
+still held — the seat's own disappearance from `speakers` is what
+actually reflects release.
+
+**Verification honesty**: automated (lint/tsc/full suite — 565/565, 49
+files, run twice to check for fake-timer flakiness in the new countdown
+tests, stable both times) and a local production smoke test all pass.
+The first-load fix is verified via a new `event-room.test.tsx` that
+drives the exact hydration-order scenarios requested (speaker data
+already true before mount resolves, speaker data arriving one render
+late, role changing from audience to speaker mid-hydration) against
+mocked `useHasMountedOnClient`/`useIsDesktopViewport`/`useOrientation` —
+this tests the *consequence* (EventRoom never commits to a composition
+before it's known, and the first real composition render is always
+correct), not a literal replay of `useSyncExternalStore`'s internal
+timing, which isn't something a jsdom test can independently reproduce;
+that guarantee rests on documented React behavior instead. Whether this
+actually eliminates the original intermittent report, and whether the
+countdown reads correctly across a real disconnect/reconnect cycle, are
+still real-device-only.
+
 ## 2026-08-24 — "Tap to reconnect" wording, and a genuinely server-authoritative 11-second speaker disconnect grace period (issue #18)
 
 **Problem 1 — reconnect wording**: Speaker View's media-activation

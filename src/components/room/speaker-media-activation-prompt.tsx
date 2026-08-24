@@ -1,4 +1,5 @@
 import { mediaErrorMessage } from "@/components/room/room-controls";
+import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 
 /**
@@ -53,16 +54,35 @@ import type { MediaError } from "@/hooks/use-live-room-connection";
  * `RoomControls`/`SpeakerTile`'s own first-activation entry points
  * elsewhere) read as a fresh setup step here instead of what it actually
  * is: reconnecting camera/mic to the seat this tab already holds.
+ *
+ * **Remaining-time countdown** (issue #18 reconnect-countdown finding):
+ * `disconnectedAt` is the viewer's own active-seat `disconnected_at`
+ * (`EventRoom`, sourced from the same Realtime-subscribed `speakers`
+ * state, itself set by the LiveKit webhook — see migration
+ * 00000000000016) — never a fresh client-side 11-second timer.
+ * `useReconnectCountdown` derives the display purely from that
+ * authoritative deadline, so a reopened tab partway through an existing
+ * grace window shows the real remaining time immediately, ticking
+ * clears the instant `disconnectedAt` is cleared (reconnect), and
+ * crossing zero here is display-only — the seat's own disappearance
+ * from `speakers` once the server actually releases it (making this
+ * whole view unmount) is what actually reflects "gone," never this
+ * number by itself. `null` (not yet known, or genuinely not
+ * disconnected) shows the prompt without a countdown suffix.
  */
 export function SpeakerMediaActivationPrompt({
   needsMediaActivation,
   activateMedia,
   mediaError,
+  disconnectedAt,
 }: {
   needsMediaActivation: boolean;
   activateMedia: () => Promise<void>;
   mediaError: MediaError;
+  disconnectedAt: string | null;
 }) {
+  const remainingSeconds = useReconnectCountdown(disconnectedAt);
+
   if (!needsMediaActivation) return null;
 
   return (
@@ -80,6 +100,9 @@ export function SpeakerMediaActivationPrompt({
         className="pointer-events-auto rounded-full border border-white/30 bg-black/50 px-4 py-2 text-sm font-medium text-white"
       >
         Tap to reconnect
+        {remainingSeconds !== null && (
+          <span data-testid="speaker-reconnect-countdown"> · {remainingSeconds}s</span>
+        )}
       </button>
       {mediaError && (
         <p className="pointer-events-auto max-w-xs rounded-lg bg-black/50 px-3 py-1.5 text-center text-xs text-red-400" role="alert">

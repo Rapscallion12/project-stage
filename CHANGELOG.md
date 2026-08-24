@@ -7,7 +7,32 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Intermittent Speaker View failure on first/fresh load** — a seated
+  speaker could land in the ordinary two-seat/split composition instead
+  of Speaker View, most reproducible right after a fresh deployment.
+  Root cause: `useOrientation`/`useIsDesktopViewport` guess a mobile
+  default during SSR/first hydration (correctly, to avoid a mismatch),
+  and a real desktop browser's post-hydration correction switched
+  `EventRoom` to `DesktopRoom` — which has no role router at all (no
+  Speaker View equivalent, by design) — after briefly showing Speaker
+  View via a mobile composition. New `useHasMountedOnClient()` (the same
+  `useSyncExternalStore` idiom the other viewport hooks already use)
+  gates `EventRoom`'s composition choice entirely: a brief neutral
+  state ("Reconnecting to stage…" when already known to be a speaker)
+  shows until the client has genuinely settled, so a wrong composition
+  is never even briefly committed to. Dev-only logging added around
+  this path. See DECISIONS.md.
+
 ### Added
+
+- **Reconnect prompt shows the real remaining grace time** — "Tap to
+  reconnect" now reads "Tap to reconnect · 8s" (ticking down), derived
+  from the viewer's own `disconnected_at` plus the 11-second grace
+  period — never a fresh client-side timer. A reopened tab partway
+  through an existing grace window shows the correct remainder
+  immediately; reconnecting clears the countdown at once.
 
 - **Server-authoritative 11-second speaker disconnect grace period** —
   migration `00000000000016` adds `event_speakers.disconnected_at` and

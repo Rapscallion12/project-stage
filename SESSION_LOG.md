@@ -720,6 +720,51 @@ the 11-second window) on an actual device, are the two things automated
 coverage genuinely cannot confirm by itself. #18 still not moved to
 Done.
 
+**Two more issues before sign-off**: (1) an intermittent report of
+Speaker View failing to activate on first/fresh load, most reproducible
+right after a fresh deployment — investigated the full first-load
+lifecycle as instructed rather than guessing. Server-side data and
+`participantRole`'s own derivation were both ruled out with evidence
+(checked this exact Next.js version's own bundled docs for the caching
+model, rather than assuming from training data, since Cache Components
+is off here). Found the real cause: `useOrientation`/
+`useIsDesktopViewport` guess a mobile default for the client's first
+hydration render (correct, to avoid a mismatch), and a genuine desktop
+browser's post-hydration correction was switching `EventRoom` to
+`DesktopRoom` — which has no role router at all, an already-approved
+scope boundary (no Speaker View on desktop) — after briefly showing
+Speaker View via a mobile composition first. New
+`useHasMountedOnClient()` (the same `useSyncExternalStore` idiom the
+other viewport hooks already use, not a new role flag) gates
+`EventRoom`'s composition choice entirely: a brief neutral
+"Reconnecting to stage…" state (only worded that way when already known
+to be a speaker) shows until the client has genuinely settled, so a
+wrong composition is never even briefly committed to. Dev-only
+`console.debug` logging added around the composition-selection inputs.
+New `event-room.test.tsx` (first dedicated test file for this
+component) drives every hydration-order scenario requested directly.
+
+(2) The reconnect prompt needed to show real remaining time, not just
+"Tap to reconnect." `EventRoom` now threads the viewer's own active-seat
+`disconnected_at` down; new `useReconnectCountdown`/
+`remainingGraceSeconds` derive the display purely from that
+authoritative deadline plus the existing 11-second grace period —
+ticking is a `setInterval`, never a fresh client-invented timer. A
+reopened tab partway through an existing window shows the correct
+remainder immediately; reconnecting clears the countdown at once; the
+whole prompt (and any countdown) disappears the moment Speaker View
+itself unmounts, via the existing role-consistency guarantee — no new
+mechanism needed for that part. lint/tsc/full suite/build all pass
+(565/565, 49 files — +3 files, +25 tests; suite re-run twice for
+fake-timer flakiness, stable both times). Local production smoke test
+confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device verification — specifically a first load
+immediately after opening the preview while already a speaker, repeated
+refresh/reopen while seated, and a real disconnect/reconnect cycle
+watching the countdown. #18 still not moved to Done.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

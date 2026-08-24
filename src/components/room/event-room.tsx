@@ -10,6 +10,7 @@ import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
 import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
+import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
@@ -194,6 +195,11 @@ export function EventRoom({
 
   const orientation = useOrientation();
   const isDesktopViewport = useIsDesktopViewport();
+  // Issue #18 first-load consistency finding — see this hook's own doc
+  // comment for the exact hydration race this closes (a seated speaker
+  // intermittently landing in the wrong, role-unaware composition on a
+  // fresh page load).
+  const hasMountedOnClient = useHasMountedOnClient();
 
   // See this component's own doc comment ("room-active body class").
   useEffect(() => {
@@ -217,6 +223,36 @@ export function EventRoom({
   const mySeatNumber = findMySeatNumber(speakers, identity);
   const isSpeaker = mySeatNumber !== null;
   const participantRole = deriveParticipantRole({ isSpeaker, hasPendingRequest });
+  // Issue #18 reconnect-countdown finding: the viewer's own active-seat
+  // row (if any) carries their own `disconnected_at` — set by the
+  // webhook's `participant_left` handler and delivered here via the same
+  // Realtime subscription `speakers` already flows through, independent
+  // of this tab's own LiveKit connection state (a network drop the
+  // LiveKit server detects reaches this tab over Realtime even if this
+  // tab's own UI is still rendering). `SpeakerMediaActivationPrompt`
+  // uses this to show the real remaining grace time instead of a fresh,
+  // client-invented countdown — see lib/speaker-reconnect.ts.
+  const myDisconnectedAt = speakers.find((s) => s.seat_number === mySeatNumber)?.disconnected_at ?? null;
+
+  // Issue #18 first-load consistency finding: dev-only trace of the
+  // exact ordering that determines which composition renders, so a
+  // recurrence of "role says speaker but the wrong composition shows"
+  // leaves a concrete, inspectable log instead of needing to be
+  // reproduced blind. Fires after each commit (not during render), so
+  // it reflects what actually painted, not a discarded intermediate
+  // render.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    console.debug("[EventRoom] composition inputs", {
+      hasMountedOnClient,
+      isDesktopViewport,
+      orientation,
+      phase,
+      participantRole,
+      isSpeaker,
+      mySeatNumber,
+    });
+  }, [hasMountedOnClient, isDesktopViewport, orientation, phase, participantRole, isSpeaker, mySeatNumber]);
 
   // Issue #18 consistency fix: becoming a speaker invalidates any
   // candidate-only local state — see useRoleTransitionReset's own doc
@@ -333,6 +369,7 @@ export function EventRoom({
     isSpeaker,
     mySeatNumber,
     participantRole,
+    myDisconnectedAt,
     hasPendingRequest,
     onHasPendingRequestChange: setHasPendingRequest,
     promotionCountdown,
@@ -363,7 +400,21 @@ export function EventRoom({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1">
-        {isDesktopViewport ? (
+        {!hasMountedOnClient ? (
+          // Issue #18 first-load consistency finding: viewport/orientation
+          // are unknown on the server and guessed (mobile-portrait) for
+          // the client's first hydration pass — committing to a real
+          // composition on that guess is exactly what let a seated
+          // speaker's first paint briefly show Speaker View and then get
+          // silently replaced by DesktopRoom (no role router at all) once
+          // the guess corrected. A brief neutral state here, instead,
+          // means the *next* render — once useHasMountedOnClient flips
+          // true and orientation/isDesktopViewport already reflect the
+          // real client — is the only one that ever picks a composition.
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-black text-white/70">
+            {isSpeaker && <p className="text-sm font-medium">Reconnecting to stage…</p>}
+          </div>
+        ) : isDesktopViewport ? (
           <DesktopRoom {...layoutProps} />
         ) : orientation === "landscape" ? (
           <MobileLandscapeRoom {...layoutProps} />

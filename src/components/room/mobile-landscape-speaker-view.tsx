@@ -69,6 +69,7 @@ export function MobileLandscapeSpeakerView({
   myIdentity,
   isSpeaker,
   mySeatNumber,
+  myDisconnectedAt,
   identity,
   getParticipant,
   connectionStatus,
@@ -112,6 +113,7 @@ export function MobileLandscapeSpeakerView({
         needsMediaActivation={needsMediaActivation}
         activateMedia={activateMedia}
         mediaError={mediaError}
+        disconnectedAt={myDisconnectedAt}
       />
 
       <div className="pointer-events-none absolute bottom-32 left-3 z-10 max-w-[70%]">

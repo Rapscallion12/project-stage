@@ -605,9 +605,19 @@ different dependencies. Current order:
       confirmed this state can only ever mean an already-seated speaker's
       tab coming back fresh); and the speaker disconnect grace period
       became genuinely server-authoritative (see the roadmap item below
-      and DECISIONS.md's seventeenth 2026-08-24 entry). **Not checked
-      off** — #18 stays open, pending the user's own real-device
-      re-test.
+      and DECISIONS.md's seventeenth 2026-08-24 entry). That re-test
+      found two more issues: an intermittent Speaker View failure on
+      first/fresh load (traced to `useOrientation`/`useIsDesktopViewport`
+      guessing a mobile default during hydration, letting `EventRoom`
+      briefly commit to `DesktopRoom` — no role router at all — before
+      correcting; fixed with `useHasMountedOnClient()` gating the
+      composition choice entirely, showing a brief neutral state
+      instead of ever rendering a wrong one), and the reconnect prompt
+      needed a real countdown (now derived from the viewer's own
+      `disconnected_at` plus the existing 11-second grace period, never
+      a fresh client timer). See DECISIONS.md's eighteenth 2026-08-24
+      entry. **Not checked off** — #18 stays open, pending the user's
+      own real-device re-test.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -41,6 +41,7 @@ const baseProps: RoomLayoutProps = {
   isSpeaker: false,
   mySeatNumber: null,
   participantRole: "audience",
+  myDisconnectedAt: null,
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
