@@ -555,6 +555,13 @@ different dependencies. Current order:
       `useCommentsMode` deleted outright, nothing referenced it after.
       React/Vote/Gift still inert; no Discussion Expanded/reactions/
       voting/gifting added. See DECISIONS.md's tenth 2026-08-24 entry.
+      **Site header hidden for audience landscape too**: broadened the
+      existing speaker-only header-hiding body class
+      (`speaker-view-active`) into `mobile-landscape-live-active`,
+      triggered whenever `MobileLandscapeRoom` (audience or speaker) is
+      the actual composition rendering — one class/rule instead of two
+      near-duplicates. Portrait, desktop, and landscape outside the room
+      unaffected. See DECISIONS.md's eleventh 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

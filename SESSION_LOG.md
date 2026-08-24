@@ -466,6 +466,32 @@ audience portrait unchanged, audience landscape now Social-Stage-styled
 rotating back to portrait intact, Speaker View (both orientations) still
 working exactly as before. Neither #18 nor #21 merged or closed yet.
 
+**Landscape rebuild confirmed much closer — one narrow follow-up**: the
+site-wide header still consumed real height in audience landscape,
+crowding the stage; Speaker Landscape already hid it outright but
+audience never got that treatment. Broadened the existing header-hiding
+mechanism instead of duplicating it: `EventRoom`'s body-class toggle,
+previously gated on `isSpeaker` alone (`speaker-view-active`), now
+triggers on `phase !== "upcoming" && !isDesktopViewport && orientation
+=== "landscape"` — true exactly when `MobileLandscapeRoom` (either
+branch) is the composition about to render, regardless of role. Renamed
+to `mobile-landscape-live-active` to match its now-broader meaning; one
+class, one CSS rule, not two near-duplicates. Portrait (either role),
+desktop, and landscape outside the live room are all structurally
+unaffected — the condition can only be true for the live room's mobile
+landscape composition specifically. lint/tsc/build/test all pass
+(432/432, 42 files — no test file changes, since `EventRoom` still has
+no dedicated test file, same pre-existing limitation noted when this
+class was first added). Local production smoke test confirmed the built
+route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation — the
+site header should now be fully gone in audience landscape (not just
+shrunk), while the compact status pill, guest chip, two-speaker stage,
+ambient comments, and composer/React/Vote/Gift row all stay visible;
+audience portrait, landscape outside the room, and Speaker Landscape all
+unchanged. Neither #18 nor #21 merged or closed yet.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

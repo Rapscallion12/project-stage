@@ -3,6 +3,49 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Site header hidden for audience landscape too — broadened `speaker-view-active` into `mobile-landscape-live-active`
+
+**Problem**: the previous pass rebuilt audience landscape onto the "05"
+shell (minimal top chrome, ambient comments, persistent composer), but
+the site-wide header still consumed real height and crowded the stage —
+the existing header-hiding CSS only ever triggered for a *seated
+speaker* (`body.speaker-view-active`), a role-specific condition that
+never covered the ordinary audience/candidate composition it now also
+applies to.
+
+**Decision**: broadened the condition rather than adding a second,
+nearly-identical class/CSS rule. `EventRoom`'s effect now toggles
+`mobile-landscape-live-active` based on `phase !== "upcoming" &&
+!isDesktopViewport && orientation === "landscape"` — true exactly when
+`MobileLandscapeRoom` (either its audience or its speaker branch) is the
+composition about to render, regardless of role. One class, one CSS
+rule (`body.mobile-landscape-live-active > header { display: none; }`,
+same height-gated media query as before) covers both. Renamed from
+`speaker-view-active` rather than keeping the old name for a now-broader
+meaning — a class named after a role it no longer requires would
+mislead the next reader.
+
+**Why this doesn't affect anything else**: the condition is `phase`/
+`orientation`/`isDesktopViewport`-driven only, computed in the same
+place and the same way the composition choice itself already is — it
+can never be true when `PortraitRoom` or `DesktopRoom` render (portrait,
+either role, is completely unaffected; a real desktop window never
+matches `!isDesktopViewport`), and it can never be true outside the live
+room at all (`phase === "upcoming"` — the pre-lobby countdown view,
+which doesn't branch by orientation regardless — excludes it). The CSS
+media query itself is a second, independent guard against a real
+desktop window by height. Landscape browsing *outside* the room
+(`/events`, etc.) never mounts `EventRoom` in the first place, so it was
+never affected by either the old or the new class.
+
+**Verification honesty**: `EventRoom` still has no dedicated test file
+(the same pre-existing limitation noted when `speaker-view-active` was
+first added) — the class-toggle logic is verified structurally (build
+succeeds, the condition's inputs are all already-tested pieces of state)
+rather than by a unit test asserting the class itself. Real-device
+confirmation that the header is actually gone in both roles, and returns
+correctly on rotation/leaving, remains the user's own check.
+
 ## 2026-08-24 — Audience landscape rebuilt onto "05 — Social Stage" (issue #21) — the last surviving pre-05 composition
 
 **Problem**: real-device testing during the #18 integrated sign-off pass

@@ -9,6 +9,17 @@ separate release cadence to track here.
 
 ### Changed
 
+- **Site-wide header now hidden for audience landscape too, not just
+  Speaker View** — the header-hiding CSS (previously
+  `body.speaker-view-active`, speaker-only) is broadened into
+  `body.mobile-landscape-live-active`, toggled whenever
+  `MobileLandscapeRoom` (audience or speaker branch) is the actual
+  composition rendering, regardless of role. One class/rule instead of
+  two near-duplicates. Portrait (either role), desktop, and landscape
+  outside the live room are all unaffected — the condition can only be
+  true for the live room's mobile landscape composition specifically.
+  See DECISIONS.md.
+
 - **Audience landscape rebuilt onto "05 — Social Stage" (issue #21)** —
   rotating to landscape as an audience member no longer falls back to
   the legacy interface (`RoomHeader`'s full status bar, the centered
