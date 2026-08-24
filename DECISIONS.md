@@ -3,6 +3,56 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — "Going live" countdown redesigned as a center-stage transition (issue #18 UX finding)
+
+**Problem**: after the role-consistency fix, real-device stress testing
+surfaced a separate UX issue: the automatic-promotion countdown rendered
+as a small inline pill inside `RoomControls`, competing directly with
+the persistent bottom composer/controls and ambient comments — all
+visible simultaneously. An important transition (about to go live) read
+as just another notification instead of a significant moment.
+
+**Decision**: `PortraitRoom`/`MobileLandscapeRoom`'s audience/candidate
+branch now renders a new `CountdownOverlay` component *instead of* (not
+alongside) the ordinary bottom composer/controls and ambient comments,
+for exactly as long as `promotionCountdown !== null` — the same
+`useAutomaticPromotion` state (`promotionCountdown`/`onCancelPromotion`)
+every earlier rendering of this countdown already used, just switched to
+a different presentation. `SpeakerStage` gets a dimming `scrimOpacity`
+(its own existing issue #21 mechanism, reused rather than a second
+backdrop layer) while counting down. Top chrome (status pill/guest chip)
+stays visible throughout, so the transition still reads as "entering the
+live room" rather than a separate screen. One shared component for both
+orientations — no landscape-specific variant, since centered flex
+content scales naturally to either box shape, and a short landscape
+viewport needs the identical "stop competing with everything else"
+treatment portrait does.
+
+**Not a new promotion system**: no new state, no new timer. The
+existing role-router structure already guarantees this can never
+coexist with Speaker View — `promotionCountdown` can only be non-null
+while `!isSpeaker` (see `useAutomaticPromotion`'s own poll guard), and
+the instant `isSpeaker` flips true, the *entire composition* swaps to
+`PortraitSpeakerView`/`MobileLandscapeSpeakerView` (a different file
+tree), which never renders `CountdownOverlay` at all — the same
+structural guarantee the role-consistency fix (previous entry) already
+established for the ordinary Audience/Speaker split, extended for free
+to this third state rather than needing its own new invariant.
+
+**Reason**: the user explicitly wants becoming a speaker treated as a
+significant event, with the countdown visually dominant and nothing
+competing with it, while still feeling like a transition within the
+same room rather than a navigation. Explicitly a presentation change to
+existing state, not a new promotion/state-machine.
+
+**Verification honesty**: automated (lint/tsc/full suite incl. new
+transition-level coverage for countdown→speaker and countdown→cancel,
+folded into the same `role-consistency.test.tsx` invariant checks the
+prior fix established) and a local production smoke test all pass. The
+actual look/feel — countdown dominance, dimming, animation restraint,
+landscape layout — is real-device-only and remains the user's own next
+step.
+
 ## 2026-08-24 — Speaker View/Audience role consolidated to one authoritative source (issue #18, post-merge integration finding)
 
 **Problem**: during the final #18 integration sign-off pass (on the

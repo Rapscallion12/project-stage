@@ -3,6 +3,7 @@ import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
+import { CountdownOverlay } from "@/components/room/countdown-overlay";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { MobileLandscapeSpeakerView } from "@/components/room/mobile-landscape-speaker-view";
 import { ChatPanel } from "@/components/lobby/chat-panel";
@@ -124,57 +125,72 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         isJoiningSeat={isJoiningSeat}
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
+        // Issue #18 UX finding: dims the stage behind the center-stage
+        // "Going live" countdown — SpeakerStage's own existing scrim
+        // mechanism (issue #21), reused rather than a second dimming
+        // layer. See PortraitRoom's identical comment.
+        scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
 
-      <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
-        <AmbientComments messages={messages} />
-      </div>
+      {promotionCountdown !== null ? (
+        // Issue #18 UX finding: same center-stage countdown treatment as
+        // PortraitRoom — landscape uses the same available stage area
+        // rather than any dedicated/legacy layout. See CountdownOverlay
+        // and PortraitRoom's own doc comment.
+        <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+      ) : (
+        <>
+          <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
+            <AmbientComments messages={messages} />
+          </div>
 
-      <StageOverlayShell
-        gradient={false}
-        topClassName="pt-0"
-        className="gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-      >
-        {joinSeatMessage && (
-          <p className="rounded-lg bg-black/35 px-3 py-2 text-xs text-red-400" role="alert">
-            {joinSeatMessage}
-          </p>
-        )}
-        {!isSpeaker && hasPendingRequest && (
-          <RoomControls
-            eventId={event.id}
-            isSpeaker={isSpeaker}
-            hasPendingRequest={hasPendingRequest}
-            promotionCountdown={promotionCountdown}
-            onCancelPromotion={onCancelPromotion}
-            canPublish={canPublish}
-            needsMediaActivation={needsMediaActivation}
-            activateMedia={activateMedia}
-            onPrepareMedia={onPrepareMedia}
-            mediaError={mediaError}
-            connectionStatus={connectionStatus}
-            phase={phase}
-            countdownText={countdownText}
-            compact
-          />
-        )}
-        <WatchModeControls
-          composer={
-            <ChatPanel
-              eventId={event.id}
-              messages={messages}
-              reactions={reactions}
-              micRequestMode={micRequestMode}
-              onMicRequestModeChange={onMicRequestModeChange}
-              onHasPendingRequestChange={onHasPendingRequestChange}
-              onPrepareMedia={onPrepareMedia}
-              compact
+          <StageOverlayShell
+            gradient={false}
+            topClassName="pt-0"
+            className="gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          >
+            {joinSeatMessage && (
+              <p className="rounded-lg bg-black/35 px-3 py-2 text-xs text-red-400" role="alert">
+                {joinSeatMessage}
+              </p>
+            )}
+            {!isSpeaker && hasPendingRequest && (
+              <RoomControls
+                eventId={event.id}
+                isSpeaker={isSpeaker}
+                hasPendingRequest={hasPendingRequest}
+                promotionCountdown={promotionCountdown}
+                onCancelPromotion={onCancelPromotion}
+                canPublish={canPublish}
+                needsMediaActivation={needsMediaActivation}
+                activateMedia={activateMedia}
+                onPrepareMedia={onPrepareMedia}
+                mediaError={mediaError}
+                connectionStatus={connectionStatus}
+                phase={phase}
+                countdownText={countdownText}
+                compact
+              />
+            )}
+            <WatchModeControls
+              composer={
+                <ChatPanel
+                  eventId={event.id}
+                  messages={messages}
+                  reactions={reactions}
+                  micRequestMode={micRequestMode}
+                  onMicRequestModeChange={onMicRequestModeChange}
+                  onHasPendingRequestChange={onHasPendingRequestChange}
+                  onPrepareMedia={onPrepareMedia}
+                  compact
+                />
+              }
             />
-          }
-        />
-      </StageOverlayShell>
+          </StageOverlayShell>
+        </>
+      )}
     </div>
   );
 }

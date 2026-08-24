@@ -128,6 +128,14 @@ const speakerProps: RoomLayoutProps = {
   canPublish: true,
 };
 
+/** Issue #18 UX finding: a candidate whose promotion countdown is actively running — still audience/candidate role-wise (isSpeaker is false, mySeatNumber is null), same as `audienceProps`, but with the center-stage countdown state layered on. */
+const countingDownProps: RoomLayoutProps = {
+  ...audienceProps,
+  hasPendingRequest: true,
+  participantRole: "candidate",
+  promotionCountdown: 3,
+};
+
 /** Asserts the currently-rendered tree shows exactly one of the two mutually-exclusive control sets — never both, never neither. */
 function expectExclusiveControlRow(expected: "speaker" | "audience") {
   const speakerMarkers = [
@@ -203,6 +211,50 @@ describe.each([
       expect(hasSpeakerMarker || hasAudienceMarker).toBe(true);
       unmount();
     }
+  });
+
+  describe("countdown → speaker / countdown → cancel (issue #18 UX finding — center-stage 'Going live' transition)", () => {
+    it("while counting down, the countdown overlay dominates — neither control row is visible", () => {
+      render(<Room {...countingDownProps} />);
+      expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-mic-toggle")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+    });
+
+    it("countdown → speaker: promotion completing swaps directly into Speaker View/controls, in the same resulting render — the countdown never survives alongside it", () => {
+      const { rerender } = render(<Room {...countingDownProps} />);
+      expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+
+      // The real transition: isSpeaker flips true and useAutomaticPromotion
+      // resets promotionCountdown to null in the same state update this
+      // simulates — see useAutomaticPromotion's own claimOpenSeat.then().
+      rerender(<Room {...speakerProps} />);
+      expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
+      expectExclusiveControlRow("speaker");
+    });
+
+    it("countdown → cancel: cancelling clears the countdown and restores the ordinary Audience/Candidate state, with no stale countdown left behind", () => {
+      const { rerender } = render(<Room {...countingDownProps} />);
+      expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+
+      // The real transition: onCancelPromotion sets promotionCountdown to
+      // null synchronously (see useAutomaticPromotion's own cancel()) —
+      // simulated here by rerendering with the plain audience props.
+      rerender(<Room {...audienceProps} />);
+      expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
+      expectExclusiveControlRow("audience");
+    });
+
+    it("no render ever shows the countdown overlay together with either control row", () => {
+      for (const props of [audienceProps, speakerProps, countingDownProps]) {
+        const { unmount } = render(<Room {...props} />);
+        const hasCountdown = Boolean(screen.queryByTestId("countdown-overlay"));
+        const hasSpeakerMarker = Boolean(screen.queryByTestId("speaker-mic-toggle"));
+        const hasAudienceMarker = Boolean(screen.queryByTestId("watch-emoji-emblem"));
+        expect(hasCountdown && (hasSpeakerMarker || hasAudienceMarker)).toBe(false);
+        unmount();
+      }
+    });
   });
 });
 

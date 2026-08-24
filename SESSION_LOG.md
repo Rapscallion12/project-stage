@@ -580,6 +580,42 @@ loud dev-mode signal for the one remaining prop-level contract, but does
 real-device-only, same as every other tier-3 claim this project makes.
 #18 still not moved to Done.
 
+**Role-consistency stress test passed — one UX finding before #18
+close**: the countdown/status bar, ambient comments, composer, and
+Audience controls could all be visible simultaneously during promotion,
+making becoming a speaker read as just another notification instead of
+a significant transition. Redesigned as a center-stage takeover: new
+`CountdownOverlay` (large centered number, "Going live"/get-ready
+copy, visually secondary Cancel, subtle per-tick pop animation via a new
+`countdown-number-pop` keyframe) renders in place of the ordinary bottom
+composer/controls/ambient comments in `PortraitRoom`/
+`MobileLandscapeRoom` for exactly as long as `promotionCountdown !==
+null` — explicitly a presentation change to `useAutomaticPromotion`'s
+existing countdown state, not a new promotion system: no new timer, no
+new state machine, `onCancelPromotion` unchanged. `SpeakerStage`'s
+existing issue #21 scrim dims the stage behind it; top chrome stays
+visible so it still reads as the same room. The existing role-router
+structure (previous entry) already guarantees this can't coexist with
+Speaker View — `promotionCountdown` is only ever non-null while
+`!isSpeaker`, and the moment it flips the whole composition swaps to a
+different file tree that never renders this component — so no new
+invariant was needed to prevent overlap, just the presentation swap
+itself. One shared component for both orientations, no landscape-
+specific variant or legacy UI. New coverage: `countdown-overlay.test.tsx`
+(the component in isolation), new describe blocks in `portrait-room.
+test.tsx`/`mobile-landscape-room.test.tsx` (overlay replaces the bottom
+row/ambient comments, scrim applies, top chrome persists, Cancel wired),
+and countdown→speaker/countdown→cancel transition tests folded into
+`role-consistency.test.tsx`'s existing invariant checks. lint/tsc/full
+suite/build all pass (496/496, 46 files — +27 tests, +1 file). Local
+production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device verification — countdown dominance, dimming,
+animation restraint, and the landscape stage-area treatment are all
+real-device-only judgments automated coverage can't make. #18 still not
+moved to Done.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

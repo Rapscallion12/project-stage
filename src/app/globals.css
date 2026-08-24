@@ -144,3 +144,23 @@ body {
     opacity: 0;
   }
 }
+
+/*
+ * Issue #18 UX finding: the "Going live" countdown used to be a small
+ * inline pill competing with the persistent bottom composer/controls —
+ * this is the center-stage replacement's per-number transition.
+ * `CountdownOverlay` remounts the number element on every tick (a
+ * `key={countdown}` change), so this animation replays once per digit —
+ * a subtle scale+fade in, not a bounce or spin, per the explicit "don't
+ * over-animate it" instruction.
+ */
+@keyframes countdown-number-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

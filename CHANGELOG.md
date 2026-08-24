@@ -9,6 +9,19 @@ separate release cadence to track here.
 
 ### Changed
 
+- **"Going live" countdown redesigned as a center-stage transition**
+  (issue #18 UX finding) — new `CountdownOverlay` replaces the old small
+  inline pill, which competed with the persistent bottom composer/
+  controls and ambient comments. `PortraitRoom`/`MobileLandscapeRoom`
+  now render it *instead of* those, for exactly as long as
+  `promotionCountdown !== null` — same existing
+  `useAutomaticPromotion` state/action, no new promotion system.
+  `SpeakerStage`'s existing scrim dims the stage behind it; top chrome
+  stays visible so it still reads as the same room. Structurally can
+  never coexist with Speaker View, for the same reason the role
+  consolidation below already guarantees Audience/Speaker never mix. See
+  DECISIONS.md.
+
 - **Speaker/Audience role consolidated to one authoritative source**
   (issue #18, post-merge integration finding) — `SpeakerStage` used to
   independently re-derive "is the viewer speaking / which seat" from raw

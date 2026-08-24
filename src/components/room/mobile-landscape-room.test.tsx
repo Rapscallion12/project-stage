@@ -257,6 +257,74 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
     expect(screen.getByText("Create an account to join as a speaker.")).toBeInTheDocument();
   });
 
+  describe("center-stage 'Going live' countdown (issue #18 UX finding — same treatment as PortraitRoom, no legacy landscape UI)", () => {
+    it("renders the countdown overlay instead of the ordinary bottom composer/controls once promotionCountdown is set", () => {
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+      expect(screen.queryByTestId("stage-bottom-overlay")).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+    });
+
+    it("hides ambient comments during the countdown too", () => {
+      render(
+        <MobileLandscapeRoom
+          {...baseProps}
+          hasPendingRequest={true}
+          promotionCountdown={2}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "hi",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
+
+    it("dims the stage behind the countdown via SpeakerStage's existing scrim mechanism", () => {
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.getByTestId("room-scrim").style.opacity).not.toBe("0");
+    });
+
+    it("no scrim, ordinary controls, when promotionCountdown is null", () => {
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} promotionCountdown={null} />);
+      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+      expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
+      expect(screen.getByText("Request sent")).toBeInTheDocument();
+    });
+
+    it("preserves top chrome during the countdown — still the same room, not a separate page", () => {
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.getByTestId("watch-status-pill")).toBeInTheDocument();
+    });
+
+    it("Cancel on the countdown overlay calls onCancelPromotion", () => {
+      const onCancelPromotion = vi.fn();
+      render(
+        <MobileLandscapeRoom
+          {...baseProps}
+          hasPendingRequest={true}
+          promotionCountdown={3}
+          onCancelPromotion={onCancelPromotion}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not reintroduce the legacy site header or RoomHeader — still the minimal SpeakerViewTopChrome status pill only", () => {
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.queryByRole("heading", { name: "Late Night Debate" })).not.toBeInTheDocument();
+    });
+  });
+
   describe("role router (issue #18, Speaker View corrective pass — rotating to landscape while seated no longer reverts to the audience composition)", () => {
     it("a seated speaker is routed to Speaker View instead of the ordinary audience landscape composition", () => {
       render(

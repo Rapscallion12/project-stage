@@ -574,9 +574,17 @@ different dependencies. Current order:
       consolidating "am I a speaker" to one authoritative computation
       (new `lib/participant-role.ts`) instead of `SpeakerStage`
       independently re-deriving its own copy — see DECISIONS.md's
-      thirteenth 2026-08-24 entry. **Not checked off** — #18 stays open,
-      pending the user's own real-device re-test of the merged,
-      consolidated build.
+      thirteenth 2026-08-24 entry. That stress test also surfaced a UX
+      finding: the promotion countdown competed with the bottom
+      composer/controls/ambient comments instead of reading as a
+      significant transition. Redesigned as a center-stage takeover
+      (new `CountdownOverlay`) — a presentation change to the existing
+      `useAutomaticPromotion` state only, no new promotion system; can't
+      coexist with Speaker View for the same structural reason
+      Audience/Speaker already can't. See DECISIONS.md's fourteenth
+      2026-08-24 entry. **Not checked off** — #18 stays open, pending
+      the user's own real-device re-test of the merged, consolidated
+      build.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
