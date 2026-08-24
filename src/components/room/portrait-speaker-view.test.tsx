@@ -56,6 +56,8 @@ const baseProps: RoomLayoutProps = {
   myIdentity: "profile:p1",
   identity,
   isSpeaker: true,
+  mySeatNumber: 1,
+  participantRole: "speaker",
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
@@ -282,6 +284,7 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
         <PortraitSpeakerView
           {...baseProps}
           myIdentity="profile:me"
+          mySeatNumber={mine}
           speakers={[
             seat({ id: `s${mine}`, seat_number: mine, profile_id: "me" }),
             seat({ id: `s${other}`, seat_number: other, profile_id: "remote" }),
@@ -299,6 +302,7 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
           <PortraitSpeakerView
             {...baseProps}
             myIdentity="profile:me"
+            mySeatNumber={mine}
             speakers={[seat({ id: `s${mine}`, seat_number: mine, profile_id: "me" })]}
           />,
         );

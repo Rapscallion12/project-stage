@@ -101,11 +101,25 @@ import type { Orientation } from "@/hooks/use-orientation";
  * fallback, not an expected path — `PortraitSpeakerView` only renders
  * this with `soloMode` when `isSpeaker` is already true), this falls back
  * to the ordinary two-tile layout rather than rendering nothing.
+ *
+ * **`isSpeaker`/`mySeatNumber` are received, never re-derived** (issue
+ * #18 consistency fix, real-device finding, 2026-08-24): this component
+ * used to compute its own `viewerIsSpeaking`/`mySeatNumber` from raw
+ * `speakers`/`myIdentity`, independently of `EventRoom`'s own `isSpeaker`
+ * — a second, separately-maintained answer to the same question,
+ * already flagged as a latent risk in `EventRoom`'s `handleTapEmptySeat`
+ * guard even before this fix. `EventRoom` now computes both once (via
+ * `findMySeatNumber`, see `lib/participant-role.ts`) and passes them
+ * down as plain props — this component just reads them. `myIdentity` is
+ * still a prop, but only for `isLocal`/tile-level identity matching, not
+ * for re-deriving role. See DECISIONS.md for the investigation.
  */
 export function SpeakerStage({
   speakers,
   getParticipant,
   myIdentity,
+  isSpeaker,
+  mySeatNumber,
   needsMediaActivation,
   activateMedia,
   mediaError,
@@ -121,6 +135,10 @@ export function SpeakerStage({
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
   myIdentity: string;
+  /** The single authoritative "am I currently a speaker" value — computed once in EventRoom (see `lib/participant-role.ts`), not re-derived here. */
+  isSpeaker: boolean;
+  /** Which seat (if any) the viewer holds — computed once in EventRoom alongside `isSpeaker`, from the same data. Only ever non-null when `isSpeaker` is also true. */
+  mySeatNumber: 1 | 2 | null;
   needsMediaActivation: boolean;
   activateMedia: () => Promise<void>;
   mediaError: MediaError;
@@ -139,28 +157,21 @@ export function SpeakerStage({
   /** Issue #18, Speaker View Phase 1 — see this component's own doc comment above. Defaults to false: every existing caller (MobileLandscapeRoom, DesktopRoom, PortraitRoom's Audience/Candidate path) is completely unaffected. */
   soloMode?: boolean;
 }) {
-  const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
-  const viewerIsSpeaking = speakers.some((s) => {
-    const identity = getParticipantIdentity(
-      s.profile_id ? { type: "profile", id: s.profile_id } : { type: "guest", id: s.guest_id! },
+  if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
+    // Issue #18 consistency fix: soloMode and isSpeaker are two props
+    // from the same caller that must agree — only PortraitSpeakerView/
+    // MobileLandscapeSpeakerView ever pass soloMode, and only once their
+    // own role router has already confirmed isSpeaker. If this ever
+    // fires, the composition and the authoritative role prop have
+    // genuinely diverged (a real bug), not just this component's own
+    // internal logic — the defensive fallback below still keeps the UI
+    // safe, but this makes the divergence loud instead of silent.
+    console.error(
+      "[SpeakerStage] soloMode=true but isSpeaker=false — Speaker View composition rendered without the role that's supposed to gate it. This should be impossible; check the caller.",
     );
-    return identity === myIdentity;
-  });
+  }
 
-  // Issue #18, Speaker View Phase 1: which seat (if any) is the viewer's
-  // own — soloMode uses this to render only the *other* seat's tile. Only
-  // ever non-null when viewerIsSpeaking is also true.
-  const mySeatNumber: 1 | 2 | null = (() => {
-    for (const seatNumber of [1, 2] as const) {
-      const seat = bySeat(seatNumber);
-      if (!seat) continue;
-      const identity = getParticipantIdentity(
-        seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
-      );
-      if (identity === myIdentity) return seatNumber;
-    }
-    return null;
-  })();
+  const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
 
   // Real-device finding (2026-08-22): exactly one open seat, viewer not
   // already speaking — that seat is this viewer's one actionable target,
@@ -170,7 +181,7 @@ export function SpeakerStage({
   // prioritize in those cases.
   const seat1 = bySeat(1);
   const seat2 = bySeat(2);
-  const promoteOpenSeat = !viewerIsSpeaking && (seat1 === null) !== (seat2 === null);
+  const promoteOpenSeat = !isSpeaker && (seat1 === null) !== (seat2 === null);
 
   function renderTile(seatNumber: 1 | 2) {
     const seat = seatNumber === 1 ? seat1 : seat2;
@@ -194,7 +205,7 @@ export function SpeakerStage({
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
           mediaError={mediaError}
-          onTapEmptySeat={viewerIsSpeaking ? undefined : onTapEmptySeat}
+          onTapEmptySeat={isSpeaker ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           isReconnecting={identity !== null && reconnectingIdentities.has(identity)}
           orientation={orientation}

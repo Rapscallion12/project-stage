@@ -67,6 +67,8 @@ export function MobileLandscapeSpeakerView({
   event,
   speakers,
   myIdentity,
+  isSpeaker,
+  mySeatNumber,
   identity,
   getParticipant,
   connectionStatus,
@@ -91,6 +93,8 @@ export function MobileLandscapeSpeakerView({
         speakers={speakers}
         getParticipant={getParticipant}
         myIdentity={myIdentity}
+        isSpeaker={isSpeaker}
+        mySeatNumber={mySeatNumber}
         needsMediaActivation={needsMediaActivation}
         activateMedia={activateMedia}
         mediaError={mediaError}

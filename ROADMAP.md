@@ -567,6 +567,16 @@ different dependencies. Current order:
       unbalanced width in both Watch Mode and Speaker View landscape
       (they share this exact component); portrait unaffected. See
       DECISIONS.md's twelfth 2026-08-24 entry.
+      **Merged into `feature/social-stage-shell` for #18 integration
+      sign-off** (fast-forward, `a65c7f9..9348972`, zero conflicts). A
+      real-device stress test on the merged preview then surfaced an
+      intermittent Speaker/Audience role-consistency bug; fixed by
+      consolidating "am I a speaker" to one authoritative computation
+      (new `lib/participant-role.ts`) instead of `SpeakerStage`
+      independently re-deriving its own copy — see DECISIONS.md's
+      thirteenth 2026-08-24 entry. **Not checked off** — #18 stays open,
+      pending the user's own real-device re-test of the merged,
+      consolidated build.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -48,6 +48,8 @@ const baseProps: RoomLayoutProps = {
   myIdentity: "profile:p1",
   identity,
   isSpeaker: false,
+  mySeatNumber: null,
+  participantRole: "audience",
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
@@ -245,7 +247,15 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
     });
 
     it("a seated speaker is routed to Speaker View instead of Watch Mode's own leave-stage treatment (issue #18)", () => {
-      render(<PortraitRoom {...baseProps} isSpeaker={true} canPublish={true} />);
+      render(
+        <PortraitRoom
+          {...baseProps}
+          isSpeaker={true}
+          mySeatNumber={1}
+          participantRole="speaker"
+          canPublish={true}
+        />,
+      );
       // Still SpeakerStage underneath (via PortraitSpeakerView) — not a blank page.
       expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
       // Speaker View has its own composer/leave control (issue #18, Phase

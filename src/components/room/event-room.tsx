@@ -8,7 +8,9 @@ import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
+import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
+import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
@@ -204,12 +206,32 @@ export function EventRoom({
   const myIdentity = getParticipantIdentity(
     identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
   );
-  // Issue #16: a guest can hold a seat too (prototype-testing exception —
-  // see PRODUCT.md/DECISIONS.md), so this matches whichever identity
-  // column is actually set on the seat row, not just profile_id.
-  const isSpeaker = speakers.some((s) =>
-    identity.type === "profile" ? s.profile_id === identity.id : s.guest_id === identity.id,
-  );
+  // Issue #18 consistency fix: the *one* place "which seat, if any, does
+  // this identity hold" gets computed — everything downstream (isSpeaker,
+  // the role routers, SpeakerStage's own solo-tile selection) reads the
+  // result as a plain prop instead of re-deriving it independently. See
+  // lib/participant-role.ts's own doc comment for the investigation this
+  // closes. Issue #16: a guest can hold a seat too (prototype-testing
+  // exception — see PRODUCT.md/DECISIONS.md), so this matches whichever
+  // identity column is actually set on the seat row, not just profile_id.
+  const mySeatNumber = findMySeatNumber(speakers, identity);
+  const isSpeaker = mySeatNumber !== null;
+  const participantRole = deriveParticipantRole({ isSpeaker, hasPendingRequest });
+
+  // Issue #18 consistency fix: becoming a speaker invalidates any
+  // candidate-only local state — see useRoleTransitionReset's own doc
+  // comment for why this is the single reconciliation point rather than
+  // relying on each individual promotion path (claimOpenSeat's countdown
+  // resolution, joinOpenSeat's direct join) to remember to clear its own
+  // piece of it.
+  useRoleTransitionReset({
+    isSpeaker,
+    onReset: () => {
+      setHasPendingRequest(false);
+      setMicRequestMode(false);
+      setJoinSeatMessage(null);
+    },
+  });
 
   // Issue #18/#21: mirrors the `room-active` class above, but tracks
   // "the live-room mobile landscape composition is actually rendering"
@@ -309,6 +331,8 @@ export function EventRoom({
     myIdentity,
     identity,
     isSpeaker,
+    mySeatNumber,
+    participantRole,
     hasPendingRequest,
     onHasPendingRequestChange: setHasPendingRequest,
     promotionCountdown,

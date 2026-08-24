@@ -516,6 +516,70 @@ roughly 35–45% of the row, React/Vote/Gift (or Mic/Camera/Gift) sit
 immediately after, portrait unchanged, no clipping at narrow landscape
 widths. Neither #18 nor #21 merged or closed yet.
 
+**Composer width confirmed — #18 sign-off/merge**: user approved commit
+`9348972` as the final Speaker View state and asked for the #18
+integration/sign-off merge: `feature/speaker-view` fast-forwarded into
+`feature/social-stage-shell` (`a65c7f9..9348972`, 12 commits, zero
+conflicts — confirmed `feature/social-stage-shell` hadn't moved since
+the branch point before merging). lint/tsc/full suite/build all pass
+unchanged (435/435, 42 files — a clean fast-forward changes nothing
+already-tested). Local production smoke test confirmed. Pushed, deployed
+a fresh preview from the merged branch, verified the deployment's `sha`
+matched the merged HEAD exactly before handing over the link. #18 left
+open, not moved to Done, per explicit instruction — the user wanted to
+run their own integrated real-device test before sign-off.
+
+**Real-device stress test surfaced an intermittent role/UI consistency
+bug — treated as an architecture problem, not a boolean patch**: during
+that pass, becoming a speaker sometimes activated Speaker View's
+full-bleed composition while the bottom control row stayed on the
+Audience set (React/Vote/Gift instead of Mic/Camera/Gift) — not reliably
+reproducible. Per explicit instruction, investigated the actual
+state/timing path before touching anything, rather than assuming a
+cause. Traced every "am I a speaker" computation in the room tree:
+`EventRoom`'s `isSpeaker` already drove both the composition choice and
+(via which file renders) the control row within one render — provably
+coupled, no divergence constructible there. But `SpeakerStage` itself
+independently re-derived the same fact from raw `speakers`/`myIdentity`,
+a real duplicate-derivation already flagged as a latent risk once before
+(in `handleTapEmptySeat`'s own guard comment, for a different bug).
+Reported this honestly: no concrete timing race could be proven against
+the pre-fix code, but the duplication was a genuine violation of "one
+authoritative role source" regardless.
+
+Consolidated to a single computation: new `lib/participant-role.ts`
+(`findMySeatNumber`, `deriveParticipantRole`) computes
+`mySeatNumber`/`isSpeaker`/`participantRole` once in `EventRoom`; every
+other consumer (`SpeakerStage`, the role routers) now receives these as
+plain props instead of re-deriving them. `SpeakerStage`'s own internal
+`viewerIsSpeaking`/`mySeatNumber` derivation is gone. Role routers key
+off `participantRole === "speaker"`. Added a dev-only `console.error` in
+`SpeakerStage` if `soloMode`/`isSpeaker` ever disagree (the one
+remaining prop-level contract, kept as intentional defensive
+redundancy, not independent derivation). Added `useRoleTransitionReset`
+(new hook) so candidate-only local state (`hasPendingRequest`/
+`micRequestMode`/`joinSeatMessage`) can't outlive the candidate role
+regardless of which promotion path granted the seat. New
+`role-consistency.test.tsx` adds the explicitly requested
+transition-level coverage: promotion, leaving, repeated join/leave
+cycles, promotion with stale composer state, and an approximated
+"rotation" check (both orientation compositions compared against the
+same speaker props) — documented honestly as not exercising a real
+continuous device rotation or `EventRoom`'s own Realtime timing, since
+`EventRoom` still has no dedicated test file. lint/tsc/full suite/build
+all pass (469/469, 45 files — +34 tests, +3 files: `participant-role.
+test.ts`, `use-role-transition-reset.test.ts`, `role-consistency.
+test.tsx`). Local production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview from the merged
+`feature/social-stage-shell` and stop for the user's own real-device
+stress test, specifically trying to reproduce the original intermittent
+report. This fix removes a genuine architectural redundancy and adds a
+loud dev-mode signal for the one remaining prop-level contract, but does
+**not** itself confirm the original report is resolved — that's
+real-device-only, same as every other tier-3 claim this project makes.
+#18 still not moved to Done.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

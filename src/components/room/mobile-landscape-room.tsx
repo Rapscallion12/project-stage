@@ -70,7 +70,10 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * concern left to satisfy here — the role check can sit at the very top.
  */
 export function MobileLandscapeRoom(props: RoomLayoutProps) {
-  if (props.isSpeaker) {
+  // Issue #18 consistency fix: keys off `participantRole`, the one
+  // derived value both this composition choice and the bottom control
+  // row are meant to share — see lib/participant-role.ts.
+  if (props.participantRole === "speaker") {
     return <MobileLandscapeSpeakerView {...props} />;
   }
 
@@ -82,6 +85,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
     myIdentity,
     identity,
     isSpeaker,
+    mySeatNumber,
     hasPendingRequest,
     onHasPendingRequestChange,
     promotionCountdown,
@@ -110,6 +114,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         speakers={speakers}
         getParticipant={getParticipant}
         myIdentity={myIdentity}
+        isSpeaker={isSpeaker}
+        mySeatNumber={mySeatNumber}
         needsMediaActivation={needsMediaActivation}
         activateMedia={activateMedia}
         mediaError={mediaError}

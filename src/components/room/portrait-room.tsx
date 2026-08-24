@@ -93,8 +93,11 @@ export function PortraitRoom(props: RoomLayoutProps) {
   // Issue #18, Speaker View Phase 1 — see this component's own doc
   // comment above. Checked before any of this component's own
   // destructuring/JSX, so a seated speaker never sees so much as a
-  // flash of the Audience/Candidate composition.
-  if (props.isSpeaker) {
+  // flash of the Audience/Candidate composition. Issue #18 consistency
+  // fix: keys off `participantRole`, the one derived value both this
+  // composition choice and (via which file renders) the bottom control
+  // row are meant to share — see lib/participant-role.ts.
+  if (props.participantRole === "speaker") {
     return <PortraitSpeakerView {...props} />;
   }
 
@@ -106,6 +109,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
     myIdentity,
     identity,
     isSpeaker,
+    mySeatNumber,
     hasPendingRequest,
     onHasPendingRequestChange,
     promotionCountdown,
@@ -134,6 +138,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
         speakers={speakers}
         getParticipant={getParticipant}
         myIdentity={myIdentity}
+        isSpeaker={isSpeaker}
+        mySeatNumber={mySeatNumber}
         needsMediaActivation={needsMediaActivation}
         activateMedia={activateMedia}
         mediaError={mediaError}

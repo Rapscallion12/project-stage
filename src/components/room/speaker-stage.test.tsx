@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeakerStage } from "./speaker-stage";
 import type { LocalVideoTrack } from "livekit-client";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -24,9 +24,17 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   };
 }
 
+// Issue #18 consistency fix: isSpeaker/mySeatNumber are now plain props
+// (computed once in EventRoom via lib/participant-role.ts), not derived
+// internally from speakers/myIdentity — see that file's own doc comment
+// for the investigation this closes. Tests below pass them explicitly,
+// matching whatever the old internal derivation would have produced for
+// the same speakers/myIdentity, unless a test says otherwise.
 const baseProps = {
   getParticipant: () => undefined,
   myIdentity: "profile:someone-else",
+  isSpeaker: false,
+  mySeatNumber: null as 1 | 2 | null,
   needsMediaActivation: false,
   activateMedia: vi.fn(async () => {}),
   mediaError: null,
@@ -37,6 +45,10 @@ const baseProps = {
 };
 
 describe("SpeakerStage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("always renders both seats, occupied or not — issue #20's two-seat framing", () => {
     render(<SpeakerStage speakers={[speaker({ seat_number: 1 })]} orientation="portrait" {...baseProps} />);
     expect(screen.getByTestId("speaker-tile")).toBeInTheDocument();
@@ -132,6 +144,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
           onTapEmptySeat={onTapEmptySeat}
         />,
       );
@@ -181,6 +195,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
         />,
       );
       const emptySeat = screen.getByTestId("empty-seat");
@@ -205,6 +221,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
           soloMode
         />,
       );
@@ -223,6 +241,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
         />,
       );
       expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
@@ -236,6 +256,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
           soloMode
         />,
       );
@@ -252,6 +274,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
           onTapEmptySeat={onTapEmptySeat}
           soloMode
         />,
@@ -270,6 +294,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
           onTapEmptySeat={onTapEmptySeat}
           soloMode
         />,
@@ -296,6 +322,8 @@ describe("SpeakerStage", () => {
           orientation="portrait"
           {...baseProps}
           myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
           localVideoTrack={fakeVideoTrack()}
           soloMode
         />,
@@ -303,7 +331,7 @@ describe("SpeakerStage", () => {
       expect(screen.getByTestId("self-preview")).toBeInTheDocument();
     });
 
-    it("falls back to the ordinary two-tile layout if soloMode is true but the viewer doesn't actually hold either seat (defensive — should not happen in practice)", () => {
+    it("falls back to the ordinary two-tile layout if soloMode is true but mySeatNumber is null (defensive — should not happen in practice, see the consistency describe block below for the dev-mode assertion this also now triggers)", () => {
       render(
         <SpeakerStage
           speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "someone-else" })]}
@@ -327,6 +355,8 @@ describe("SpeakerStage", () => {
             orientation="portrait"
             {...baseProps}
             myIdentity="profile:me"
+            isSpeaker
+            mySeatNumber={mine}
             soloMode
           />,
         );
@@ -350,6 +380,8 @@ describe("SpeakerStage", () => {
             orientation="portrait"
             {...baseProps}
             myIdentity="profile:me"
+            isSpeaker
+            mySeatNumber={mine}
             soloMode
           />,
         );
@@ -369,6 +401,8 @@ describe("SpeakerStage", () => {
             orientation="portrait"
             {...baseProps}
             myIdentity="profile:me"
+            isSpeaker
+            mySeatNumber={mine}
             onTapEmptySeat={onTapEmptySeat}
             soloMode
           />,
@@ -388,6 +422,8 @@ describe("SpeakerStage", () => {
               orientation="portrait"
               {...baseProps}
               myIdentity="profile:me"
+              isSpeaker
+              mySeatNumber={mine}
               localVideoTrack={fakeVideoTrack()}
               soloMode
             />,
@@ -395,6 +431,65 @@ describe("SpeakerStage", () => {
           expect(screen.getByTestId("self-preview")).toBeInTheDocument();
         },
       );
+    });
+  });
+
+  describe("isSpeaker/mySeatNumber consistency (issue #18 fix — received as props, never re-derived)", () => {
+    it("trusts the isSpeaker/mySeatNumber props directly, even when speakers/myIdentity alone wouldn't imply them — proves there's no independent re-derivation left inside this component", () => {
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:someone-else"
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+        />,
+      );
+      // soloMode + mySeatNumber=1 renders seat 2's tile (the "other" seat)
+      // full-bleed, purely from the props — nothing here comes from
+      // matching speakers/myIdentity, since speakers is empty.
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+    });
+
+    it("dev-mode: logs an error when soloMode=true but isSpeaker=false — the caller contract is violated", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} soloMode isSpeaker={false} />);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("soloMode=true but isSpeaker=false"));
+    });
+
+    it("dev-mode: does not log when soloMode=true and isSpeaker=true (the expected, well-formed case)", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+        />,
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it("dev-mode: does not log when soloMode is false, regardless of isSpeaker", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} isSpeaker={false} />);
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+        />,
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
     });
   });
 

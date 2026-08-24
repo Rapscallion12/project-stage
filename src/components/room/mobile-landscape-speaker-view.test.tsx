@@ -57,6 +57,8 @@ const baseProps: RoomLayoutProps = {
   myIdentity: "profile:p1",
   identity,
   isSpeaker: true,
+  mySeatNumber: 1,
+  participantRole: "speaker",
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
@@ -225,6 +227,7 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
         <MobileLandscapeSpeakerView
           {...baseProps}
           myIdentity="profile:me"
+          mySeatNumber={mine}
           speakers={[
             seat({ id: `s${mine}`, seat_number: mine, profile_id: "me" }),
             seat({ id: `s${other}`, seat_number: other, profile_id: "remote" }),
@@ -242,6 +245,7 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
           <MobileLandscapeSpeakerView
             {...baseProps}
             myIdentity="profile:me"
+            mySeatNumber={mine}
             speakers={[seat({ id: `s${mine}`, seat_number: mine, profile_id: "me" })]}
           />,
         );

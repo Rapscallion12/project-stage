@@ -9,6 +9,24 @@ separate release cadence to track here.
 
 ### Changed
 
+- **Speaker/Audience role consolidated to one authoritative source**
+  (issue #18, post-merge integration finding) — `SpeakerStage` used to
+  independently re-derive "is the viewer speaking / which seat" from raw
+  `speakers`/`myIdentity`, duplicating a computation `EventRoom` already
+  did once. New `lib/participant-role.ts` (`findMySeatNumber`,
+  `deriveParticipantRole`) is now the single place that's computed;
+  `EventRoom` passes `isSpeaker`/`mySeatNumber`/`participantRole` down as
+  plain props everywhere, and the role routers key off
+  `participantRole` instead of raw `isSpeaker`. A dev-only assertion logs
+  if `SpeakerStage`'s `soloMode`/`isSpeaker` props ever disagree. New
+  `useRoleTransitionReset` hook resets stale candidate-only state
+  (`hasPendingRequest`/`micRequestMode`/`joinSeatMessage`) the moment
+  `isSpeaker` transitions true, regardless of which path granted the
+  seat. Addresses a reported (not reliably reproducible) real-device bug
+  where Speaker View's composition activated but the bottom control row
+  stayed on the Audience set — see DECISIONS.md for the full
+  investigation and what this change does and doesn't confirm.
+
 - **Compact composer capped to ~40% width in mobile landscape** — it
   previously grew to fill most of the control row before React/Vote/Gift
   (or Mic/Camera/Gift for a speaker), reading as unbalanced. A single

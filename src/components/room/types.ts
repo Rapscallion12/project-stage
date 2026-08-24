@@ -3,6 +3,7 @@ import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connect
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { EventPhase } from "@/lib/events";
 import type { Identity } from "@/lib/identity";
+import type { ParticipantRole } from "@/lib/participant-role";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RoomStatus } from "@/lib/room-status";
@@ -26,6 +27,10 @@ export type RoomLayoutProps = {
   /** The caller's actual identity — used for RoomControls' guest/account branching, distinct from `myIdentity` above. */
   identity: Identity;
   isSpeaker: boolean;
+  /** Issue #18 consistency fix: which seat (if any) the viewer holds — computed once in EventRoom, alongside isSpeaker, from the same data (see lib/participant-role.ts). Only ever non-null when isSpeaker is also true. Passed to SpeakerStage so it never has to re-derive this itself. */
+  mySeatNumber: 1 | 2 | null;
+  /** Issue #18 consistency fix: the single derived value the role routers (PortraitRoom/MobileLandscapeRoom) key off, folding isSpeaker/hasPendingRequest into one named state — see lib/participant-role.ts. */
+  participantRole: ParticipantRole;
   /**
    * Issue #14, lifted to EventRoom by issue #27 (was RoomControls' own
    * local state) — both RoomControls (Claim your seat/Withdraw for the

@@ -50,6 +50,8 @@ const baseProps: RoomLayoutProps = {
   myIdentity: "profile:p1",
   identity,
   isSpeaker: false,
+  mySeatNumber: null,
+  participantRole: "audience",
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
@@ -257,7 +259,15 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
 
   describe("role router (issue #18, Speaker View corrective pass — rotating to landscape while seated no longer reverts to the audience composition)", () => {
     it("a seated speaker is routed to Speaker View instead of the ordinary audience landscape composition", () => {
-      render(<MobileLandscapeRoom {...baseProps} isSpeaker={true} canPublish={true} />);
+      render(
+        <MobileLandscapeRoom
+          {...baseProps}
+          isSpeaker={true}
+          mySeatNumber={1}
+          participantRole="speaker"
+          canPublish={true}
+        />,
+      );
       expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
       expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Late Night Debate" })).not.toBeInTheDocument();
@@ -265,10 +275,16 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
     });
 
-    it("toggling isSpeaker on the same mounted instance doesn't throw — no hooks of this component's own left to order around the branch", () => {
-      const { rerender } = render(<MobileLandscapeRoom {...baseProps} isSpeaker={false} />);
-      expect(() => rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={true} />)).not.toThrow();
-      expect(() => rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={false} />)).not.toThrow();
+    it("toggling isSpeaker/participantRole on the same mounted instance doesn't throw — no hooks of this component's own left to order around the branch", () => {
+      const { rerender } = render(
+        <MobileLandscapeRoom {...baseProps} isSpeaker={false} mySeatNumber={null} participantRole="audience" />,
+      );
+      expect(() =>
+        rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={true} mySeatNumber={1} participantRole="speaker" />),
+      ).not.toThrow();
+      expect(() =>
+        rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={false} mySeatNumber={null} participantRole="audience" />),
+      ).not.toThrow();
     });
   });
 });

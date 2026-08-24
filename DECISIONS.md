@@ -3,6 +3,86 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View/Audience role consolidated to one authoritative source (issue #18, post-merge integration finding)
+
+**Problem**: during the final #18 integration sign-off pass (on the
+merged `feature/social-stage-shell`), the user reported an intermittent
+real-device bug: sometimes becoming a speaker made Speaker View's
+full-bleed composition activate, but the bottom control row stayed the
+Audience row (React/Vote/Gift) instead of switching to Speaker's
+(Mic/Camera/Gift) — not reliably reproducible. The user's instruction
+was explicit: treat this as a role/UI consistency problem, not a
+one-off boolean patch, and investigate whether the composition and the
+control row actually derive from the same state before touching
+anything.
+
+**Investigation**: traced every place "am I currently a speaker" gets
+computed in the room tree. `EventRoom` computes `isSpeaker` once, from
+`speakers`/`identity`, and passes it straight through to
+`PortraitRoom`/`MobileLandscapeRoom`'s role router *and* (via which file
+that router chooses) the bottom control row — those two are provably
+coupled within a single render, so a literal "composition says one
+thing, controls say another" divergence couldn't be constructed against
+the pre-fix code as it stood. But `SpeakerStage` itself independently
+re-derived its own copy of the same fact — `viewerIsSpeaking`/
+`mySeatNumber`, computed from raw `speakers`/`myIdentity` inside the
+component, never receiving `EventRoom`'s already-computed `isSpeaker` at
+all. This exact duplication had already been flagged as a latent risk
+once before, in `EventRoom`'s `handleTapEmptySeat` guard's own comment,
+for a different bug. No concrete timing race could be proven (both
+computations read the same `speakers` prop synchronously, so they're
+mathematically equivalent today) — reported to the user as such, rather
+than inventing an unproven root cause.
+
+**Decision**: consolidated to one authoritative computation.
+`lib/participant-role.ts` (new) exports `findMySeatNumber` (the *one*
+place "which seat does this identity hold" is computed) and
+`deriveParticipantRole` (folds `isSpeaker`/`hasPendingRequest` into a
+single named `"speaker" | "candidate" | "audience"` value, per the
+user's own suggested shape). `EventRoom` computes `mySeatNumber`/
+`isSpeaker`/`participantRole` once and passes all three down as plain
+props. `SpeakerStage` now *receives* `isSpeaker`/`mySeatNumber` as
+required props instead of re-deriving them — its own internal
+`viewerIsSpeaking`/`mySeatNumber` computation is gone entirely.
+`PortraitRoom`/`MobileLandscapeRoom`'s role routers key off
+`participantRole === "speaker"` rather than raw `isSpeaker`, so the
+composition choice and (via composition identity) the control row now
+read the same named derived value. A dev-only `console.error` in
+`SpeakerStage` fires if `soloMode=true` but `isSpeaker=false` — the one
+remaining place two props from the same caller must agree; this is
+prop-level defensive redundancy (the user explicitly wanted this kept),
+not independent derivation (which the user explicitly wanted removed).
+
+Separately, added `useRoleTransitionReset` (new hook): fires exactly
+once on a `false→true` `isSpeaker` transition and resets
+`hasPendingRequest`/`micRequestMode`/`joinSeatMessage` — self-healing so
+candidate-only local state can never outlive the candidate role,
+regardless of which path granted the seat (this used to be each
+individual promotion path's own responsibility to remember, e.g.
+`useAutomaticPromotion`'s countdown resolution resetting
+`hasPendingRequest` itself on success).
+
+**Reason**: the user's governing invariant — "there must be one
+authoritative role determination," composition and controls must always
+agree, defensive redundancy is fine but duplicated role *derivation*
+isn't. Even without a proven reproduction, `SpeakerStage`'s independent
+re-derivation was a genuine violation of that invariant and a real
+latent-bug source for the future, already called out once in existing
+code comments.
+
+**Verification honesty**: automated (lint/tsc/full suite incl. new
+transition-level regression coverage in `role-consistency.test.tsx`,
+covering promotion, leaving, repeated join/leave cycles, promotion with
+stale composer state, and an approximated "rotation" check comparing
+both orientation compositions) and a local production smoke test all
+pass. This does **not** confirm the original intermittent report is
+fixed — it confirms the specific architectural redundancy that could
+have caused a class of such bugs is now gone, and adds a loud dev-mode
+signal if the one remaining prop-level contract (`soloMode` vs.
+`isSpeaker`) is ever violated. Real-device re-verification, specifically
+trying to reproduce the original report, remains the user's own next
+step — see SESSION_LOG.md.
+
 ## 2026-08-24 — Composer capped to 40% width in landscape, one Tailwind variant covering both Watch Mode and Speaker View
 
 **Problem**: after the landscape audience rebuild, the compact composer

@@ -84,6 +84,8 @@ export function PortraitSpeakerView({
   event,
   speakers,
   myIdentity,
+  isSpeaker,
+  mySeatNumber,
   identity,
   getParticipant,
   connectionStatus,
@@ -108,6 +110,8 @@ export function PortraitSpeakerView({
         speakers={speakers}
         getParticipant={getParticipant}
         myIdentity={myIdentity}
+        isSpeaker={isSpeaker}
+        mySeatNumber={mySeatNumber}
         needsMediaActivation={needsMediaActivation}
         activateMedia={activateMedia}
         mediaError={mediaError}
