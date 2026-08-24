@@ -1,13 +1,20 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyMediaError, shouldPublish, useLiveRoomConnection } from "./use-live-room-connection";
-import { Track } from "livekit-client";
+import {
+  classifyMediaError,
+  shouldPublish,
+  shouldReconcileLocalVideoTrack,
+  useLiveRoomConnection,
+} from "./use-live-room-connection";
+import { RoomEvent, Track } from "livekit-client";
 
 const { createLocalTracks, RoomMock, roomInstances } = vi.hoisted(() => {
   const roomInstances: Array<{
     connect: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
-    on: () => unknown;
+    on: (event: string, handler: (...args: unknown[]) => void) => unknown;
+    /** Test helper — invokes every handler registered for `event` via `on()`. Not part of the real livekit-client Room API. */
+    emit: (event: string, ...args: unknown[]) => void;
     localParticipant: {
       identity: string;
       permissions: { canPublish: boolean };
@@ -31,8 +38,15 @@ const { createLocalTracks, RoomMock, roomInstances } = vi.hoisted(() => {
       publishTrack: vi.fn().mockResolvedValue(undefined),
     };
     remoteParticipants = new Map();
-    on() {
+    listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    on(event: string, handler: (...args: unknown[]) => void) {
+      const list = this.listeners.get(event) ?? [];
+      list.push(handler);
+      this.listeners.set(event, list);
       return this;
+    }
+    emit(event: string, ...args: unknown[]) {
+      for (const handler of this.listeners.get(event) ?? []) handler(...args);
     }
     constructor() {
       roomInstances.push(this as unknown as (typeof roomInstances)[number]);
@@ -58,6 +72,85 @@ describe("shouldPublish", () => {
 
   it("is true only when canPublish is explicitly true", () => {
     expect(shouldPublish({ canPublish: true })).toBe(true);
+  });
+});
+
+describe("shouldReconcileLocalVideoTrack (issue #18 self-preview consistency finding)", () => {
+  it("is false when canPublish is false — nothing to reconcile if not permitted to publish at all", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: false,
+        hasLocalVideoTrack: false,
+        cameraMuted: false,
+        publication: { hasTrack: true, isMuted: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when localVideoTrack is already held — never clobbers a good value", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: true,
+        hasLocalVideoTrack: true,
+        cameraMuted: false,
+        publication: { hasTrack: true, isMuted: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when the camera is intentionally muted — show camera-off, don't try to restore video", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: true,
+        hasLocalVideoTrack: false,
+        cameraMuted: true,
+        publication: { hasTrack: true, isMuted: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when there's no publication at all — nothing published yet, not a bug", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: true,
+        hasLocalVideoTrack: false,
+        cameraMuted: false,
+        publication: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when the publication exists but has no live track", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: true,
+        hasLocalVideoTrack: false,
+        cameraMuted: false,
+        publication: { hasTrack: false, isMuted: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when the publication itself reports muted, even if a track object exists", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: true,
+        hasLocalVideoTrack: false,
+        cameraMuted: false,
+        publication: { hasTrack: true, isMuted: true },
+      }),
+    ).toBe(false);
+  });
+
+  it("is true only when publishing is permitted, no localVideoTrack is held, the camera isn't intentionally muted, and a live unmuted publication already exists — the exact contradictory state the dev assertion targets", () => {
+    expect(
+      shouldReconcileLocalVideoTrack({
+        canPublish: true,
+        hasLocalVideoTrack: false,
+        cameraMuted: false,
+        publication: { hasTrack: true, isMuted: false },
+      }),
+    ).toBe(true);
   });
 });
 
@@ -450,5 +543,92 @@ describe("useLiveRoomConnection — mic/camera mute toggles mute in place, never
     });
 
     expect(createLocalTracks).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Issue #18 self-preview consistency finding — the actual effect wiring,
+ * not just `shouldReconcileLocalVideoTrack` in isolation. Exercises the
+ * real (mocked) Room construction path, same reasoning as the token/mute
+ * describe blocks above.
+ */
+describe("useLiveRoomConnection — self-preview reconciliation (issue #18)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    roomInstances.length = 0;
+  });
+
+  it("reconciles localVideoTrack from an existing unmuted camera publication once canPublish becomes true, without calling createLocalTracks", async () => {
+    const track = { attach: vi.fn(), detach: vi.fn() };
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    const room = roomInstances[0];
+    room.localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Camera ? { track, isMuted: false } : undefined,
+    );
+    expect(result.current.localVideoTrack).toBeNull();
+
+    room.localParticipant.permissions.canPublish = true;
+    await act(async () => {
+      room.emit(RoomEvent.ParticipantPermissionsChanged, {}, room.localParticipant);
+    });
+
+    expect(result.current.localVideoTrack).toBe(track);
+    expect(createLocalTracks).not.toHaveBeenCalled();
+  });
+
+  it("logs a dev-mode error when it reconciles — a loud signal if this ever fires on a real device", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const track = { attach: vi.fn(), detach: vi.fn() };
+    renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    const room = roomInstances[0];
+    room.localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Camera ? { track, isMuted: false } : undefined,
+    );
+
+    room.localParticipant.permissions.canPublish = true;
+    await act(async () => {
+      room.emit(RoomEvent.ParticipantPermissionsChanged, {}, room.localParticipant);
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("localVideoTrack was missing"));
+  });
+
+  it("does not reconcile when the existing publication is muted — camera-off state stays camera-off, not force-restored", async () => {
+    const track = { attach: vi.fn(), detach: vi.fn() };
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    const room = roomInstances[0];
+    room.localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Camera ? { track, isMuted: true } : undefined,
+    );
+
+    room.localParticipant.permissions.canPublish = true;
+    await act(async () => {
+      room.emit(RoomEvent.ParticipantPermissionsChanged, {}, room.localParticipant);
+    });
+
+    expect(result.current.localVideoTrack).toBeNull();
+  });
+
+  it("does not reconcile — and does not overwrite — when localVideoTrack is already held", async () => {
+    const existingTrack = { kind: Track.Kind.Video, stop: vi.fn() };
+    const otherTrack = { attach: vi.fn(), detach: vi.fn() };
+    createLocalTracks.mockResolvedValue([existingTrack]);
+    const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
+    const room = roomInstances[0];
+
+    await act(async () => {
+      await result.current.prepareLocalMedia();
+    });
+    expect(result.current.localVideoTrack).toBe(existingTrack);
+
+    room.localParticipant.getTrackPublication.mockImplementation((source: Track.Source) =>
+      source === Track.Source.Camera ? { track: otherTrack, isMuted: false } : undefined,
+    );
+    room.localParticipant.permissions.canPublish = true;
+    await act(async () => {
+      room.emit(RoomEvent.ParticipantPermissionsChanged, {}, room.localParticipant);
+    });
+
+    expect(result.current.localVideoTrack).toBe(existingTrack);
   });
 });

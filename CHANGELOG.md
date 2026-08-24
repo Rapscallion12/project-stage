@@ -7,6 +7,29 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pre-countdown candidate UI flash** — the old "Request sent" pill/
+  composer/controls/ambient comments could briefly flash right before the
+  center-stage countdown appeared. `useAutomaticPromotion`'s
+  claim-success path no longer resets `hasPendingRequest`/`countdown`
+  itself, which used to race the independent Realtime push that flips
+  `isSpeaker` true; `isSpeaker` flipping is now the single signal that
+  ends this state, reusing the existing `useRoleTransitionReset` hook.
+
+- **Cancel during the countdown could silently resurrect a canceled
+  promotion** — cancelling reset `countdown` while `hasPendingRequest`
+  was still (briefly) true, which could re-arm the eligibility-polling
+  effect before the server-side withdrawal actually landed. New
+  `isCancelling` guard suppresses polling for exactly that window.
+
+- **Self-preview occasionally missing in Speaker View** — new defensive
+  reconciliation in `useLiveRoomConnection`: if a live, unmuted camera
+  publication already exists in the Room but `localVideoTrack` state is
+  null, adopts the existing track directly (never re-acquires media,
+  never reconnects). Dev-only `console.error` when it actually fires.
+  See DECISIONS.md for the investigated failure paths.
+
 ### Changed
 
 - **"Going live" countdown redesigned as a center-stage transition**

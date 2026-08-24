@@ -582,9 +582,20 @@ different dependencies. Current order:
       `useAutomaticPromotion` state only, no new promotion system; can't
       coexist with Speaker View for the same structural reason
       Audience/Speaker already can't. See DECISIONS.md's fourteenth
-      2026-08-24 entry. **Not checked off** — #18 stays open, pending
-      the user's own real-device re-test of the merged, consolidated
-      build.
+      2026-08-24 entry. That pass found three more issues: a brief
+      pre-countdown candidate-UI flash, Cancel not reliably canceling,
+      and Speaker View's self-preview intermittently missing. Fixed the
+      first two at their traced root cause (a real race between
+      `useAutomaticPromotion`'s claim-success reset and the independent
+      Realtime `isSpeaker` push — `isSpeaker` is now the single signal
+      that ends the countdown state, reusing the existing
+      `useRoleTransitionReset` hook rather than a second mechanism), and
+      added a defensive, dev-logged reconciliation for the third (adopts
+      an already-live camera publication into `localVideoTrack` state
+      without ever re-acquiring media) since no reproducible root cause
+      could be confirmed. See DECISIONS.md's fifteenth 2026-08-24 entry.
+      **Not checked off** — #18 stays open, pending the user's own
+      real-device re-test.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

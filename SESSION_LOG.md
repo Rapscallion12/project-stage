@@ -616,6 +616,45 @@ animation restraint, and the landscape stage-area treatment are all
 real-device-only judgments automated coverage can't make. #18 still not
 moved to Done.
 
+**Three issues found in that pass — a corrective fix, not new scope**:
+(1) a brief flash of the old candidate UI right before the countdown
+appeared; (2) Cancel during the countdown didn't reliably stay canceled;
+(3) Speaker View's self-preview intermittently missing. Traced (1)/(2)
+to a genuine confirmed mechanism: `useAutomaticPromotion`'s claim-success
+handler used to reset `hasPendingRequest`/`countdown` itself, racing the
+*independent* Realtime push that flips `isSpeaker` true — when the reset
+won, the composition fell back to candidate UI for a frame before
+`isSpeaker` caught up; and cancelling reset `countdown` while
+`hasPendingRequest` was still momentarily true, which could re-arm the
+polling effect and silently restart a canceled promotion before the
+server-side withdrawal landed. Fixed by making `isSpeaker` the single
+signal that ends this state (the countdown now reuses the existing
+`useRoleTransitionReset` hook itself, resetting `countdown` on the same
+transition `EventRoom` already resets `hasPendingRequest`/
+`micRequestMode`/`joinSeatMessage` on — not a second mechanism) and
+adding an `isCancelling` guard that suppresses re-polling for exactly the
+window a cancellation is in flight. For (3), investigated each suspected
+path (SelfPreview's own attach logic, the prepared-tracks publish
+branch, the gesture-safety permission-sync guard) and found no proven
+code-level gap, but a plausible unmodeled ordering among several
+independent async completions — reported honestly rather than claiming
+a confirmed cause. Added a defensive reconciliation effect in
+`useLiveRoomConnection` (`shouldReconcileLocalVideoTrack`, pure and
+fully unit-tested): if a live, unmuted camera publication already exists
+but `localVideoTrack` state is null, adopts the existing track directly
+— never re-acquires media, never reconnects, isn't a poll, keyed on the
+existing LiveKit-level `canPublish` signal rather than a new role flag.
+Logs a dev-only `console.error` whenever it actually fires. lint/tsc/full
+suite/build all pass (513/513, 46 files — +17 tests; suite re-run twice
+to check for fake-timer flakiness in the new cancel-race regression
+test, stable both times). Local production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own narrow real-device re-check — no flash, Cancel stays
+canceled even after waiting, and self-preview consistently appears
+across repeated promotions/camera toggles/rotation/leave-rejoin. #18
+still not moved to Done.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

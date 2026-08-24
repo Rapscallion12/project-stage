@@ -42,6 +42,34 @@ export type MediaError = { source: "camera" | "microphone"; reason: MediaErrorRe
  * so this mapping is unit-testable without a real Room/getUserMedia call,
  * same reasoning as shouldPublish above.
  */
+/**
+ * Issue #18 self-preview consistency finding (real-device report:
+ * Speaker View occasionally rendered without the floating self-preview
+ * even though the camera was actually live). Pure decision function —
+ * whether `localVideoTrack` state should be reconciled from an
+ * already-existing LiveKit camera publication, rather than treated as
+ * "no camera" — so the actual branching logic is unit-testable without
+ * a real Room/WebRTC surface, same reasoning as `shouldPublish` above.
+ * Deliberately does not know about `participantRole`/`isSpeaker` at all:
+ * `canPublish` (the server-granted LiveKit permission, itself derived
+ * from the same `event_speakers` occupancy — see ARCHITECTURE.md's
+ * LiveKit authorization model) is the correct signal at *this* layer,
+ * matching this codebase's existing DB-authoritative-for-role /
+ * LiveKit-authoritative-for-media-state separation (see
+ * `useActiveSpeakers`'s own doc comment) — not a second, competing role
+ * flag.
+ */
+export function shouldReconcileLocalVideoTrack(params: {
+  canPublish: boolean;
+  hasLocalVideoTrack: boolean;
+  cameraMuted: boolean;
+  publication: { hasTrack: boolean; isMuted: boolean } | null;
+}): boolean {
+  if (!params.canPublish || params.hasLocalVideoTrack || params.cameraMuted) return false;
+  if (!params.publication) return false;
+  return params.publication.hasTrack && !params.publication.isMuted;
+}
+
 export function classifyMediaError(source: "camera" | "microphone", error: unknown): MediaError {
   const name = error instanceof Error ? error.name : "";
   switch (name) {
@@ -366,6 +394,66 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     // held, or the token's presence flipping, should restart this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params?.livekitUrl, Boolean(params?.token)]);
+
+  /**
+   * Issue #18 self-preview consistency finding (real-device report:
+   * Speaker View occasionally rendered without the floating self-preview
+   * even though the camera was actually live). Investigated the
+   * suspected failure paths directly:
+   * - `SelfPreview` itself attaches/re-attaches correctly whenever its
+   *   `track` prop changes (see its own `useEffect`) — it's only ever
+   *   mounted at all when `localVideoTrack` is non-null (see
+   *   `SpeakerStage`), so a missing preview traces back to
+   *   `localVideoTrack` state being null, not a layout/z-index issue or
+   *   a stale attach.
+   * - The ordinary paths (`prepareLocalMedia`'s own `setLocalVideoTrack`
+   *   call, `applyPublishState`'s prepared-tracks branch) already set
+   *   `localVideoTrack` directly and don't appear to have a code-level
+   *   gap — but `syncCanPublish()`'s own gesture-safety guard
+   *   (`mediaActivatedRef.current || !publish`) deliberately *skips*
+   *   publishing if the server's permission push arrives before this
+   *   tab's own `createLocalTracks()` has resolved (issue #27's direct
+   *   join calls `prepareLocalMedia()` fire-and-forget, concurrently with
+   *   the seat claim, so this ordering is genuinely possible) — in that
+   *   window, publishing is correctly deferred to `prepareLocalMedia`'s
+   *   own tail check instead, which re-reads permissions fresh. No
+   *   concrete gap was found in that specific handoff, but the number of
+   *   independent async completions involved (Realtime, LiveKit
+   *   permission push, getUserMedia, publish) makes a rare ordering this
+   *   analysis didn't model plausible.
+   *
+   * Rather than keep chasing an exact reproduction, this is a defensive
+   * reconciliation for the general invariant: whenever this tab is
+   * permitted to publish (`canPublish`) and the camera is genuinely live
+   * and unmuted in the Room, `localVideoTrack` must reflect it. It never
+   * re-acquires media (no `createLocalTracks`/`getUserMedia`, so no
+   * permission prompt), never reconnects, and isn't a poll — it only
+   * re-runs when something real already changed (`canPublish`,
+   * `localVideoTrack`, `cameraMuted`, or `participantsVersion`, which
+   * `RoomEvent.LocalTrackPublished`/etc. already bump). Logs loudly in
+   * development when it actually does something, so a real recurrence
+   * on-device leaves a concrete trace instead of silently self-healing.
+   */
+  useEffect(() => {
+    const room = roomRef.current;
+    const publication = room?.localParticipant.getTrackPublication(Track.Source.Camera) ?? null;
+    const shouldReconcile = shouldReconcileLocalVideoTrack({
+      canPublish,
+      hasLocalVideoTrack: localVideoTrack !== null,
+      cameraMuted,
+      publication: publication ? { hasTrack: Boolean(publication.track), isMuted: publication.isMuted } : null,
+    });
+    if (!shouldReconcile || !publication?.track) return;
+    if (process.env.NODE_ENV !== "production") {
+      console.error(
+        "[useLiveRoomConnection] localVideoTrack was missing while an unmuted camera publication already existed — reconciling from the existing publication instead of re-acquiring media.",
+      );
+    }
+    setLocalVideoTrack(publication.track as LocalVideoTrack);
+    // participantsVersion isn't read directly — see getParticipant's own
+    // comment on why it's a dependency purely to force a re-check when
+    // room/track state mutates in place.
+  }, [canPublish, localVideoTrack, cameraMuted, participantsVersion]);
 
   const getParticipant = useCallback(
     (identity: string): Participant | undefined => {

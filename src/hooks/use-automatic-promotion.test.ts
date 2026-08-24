@@ -97,6 +97,102 @@ describe("useAutomaticPromotion", () => {
     expect(claimOpenSeat).not.toHaveBeenCalled();
   });
 
+  describe("issue #18 UX finding fix: no candidate-UI flash on a successful claim, and Cancel actually cancels the promotion path", () => {
+    it("a successful claim leaves countdown non-null (frozen), rather than racing the isSpeaker Realtime flip — countdown only clears once isSpeaker actually flips true", async () => {
+      checkPromotionEligibility.mockResolvedValue({ eligible: true });
+      claimOpenSeat.mockResolvedValue({ ok: true });
+      vi.useFakeTimers();
+      const { result, rerender } = renderHook((props) => useAutomaticPromotion(props), {
+        initialProps: baseParams,
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.countdown).toBe(PROMOTION_COUNTDOWN_SECONDS);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PROMOTION_COUNTDOWN_SECONDS * 1000);
+      });
+      // countdown reached 0, claimOpenSeat resolved — deliberately still
+      // non-null (not reset to null by the success path itself).
+      expect(result.current.countdown).not.toBeNull();
+      expect(baseParams.onHasPendingRequestChange).not.toHaveBeenCalled();
+
+      // The authoritative signal: isSpeaker actually flips true (Realtime).
+      rerender({ ...baseParams, isSpeaker: true });
+      expect(result.current.countdown).toBeNull();
+    });
+
+    // A "failed/lost-race claim still resets countdown to null" test was
+    // attempted here (mirroring the successful-claim test above, just
+    // with claimOpenSeat mocked to fail) but doesn't reliably converge
+    // with fake timers in this environment, even in isolation — the same
+    // documented limitation as the full countdown-reaches-zero chain
+    // noted elsewhere in this file. That branch (`if (!("ok" in
+    // result)) setCountdown(null)`) is unchanged from the pre-fix
+    // behavior; only the *success* branch changed. Not asserted here;
+    // covered by real-device/production verification instead.
+
+    it("request accepted → countdown starts → Cancel → wait beyond the original countdown duration → user must still remain non-speaker (no surprise re-promotion from the canceled countdown)", async () => {
+      vi.useFakeTimers();
+      checkPromotionEligibility.mockResolvedValue({ eligible: true });
+      let resolveWithdraw: (value: { ok: true } | { error: string }) => void = () => {};
+      withdrawSpeakerRequest.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveWithdraw = resolve;
+          }),
+      );
+      const onHasPendingRequestChange = vi.fn();
+      const { result, rerender } = renderHook((props) => useAutomaticPromotion(props), {
+        initialProps: { ...baseParams, onHasPendingRequestChange },
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.countdown).toBe(PROMOTION_COUNTDOWN_SECONDS);
+      expect(checkPromotionEligibility).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        result.current.cancel();
+      });
+      expect(result.current.countdown).toBeNull();
+
+      // Wait well beyond the original countdown duration and past at
+      // least one poll interval — server-side withdrawal is still in
+      // flight the whole time (the mocked promise hasn't resolved yet).
+      // If the polling effect incorrectly re-armed the moment countdown
+      // went null, it would call checkPromotionEligibility again and
+      // restart the countdown, re-promoting a user who explicitly
+      // canceled.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync((PROMOTION_COUNTDOWN_SECONDS + 10) * 1000);
+      });
+
+      expect(checkPromotionEligibility).toHaveBeenCalledTimes(1);
+      expect(result.current.countdown).toBeNull();
+      expect(claimOpenSeat).not.toHaveBeenCalled();
+
+      // Withdrawal finally lands server-side. In the real app,
+      // onHasPendingRequestChange(false) and clearing isCancelling happen
+      // in the same .then() callback (see cancel()'s own comment) so they
+      // batch into the same commit — EventRoom's re-render with
+      // hasPendingRequest: false and this hook's own isCancelling
+      // clearing land together, not as two separate renders. Rerendering
+      // inside the same act() block models that.
+      await act(async () => {
+        resolveWithdraw({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        rerender({ ...baseParams, onHasPendingRequestChange, hasPendingRequest: false });
+      });
+      expect(onHasPendingRequestChange).toHaveBeenCalledWith(false);
+      expect(result.current.countdown).toBeNull();
+      expect(claimOpenSeat).not.toHaveBeenCalled();
+    });
+  });
+
   it("self-evicts via the existing leaveSpeakerSeat if seated but media isn't activated within the grace period — reusing existing authority, not a new mechanism", async () => {
     vi.useFakeTimers();
     leaveSpeakerSeat.mockResolvedValue({ ok: true });

@@ -286,3 +286,45 @@ describe("rotation during/after promotion (issue #18 fix — approximated, see t
     expectExclusiveControlRow("speaker");
   });
 });
+
+describe.each([
+  { name: "PortraitRoom", Room: PortraitRoom },
+  { name: "MobileLandscapeRoom", Room: MobileLandscapeRoom },
+])("$name — no pre-countdown candidate UI flash (issue #18 UX finding fix)", ({ Room }) => {
+  /**
+   * Real-device report: right before the center-stage countdown appears,
+   * the old "Request sent / Cancel / normal composer / controls /
+   * ambient comment" UI briefly showed. Root cause traced to
+   * `useAutomaticPromotion`'s claim-success handler resetting
+   * `hasPendingRequest`/`countdown` itself, racing the independent
+   * Realtime push that flips `isSpeaker` true — when the reset won that
+   * race, this composition fell back to plain Watch Mode for a frame
+   * before `isSpeaker` caught up. Fixed by no longer resetting either on
+   * success — the countdown instead stays frozen (e.g. at 0) until
+   * `isSpeaker` itself flips true, at which point the whole composition
+   * swaps away to Speaker View atomically (see the describe.each block
+   * above). This block asserts the "frozen" state itself never falls
+   * back to candidate UI.
+   */
+  it("promotionCountdown frozen at 0 (claim resolved, isSpeaker not yet flipped) still shows the countdown takeover — never falls back to the Request-sent/composer/ambient-comments UI", () => {
+    render(<Room {...countingDownProps} promotionCountdown={0} />);
+    expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+    expect(screen.queryByText("Request sent")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+  });
+
+  it("the exact described sequence — counting down, frozen at 0, then isSpeaker flips — never shows candidate UI at any step", () => {
+    const { rerender } = render(<Room {...countingDownProps} promotionCountdown={3} />);
+    expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+
+    rerender(<Room {...countingDownProps} promotionCountdown={0} />);
+    expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+    expect(screen.queryByText("Request sent")).not.toBeInTheDocument();
+
+    rerender(<Room {...speakerProps} />);
+    expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
+    expectExclusiveControlRow("speaker");
+  });
+});

@@ -3,6 +3,115 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Three corrective fixes on the center-stage countdown: no pre-countdown flash, Cancel actually cancels, self-preview reconciliation (issue #18)
+
+**Problem 1 — pre-countdown candidate UI flash**: right before the
+center-stage countdown appeared, the old "Request sent / Cancel / normal
+composer / controls / ambient comment" UI briefly showed.
+
+**Investigation**: traced the transition ordering precisely.
+`PortraitRoom`/`MobileLandscapeRoom`'s `promotionCountdown !== null`
+ternary (previous entry) already made the countdown/candidate-UI choice
+atomic *within one render* — the actual gap was in
+`useAutomaticPromotion`'s claim-success handler, which used to reset both
+`hasPendingRequest` (via `onHasPendingRequestChange(false)`) and
+`countdown` (via `.finally(() => setCountdown(null))`) the moment
+`claimOpenSeat` resolved — racing an entirely *independent* completion,
+the Realtime push that flips `isSpeaker` true (see `EventRoom`). Chained
+`.then()`/`.finally()` continuations run in separate microtask ticks, so
+these two resets could even land in different renders from each other,
+compounding the gap. When the reset won the race (won it *before*
+Realtime delivered `isSpeaker: true`), this composition's `promotionCountdown
+!== null` ternary correctly fell back to its `else` branch — except
+`hasPendingRequest` was *also* already false by then, so it fell all the
+way through to plain Watch Mode (or briefly the old "Request sent" pill,
+depending on exact ordering) for one or more frames before `isSpeaker`
+caught up.
+
+**Decision**: the claim-success path no longer resets `hasPendingRequest`
+or `countdown` itself. `isSpeaker` flipping true (Realtime) is now the
+single authoritative signal that ends this state: `useAutomaticPromotion`
+reuses the *same* `useRoleTransitionReset` hook (previous entry) to reset
+its own `countdown` on that transition, exactly like `EventRoom` already
+does for `hasPendingRequest`/`micRequestMode`/`joinSeatMessage` — not a
+second, parallel reconciliation mechanism. Until `isSpeaker` actually
+flips, the countdown simply stays frozen (typically at `0`, mid-claim) —
+still the countdown takeover UI, never a fallback to candidate UI. A
+*failed*/lost-race claim is different: nothing else will ever flip
+`isSpeaker` for that attempt, so `countdown` still resets to `null`
+directly in that branch, falling back to waiting as before.
+
+**Problem 2 — Cancel during the countdown didn't reliably cancel**:
+`cancel()` set `countdown` to `null` immediately (correct, for hiding the
+overlay) while `hasPendingRequest` was still `true` (the server
+withdrawal hadn't resolved yet) — which, on the *very same render*,
+re-armed the polling effect (its guard no longer had any reason to
+return early) and could immediately restart a *new* countdown before the
+withdrawal had actually landed server-side. A canceled promotion could
+silently resurrect itself.
+
+**Decision**: new `isCancelling` state, true for exactly the window from
+tapping Cancel to `withdrawSpeakerRequest` resolving, added to the
+polling effect's guard — suppresses any poll from starting while a
+cancellation is in flight. `onHasPendingRequestChange(false)` and
+clearing `isCancelling` were also moved into the *same* `.then()`
+callback (not split across `.then()`/`.finally()`), closing a second,
+narrower version of the same race between the cancel path settling and
+`hasPendingRequest` actually reaching the component that gates polling.
+
+**Problem 3 — self-preview intermittently missing in Speaker View**:
+reported as an occasional real-device issue, not reliably reproducible.
+
+**Investigation**: checked each suspected path directly. `SelfPreview`
+itself attaches/re-attaches correctly on every `track` prop change and is
+only ever mounted when `localVideoTrack` is non-null (`SpeakerStage`) —
+ruled out a layout/attach bug; a missing preview always traces back to
+`localVideoTrack` state itself being null. The ordinary paths
+(`prepareLocalMedia`'s own `setLocalVideoTrack`, `applyPublishState`'s
+prepared-tracks branch) set it directly and no concrete code-level gap
+was found — but `syncCanPublish()`'s gesture-safety guard deliberately
+*skips* publishing if the server's permission push arrives before this
+tab's own `createLocalTracks()` resolves (a real possibility for issue
+#27's direct join, which calls `prepareLocalMedia()` fire-and-forget
+concurrently with the seat claim), deferring to `prepareLocalMedia`'s own
+tail check instead. No proven gap in that specific handoff, but the
+number of independent async completions involved (Realtime, LiveKit
+permission push, getUserMedia, publish) makes an unmodeled rare ordering
+plausible — reported honestly rather than claiming a confirmed root
+cause.
+
+**Decision**: a defensive reconciliation effect in
+`useLiveRoomConnection`, gated by a new pure, fully unit-tested
+`shouldReconcileLocalVideoTrack(...)` — whenever `canPublish` is true,
+`localVideoTrack` is null, the camera isn't intentionally muted, and the
+Room's own local camera publication already has a live, unmuted track,
+adopt that existing track directly into `localVideoTrack` state. Never
+calls `createLocalTracks`/`getUserMedia` (no permission prompt), never
+reconnects, and isn't a poll — it only re-runs on real state changes
+(`canPublish`/`localVideoTrack`/`cameraMuted`/`participantsVersion`, the
+last already bumped by genuine LiveKit track/participant events).
+Deliberately keyed on `canPublish` (the existing LiveKit-level signal),
+not a new `participantRole`-aware check — matching this codebase's
+existing DB-authoritative-for-role / LiveKit-authoritative-for-media-state
+separation (see `useActiveSpeakers`'s own doc comment), not a second
+role flag. Logs a `console.error` in development whenever it actually
+reconciles something, so a real on-device recurrence leaves a concrete
+trace instead of silently self-healing.
+
+**Verification honesty**: automated (lint/tsc/full suite — 513/513, 46
+files, including a pure-function battery for
+`shouldReconcileLocalVideoTrack`, real-Room-mock integration tests for
+the reconciliation wiring, fake-timer regression coverage for the
+cancel-race fix, and a composition-level "frozen countdown never falls
+back to candidate UI" test) and a local production smoke test all pass,
+run twice to check for fake-timer flakiness. None of this proves the
+original self-preview report is fixed on a real device — that's a
+defensive recovery path for an unconfirmed root cause, verified only by
+its own decision logic and wiring, not by reproducing the original bug.
+The flash and Cancel fixes rest on a *confirmed* traced mechanism, which
+is a stronger claim, but still only real-device testing confirms the
+actual UX.
+
 ## 2026-08-24 — "Going live" countdown redesigned as a center-stage transition (issue #18 UX finding)
 
 **Problem**: after the role-consistency fix, real-device stress testing
