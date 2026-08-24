@@ -137,6 +137,22 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       expect(screen.queryByText(/setting up your mic access/i)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /enable camera/i })).not.toBeInTheDocument();
     });
+
+    it("has no mic/camera toggle buttons of its own — those live in the persistent bottom row now", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      const leaveButton = screen.getByRole("button", { name: /leave the stage/i });
+      // The mic/camera toggles (present elsewhere in the view) are not
+      // siblings inside this button's own immediate row.
+      const leaveRow = leaveButton.parentElement as HTMLElement;
+      expect(leaveRow.querySelector('[data-testid="speaker-mic-toggle"]')).toBeNull();
+      expect(leaveRow.querySelector('[data-testid="speaker-camera-toggle"]')).toBeNull();
+    });
+
+    it("the bottom overlay reserves safe-area-aware bottom padding, not a flat pb-3, so Leave/the control row clear the home-indicator region", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      const overlayInner = screen.getByTestId("stage-bottom-overlay").firstElementChild as HTMLElement;
+      expect(overlayInner.className).toMatch(/safe-area-inset-bottom/);
+    });
   });
 
   describe("composer (issue #18, Phase 2 — reuses ChatPanel verbatim, comments-only for a seated speaker)", () => {
@@ -160,11 +176,51 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       await waitFor(() => expect(sendMessage).toHaveBeenCalled());
     });
 
-    it("React/Vote/Gift stay inert, unchanged", () => {
+    it("Gift stays inert, unchanged", () => {
       render(<PortraitSpeakerView {...baseProps} />);
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
-      expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
       expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
+    });
+
+    it("React/Vote are replaced by the mic/camera toggles for a seated speaker — not present at all", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-vote-emblem")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("mic/camera toggles in the persistent bottom row (issue #18, UI cleanup — relocated from the separate SpeakerControlBar row, same logic)", () => {
+    it("renders Comment · Mic · Camera · Gift — the mic/camera toggles sit where React/Vote normally do", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+      expect(screen.getByTestId("speaker-mic-toggle")).toBeInTheDocument();
+      expect(screen.getByTestId("speaker-camera-toggle")).toBeInTheDocument();
+      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
+    });
+
+    it("tapping the mic toggle calls the same toggleMicrophone already wired through this view's props", () => {
+      const toggleMicrophone = vi.fn(async () => {});
+      render(<PortraitSpeakerView {...baseProps} toggleMicrophone={toggleMicrophone} />);
+      fireEvent.click(screen.getByTestId("speaker-mic-toggle"));
+      expect(toggleMicrophone).toHaveBeenCalledTimes(1);
+    });
+
+    it("tapping the camera toggle calls the same toggleCamera already wired through this view's props", () => {
+      const toggleCamera = vi.fn(async () => {});
+      render(<PortraitSpeakerView {...baseProps} toggleCamera={toggleCamera} />);
+      fireEvent.click(screen.getByTestId("speaker-camera-toggle"));
+      expect(toggleCamera).toHaveBeenCalledTimes(1);
+    });
+
+    it("only one copy of each control exists — no separate floating mic/camera row above the composer", () => {
+      render(<PortraitSpeakerView {...baseProps} />);
+      expect(screen.getAllByTestId("speaker-mic-toggle")).toHaveLength(1);
+      expect(screen.getAllByTestId("speaker-camera-toggle")).toHaveLength(1);
+    });
+
+    it("disables both toggles before actually publishing", () => {
+      render(<PortraitSpeakerView {...baseProps} needsMediaActivation={true} />);
+      expect(screen.getByTestId("speaker-mic-toggle")).toBeDisabled();
+      expect(screen.getByTestId("speaker-camera-toggle")).toBeDisabled();
     });
   });
 
@@ -192,6 +248,28 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
     it("renders nothing when there are no messages yet", () => {
       render(<PortraitSpeakerView {...baseProps} messages={[]} />);
       expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
+
+    it("clears the full control-region footprint (leave-stage row + control row), not Watch Mode's shorter bottom-16 offset (real-device finding: comments rendered behind the controls)", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Cheerful Fox",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "Hello",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      expect(wrapper.className).toMatch(/\bbottom-32\b/);
+      expect(wrapper.className).not.toMatch(/\bbottom-16\b/);
     });
   });
 

@@ -161,11 +161,58 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       expect(screen.getByTestId("ambient-comment")).toHaveTextContent("great show");
     });
 
-    it("React/Vote/Gift stay inert", () => {
+    it("clears the full control-region footprint, same as portrait — not the shorter Watch Mode bottom-16 offset", () => {
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Cheerful Fox",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "Hello",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      expect(wrapper.className).toMatch(/\bbottom-32\b/);
+    });
+
+    it("Gift stays inert; React/Vote are replaced by the mic/camera toggles", () => {
       render(<MobileLandscapeSpeakerView {...baseProps} />);
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
-      expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
       expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-vote-emblem")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("mic/camera toggles in the persistent bottom row (issue #18, UI cleanup — same as portrait)", () => {
+    it("renders Comment · Mic · Camera · Gift, only one copy of each control", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} />);
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-mic-toggle")).toHaveLength(1);
+      expect(screen.getAllByTestId("speaker-camera-toggle")).toHaveLength(1);
+      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
+    });
+
+    it("tapping the mic/camera toggles calls the toggles already wired through this view's props", () => {
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("speaker-mic-toggle"));
+      fireEvent.click(screen.getByTestId("speaker-camera-toggle"));
+      expect(toggleMicrophone).toHaveBeenCalledTimes(1);
+      expect(toggleCamera).toHaveBeenCalledTimes(1);
     });
   });
 

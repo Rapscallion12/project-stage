@@ -47,4 +47,20 @@ describe("WatchModeControls (issue #21, 05 interaction model)", () => {
       expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
   });
+
+  describe("micCameraSlot (issue #18, Speaker View UI cleanup — replaces React/Vote, Gift stays)", () => {
+    it("replaces React/Vote with the supplied slot, Gift unaffected", () => {
+      render(<WatchModeControls micCameraSlot={<button data-testid="fake-mic-toggle">mic</button>} />);
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-vote-emblem")).not.toBeInTheDocument();
+      expect(screen.getByTestId("fake-mic-toggle")).toBeInTheDocument();
+      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
+    });
+
+    it("without micCameraSlot, ordinary Watch Mode keeps React/Vote exactly as before — purely additive", () => {
+      render(<WatchModeControls />);
+      expect(screen.getByTestId("watch-emoji-emblem")).toBeInTheDocument();
+      expect(screen.getByTestId("watch-vote-emblem")).toBeInTheDocument();
+    });
+  });
 });

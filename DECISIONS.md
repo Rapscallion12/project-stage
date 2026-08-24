@@ -3,6 +3,85 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View UI cleanup: one control row, safe-area-aware bottom clearance, top-right footprint reservation
+
+**Problem**: functionally complete Speaker View (Phase 2 confirmed on
+real-device) still had UI crowding/clipping on an actual phone: a
+floating mic/camera row *and* the persistent bottom row read as two
+separate control regions; ambient comments rendered behind the
+now-taller control stack; the guest-name chip and `SelfPreview`
+competed for the same top-right corner despite an earlier fix that only
+addressed positioning, not width.
+
+**One control row, not two**: `SpeakerMediaToggles` (new file) is the
+*exact same* mic/camera toggle JSX that used to live in
+`SpeakerControlBar`'s own row, moved — not reimplemented — into
+`WatchModeControls`' 2nd/3rd slot via a new optional `micCameraSlot`
+prop. `WatchModeControls` renders `{composer}{micCameraSlot ?? (React +
+Vote)}{Gift}` — ordinary Watch Mode never passes `micCameraSlot`, so its
+Comment/React/Vote/Gift row is untouched, purely additive.
+`SpeakerControlBar` is back to being exactly what its name says: one
+"Leave the stage" pill, nothing else. Same `toggleMicrophone`/
+`toggleCamera`/`leaveSpeakerSeat` wiring throughout — no behavior change,
+only which JSX tree renders which button.
+
+**`AmbientComments`' clearance is Speaker-View-specific, not shared with
+Watch Mode**: Speaker View's bottom overlay is now taller than Watch
+Mode's (an extra leave-stage row above the composer/mic/camera/gift
+row), so reusing Watch Mode's `bottom-16` let the lowest ambient bubble
+render behind the controls — reported directly, screenshot included.
+Speaker View's own offset is `bottom-32`, sized to clear leave-pill row
++ gap + control row + bottom padding with margin to spare. Watch Mode's
+own `bottom-16` is untouched — different composition, different
+footprint, deliberately not unified into one constant.
+
+**Safe-area-aware bottom padding, Speaker-View-only**: `StageOverlayShell`'s
+default `pb-3` doesn't account for the iPhone home-indicator region.
+Rather than changing the shared component's default (which would also
+touch Watch Mode, not part of this report), Speaker View passes
+`pb-[max(0.75rem,env(safe-area-inset-bottom))]` via `StageOverlayShell`'s
+existing `className` prop, which `cn()`'s `twMerge` correctly resolves as
+an override of the component's own `pb-3` default — no change to the
+shared component's API or Watch Mode's rendered output.
+
+**Top-right footprint reservation, not just positioning**: the earlier
+fix (this session, prior pass) moved the guest-name chip off
+`SelfPreview`'s corner by anchoring both status pill and chip left
+instead of `justify-between`. That reduced collision likelihood but
+didn't structurally prevent it — CSS padding doesn't clip flex children
+from rendering past it, and on a narrow phone the combined natural width
+of a long event title plus a guest name could still reach into
+`SelfPreview`'s zone. Fixed properly this time by reusing an
+already-proven pattern from this exact codebase:
+`MobileLandscapeRoom`'s own header overlay already reserves
+`SelfPreview`'s responsive footprint via `pr-16 sm:pr-20` padding,
+matching `SelfPreview`'s own breakpoint classes. `SpeakerViewTopChrome`
+now does the same (`pr-20 sm:pr-24`, sized to `SelfPreview`'s actual
+`w-16`/`sm:w-20` + `right-3` margin, not an arbitrary/tuned-to-one-
+screenshot number), combined with `min-w-0 flex-1` on the status pill so
+it actually shrinks/truncates under the narrower budget instead of
+overflowing it — the same flexbox-shrink discipline already required
+once before for the Watch Mode composer. The guest chip stays
+`shrink-0`, capped by its own existing `max-w-[9rem]` truncation,
+prioritized to stay legible over the event title under pressure.
+
+**Preserved, none of this pass touched them**: LiveKit connection
+lifecycle, `soloMode`, seat assignment, self-preview track handling,
+mic/camera publication behavior (still `LocalTrack.mute()`/`.unmute()`,
+unchanged), `leaveSpeakerSeat`'s call path, comment submission, ambient-
+comment data/Realtime behavior. This was composition/layout cleanup —
+every prop, action, and hook call is identical to before; only which
+JSX renders where and how much space things reserve changed.
+
+**Verification honesty**: automated tests cover the row composition
+(mic/camera present exactly once, React/Vote absent for a speaker, Gift
+still present), the `bottom-32`/`pb-[...env(safe-area-inset-bottom)]`
+classes, and the top-chrome's `pr-20 sm:pr-24`/`min-w-0 flex-1`/
+`shrink-0` classes — these pin the actual CSS mechanism the fix depends
+on, not just a snapshot. They cannot verify the felt visual result on a
+real notched iPhone (whether the clearances read as generous enough, not
+just non-overlapping) — that remains the user's own check.
+
 ## 2026-08-24 — Speaker View live mic/camera mute toggles (the original plan's remaining Phase 3 half, approved by the user as "Phase 2")
 
 **Phase-numbering reconciliation**: the originally approved 4-phase plan

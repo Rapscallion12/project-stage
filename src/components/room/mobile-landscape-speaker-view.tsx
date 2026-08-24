@@ -2,6 +2,7 @@ import { SpeakerStage } from "@/components/room/speaker-stage";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { SpeakerMediaActivationPrompt } from "@/components/room/speaker-media-activation-prompt";
 import { SpeakerControlBar } from "@/components/room/speaker-control-bar";
+import { SpeakerMediaToggles } from "@/components/room/speaker-media-toggles";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
@@ -54,8 +55,11 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * since there was previously no way to leave the stage at all once
  * rotated to landscape.
  *
- * **Live mic/camera mute toggles**: same `SpeakerControlBar` props as
- * `PortraitSpeakerView` — see that component's own doc comment.
+ * **One persistent control row, mic/camera in place of React/Vote, and
+ * `AmbientComments`' taller clearance**: same `SpeakerMediaToggles`-in-
+ * `WatchModeControls` layout and same `bottom-32` ambient-comments offset
+ * as `PortraitSpeakerView` — see that component's own doc comment for the
+ * full reasoning (this file mirrors it exactly, same footprint math).
  *
  * **Still deliberately not here**: no desktop equivalent.
  */
@@ -106,19 +110,16 @@ export function MobileLandscapeSpeakerView({
         mediaError={mediaError}
       />
 
-      <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
+      <div className="pointer-events-none absolute bottom-32 left-3 z-10 max-w-[70%]">
         <AmbientComments messages={messages} />
       </div>
 
-      <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
-        <SpeakerControlBar
-          eventId={event.id}
-          microphoneMuted={microphoneMuted}
-          cameraMuted={cameraMuted}
-          onToggleMicrophone={toggleMicrophone}
-          onToggleCamera={toggleCamera}
-          canToggleMedia={canPublish && !needsMediaActivation}
-        />
+      <StageOverlayShell
+        gradient={false}
+        topClassName="pt-0"
+        className="gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+      >
+        <SpeakerControlBar eventId={event.id} />
         <WatchModeControls
           composer={
             <ChatPanel
@@ -131,6 +132,15 @@ export function MobileLandscapeSpeakerView({
               onPrepareMedia={onPrepareMedia}
               allowMicRequest={false}
               compact
+            />
+          }
+          micCameraSlot={
+            <SpeakerMediaToggles
+              microphoneMuted={microphoneMuted}
+              cameraMuted={cameraMuted}
+              onToggleMicrophone={toggleMicrophone}
+              onToggleCamera={toggleCamera}
+              canToggleMedia={canPublish && !needsMediaActivation}
             />
           }
         />

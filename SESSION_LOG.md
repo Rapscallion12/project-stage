@@ -378,6 +378,53 @@ audio and video for the other participant, no permission re-prompt, no
 reconnect, buttons correctly disabled before publishing starts. Do not
 begin the next Speaker View scope until explicitly approved.
 
+**Mic/camera toggles confirmed working on real device.** Asked to
+reconcile the original #18 plan against everything shipped across all
+the corrective passes before doing more work — delivered that
+reconciliation directly: every requirement in #18's own issue body is
+now satisfied (full-bleed remote speaker, self-preview, ambient
+comments + composer, `SpeakerControlBar` leave-stage + mic/camera,
+empty-seat reuse); landscape is done too, though as an explicit
+deviation from the issue's original "portrait only this pass" text, at
+the user's own request; no meaningful #18 work remains; React/Vote/
+Gift, Discussion Expanded, a fuller landscape redesign, and a desktop
+Speaker View were all identified as belonging elsewhere (#21 or a new
+issue), not #18. Recommended one final integrated real-device pass
+before closing.
+
+**Before that pass ran, real-device testing surfaced UI crowding/
+clipping** (a screenshot: an ambient comment rendering behind the
+speaker controls, plus top-right chip/self-preview crowding) —
+paused the sign-off to fix layout, explicitly scoped as composition
+cleanup, not another architecture change. Consolidated the mic/camera
+toggles and "Leave the stage" from two separate control regions (a
+floating row above the composer, plus the persistent bottom row) into
+one: `SpeakerMediaToggles` (the *same* toggle buttons, relocated, not
+reimplemented) now sits in `WatchModeControls`' new `micCameraSlot`,
+replacing React/Vote for a seated speaker while Gift stays; ordinary
+Watch Mode is unaffected (the slot defaults to today's React/Vote when
+absent). `SpeakerControlBar` is back to just "Leave the stage."
+`AmbientComments` gained a Speaker-View-specific `bottom-32` clearance
+(up from a `bottom-16` it had wrongly inherited from Watch Mode's own,
+shorter control stack) and the bottom overlay gained safe-area-aware
+padding for the home-indicator region. `SpeakerViewTopChrome` now
+reserves `SelfPreview`'s actual responsive footprint (`pr-20 sm:pr-24`,
+mirroring `MobileLandscapeRoom`'s own already-proven pattern for the
+exact same problem) with `min-w-0 flex-1` so the status pill genuinely
+shrinks instead of overflowing into it, rather than relying on
+left-anchoring alone (the earlier fix, which reduced but didn't
+structurally prevent the collision). lint/tsc/build/test all pass
+(431/431, 43 files, +17 new tests covering the row composition and the
+specific CSS classes each fix depends on). Local production smoke test
+confirmed the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device approval of this
+cleanup pass specifically — Comment/Mic/Camera/Gift row, Leave Stage
+with no collisions, ambient-comment clearance, top-right clearance,
+keyboard behavior, toggling, leave/rejoin. #18 is not merged or closed
+yet — that's still gated on this approval plus the originally-planned
+integrated sign-off pass.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

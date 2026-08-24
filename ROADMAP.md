@@ -528,6 +528,21 @@ different dependencies. Current order:
       gained mic/camera buttons backed by `LocalTrack.mute()`/`.unmute()`
       on the already-published track, never `setMicrophoneEnabled`/
       `setCameraEnabled`. See DECISIONS.md's eighth 2026-08-24 entry.
+      **#18 reconciled against the current code**: every requirement in
+      the issue's own body is satisfied; no meaningful work remains;
+      landscape done as an explicit deviation from the issue's original
+      text, at the user's request; React/Vote/Gift, Discussion Expanded,
+      a fuller landscape redesign, and desktop belong to #21 or a new
+      issue, not #18. **UI cleanup pass before sign-off**: mic/camera
+      toggles consolidated into the persistent bottom row
+      (`WatchModeControls`' new `micCameraSlot`, replacing React/Vote for
+      a speaker), `SpeakerControlBar` back to just "Leave the stage,"
+      `AmbientComments` given Speaker-View-specific clearance
+      (`bottom-32`), safe-area-aware bottom padding, and
+      `SpeakerViewTopChrome` now reserves `SelfPreview`'s actual
+      responsive footprint. Not yet merged or closed — gated on this
+      pass's approval plus the integrated real-device sign-off. See
+      DECISIONS.md's ninth 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

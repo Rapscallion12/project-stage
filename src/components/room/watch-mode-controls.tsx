@@ -21,13 +21,31 @@ import type { ReactNode } from "react";
  * `composer` defaults to the original Phase 1 inert placeholder if the
  * caller doesn't pass one, so this component still renders sensibly on
  * its own (e.g. in isolation in tests).
+ *
+ * **`micCameraSlot`** (issue #18, Speaker View UI cleanup): when
+ * provided, *replaces* the React/Vote pair with whatever's passed in —
+ * for Speaker View, `SpeakerMediaToggles` (live mic/camera mute
+ * buttons), landing in the exact position React/Vote normally occupy.
+ * `Gift` stays in place either way, still inert. Ordinary Watch Mode
+ * (every existing caller) never passes this, so the row stays exactly
+ * Comment/React/Vote/Gift, unchanged — this is purely additive.
  */
-export function WatchModeControls({ composer }: { composer?: ReactNode }) {
+export function WatchModeControls({
+  composer,
+  micCameraSlot,
+}: {
+  composer?: ReactNode;
+  micCameraSlot?: ReactNode;
+}) {
   return (
     <div className="flex items-center gap-2.5">
       {composer ?? <InertComposerPlaceholder />}
-      <ControlEmblem testId="watch-emoji-emblem" emoji="🙂" label="React" />
-      <ControlEmblem testId="watch-vote-emblem" emoji="🗳" label="Vote" />
+      {micCameraSlot ?? (
+        <>
+          <ControlEmblem testId="watch-emoji-emblem" emoji="🙂" label="React" />
+          <ControlEmblem testId="watch-vote-emblem" emoji="🗳" label="Vote" />
+        </>
+      )}
       <ControlEmblem testId="watch-gift-emblem" emoji="🎁" label="Gift" />
     </div>
   );

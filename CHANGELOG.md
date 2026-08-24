@@ -7,6 +7,26 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Speaker View (issue #18) UI cleanup: one control row, not two** —
+  mic/camera toggles moved out of `SpeakerControlBar`'s own floating row
+  and into the persistent bottom row (`WatchModeControls`' new
+  `micCameraSlot`), replacing React/Vote in that row for a seated speaker
+  (Gift stays). Same toggle logic, relocated via a new
+  `SpeakerMediaToggles` component, not reimplemented.
+  `SpeakerControlBar` is back to just "Leave the stage." `AmbientComments`
+  now clears Speaker View's taller control-region footprint
+  (`bottom-32`, up from the shared `bottom-16` it previously — incorrectly
+  — reused from Watch Mode) and the bottom overlay adds safe-area-aware
+  padding for the iPhone home-indicator region. `SpeakerViewTopChrome`
+  now reserves `SelfPreview`'s own responsive footprint via
+  `pr-20 sm:pr-24` (mirroring `MobileLandscapeRoom`'s own header overlay,
+  which already solved this same problem), with `min-w-0 flex-1` so the
+  status pill actually shrinks under that budget instead of overflowing
+  into it. Ordinary Watch Mode is unaffected — all of this is
+  Speaker-View-specific. See DECISIONS.md.
+
 ### Added
 
 - **Speaker View (issue #18): live microphone/camera mute toggles** — the
