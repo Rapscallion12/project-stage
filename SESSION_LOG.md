@@ -130,6 +130,53 @@ edits, landscape Speaker View's role hierarchy and reduced clutter,
 rotation both directions, and no regression to audience landscape. Do
 not begin Phase 2 until explicitly approved.
 
+**That corrective pass did not fix the actual bug** — real-device
+retesting found the self-preview still disappearing after committing a
+name edit while seated. Explicitly instructed to trace the real cause
+this time, not guess again, with a fallback (disable name editing while
+speaking) if the cause couldn't be confidently found. Traced it properly:
+`node_modules/next/dist/docs/01-app/01-getting-started/07-mutating-data.md`'s
+own "Cookies" section documents that setting a cookie inside a Server
+Action re-renders the current page's Server Components and re-runs
+effects whose dependencies changed. `setGuestName` sets a cookie;
+`EventPage` re-runs and re-calls `getLiveKitToken`, which
+(`AccessToken.toJwt()`) mints a genuinely different JWT string every
+call, even for identical grants. `useLiveRoomConnection`'s connect
+effect depended on that token's exact value — a changed string, even
+while already connected, tore the effect down: a **real**
+`room.disconnect()` (visible to the other participant too, not just a
+local artifact), `localVideoTrack` nulled, then a reconnect that
+re-published camera/mic via `setCameraEnabled`/`setMicrophoneEnabled` (a
+genuine `getUserMedia` reacquisition) — and never restored
+`localVideoTrack` through that path, permanently hiding the preview.
+Fixed by depending on the token's presence, not its value, aligning the
+implementation with this project's own already-stated principle that
+permission changes are a live push, never a reconnect. New `Room`-mocking
+tests in `use-live-room-connection.test.ts` assert a token-value-only
+change never creates a second `Room` or calls connect/disconnect again,
+while the documented null→real transition and a genuine `livekitUrl`
+change still work correctly.
+
+**Landscape site-header fix, same pass**: real-device testing separately
+found the site-wide header still consuming too much of Speaker View's
+landscape composition — the existing padding-only `room-active`
+compaction wasn't enough once there's no sidebar/chat competing for
+space. New `speaker-view-active` body class (tracks `isSpeaker`
+specifically, a separate effect in `EventRoom` since the dependency is
+real) hides the header outright under the same landscape+short-height
+media query, only while actively speaking — ordinary audience landscape
+keeps its existing treatment unchanged.
+
+lint/tsc/build/test all pass (355/355, 40 files, +3 new tests targeting
+the reconnect fix specifically). Local production smoke test confirmed
+the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation —
+self-preview surviving repeated name edits with no reconnect, landscape
+header genuinely gone/collapsed while speaking, and no regression to
+audience landscape or the LiveKit connection generally. Do not begin
+Phase 2 until explicitly approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

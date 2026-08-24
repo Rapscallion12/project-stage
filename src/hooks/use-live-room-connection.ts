@@ -125,9 +125,10 @@ export type LiveRoomConnection = {
 };
 
 /**
- * Owns the LiveKit `Room` connection lifecycle: connects once per
- * token/url pair, disconnects on unmount, and keeps `canPublish` in sync
- * with the server's permission grant — on connect, and again every time
+ * Owns the LiveKit `Room` connection lifecycle: connects once `params` is
+ * non-null (see below for exactly what "once" means), disconnects on
+ * unmount, and keeps `canPublish` in sync with the server's permission
+ * grant — on connect, and again every time
  * `RoomEvent.ParticipantPermissionsChanged` fires on the local participant
  * (the live push from issue #13's `syncPublishPermission`). Actually
  * publishing camera/mic tracks only happens automatically once this tab
@@ -138,6 +139,14 @@ export type LiveRoomConnection = {
  * skips connecting entirely — the room still works for chat and the
  * DB-sourced speaker roster, just without media, per the
  * graceful-degradation principle.
+ *
+ * **Connects once the *token's presence* flips, not once per distinct
+ * token string** — see the connect effect's own comment below for the
+ * real-device bug this fixes (a guest-name edit minting a fresh-but-
+ * equivalent token and silently forcing a full reconnect). A later
+ * render carrying a *different* token string for an *already-connected*
+ * room is not treated as a reason to reconnect; only the room's own live
+ * `ParticipantPermissionsChanged` push is.
  */
 export function useLiveRoomConnection(params: { livekitUrl: string; token: string } | null): LiveRoomConnection {
   const [status, setStatus] = useState<ConnectionStatus>(params ? "connecting" : "unavailable");
@@ -294,10 +303,40 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       stopPreparedTracks();
       void room.disconnect();
     };
-    // Reconnecting on every render would tear down a healthy call; only
-    // the identity of the token/url actually held should restart this.
+    // Real-device finding (issue #18 Speaker View corrective pass):
+    // deliberately `Boolean(params?.token)`, not `params?.token` itself.
+    // A guest editing their display name sets a cookie in a Server
+    // Action, which (per Next.js's own documented cookie-mutation
+    // behavior) re-renders the current page's Server Components —
+    // re-running `getLiveKitToken`, which mints a brand-new JWT
+    // (`AccessToken.toJwt()` signs a fresh token, byte-different, on
+    // every call) with *identical* grants. With the token's own string
+    // value in this dependency array, that alone was enough to tear down
+    // this effect — disconnecting the live `Room`, nulling
+    // `localVideoTrack` via `stopPreparedTracks()`, then reconnecting and
+    // re-publishing camera/mic via `setCameraEnabled`/
+    // `setMicrophoneEnabled` (a real `getUserMedia` reacquisition, since
+    // an already-published speaker's tracks have already left
+    // `preparedTracksRef`) — and `localVideoTrack` was never set back to
+    // non-null by that particular re-publish path, permanently hiding
+    // the self-preview. This is exactly backwards from how this
+    // project's own authorization model already says token changes
+    // should be handled: "token expiry doesn't enforce anything...
+    // revocation happens live via syncPublishPermission()'s push to an
+    // already-connected participant, no reconnect required" (see
+    // ARCHITECTURE.md's LiveKit authorization model section) — a token
+    // refreshed for unrelated reasons (a cookie write, not a permission
+    // change) was never supposed to be a reconnect signal at all.
+    // Depending on presence rather than value preserves the one
+    // legitimate case this effect must still react to (the documented
+    // null-params → real-params transition, e.g. phase flipping to
+    // "ready") while never tearing down an already-healthy connection
+    // just because a later render happens to carry a newer token string
+    // for the same room. Reconnecting on every render for any other
+    // reason would tear down a healthy call too; only the url actually
+    // held, or the token's presence flipping, should restart this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params?.livekitUrl, params?.token]);
+  }, [params?.livekitUrl, Boolean(params?.token)]);
 
   const getParticipant = useCallback(
     (identity: string): Participant | undefined => {

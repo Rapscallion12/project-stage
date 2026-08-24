@@ -3,6 +3,104 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View: the self-preview bug was a token-refresh-triggered LiveKit reconnect, not a CSS issue; site header hidden in landscape while speaking
+
+**Problem**: the previous corrective pass (repositioning the guest-name
+chip away from `SelfPreview`'s corner, fixing an iOS-zoom `text-sm`
+override) did not fix the actual bug — the self-preview still
+disappeared after committing a name edit while seated, and stayed gone.
+Explicitly instructed not to make another speculative fix: trace the
+actual render/state/track lifecycle and compare the tree before and
+after the edit, or fall back to disabling name editing while speaking
+rather than iterate blindly again.
+
+**Investigation, grounded in this project's own bundled Next.js docs**
+(per AGENTS.md's instruction to read `node_modules/next/dist/docs/`
+before writing code, since this project's Next.js version has
+non-default behaviors): `node_modules/next/dist/docs/01-app/01-getting-started/07-mutating-data.md`'s
+"Cookies" section states plainly — "When you set or delete a cookie in a
+Server Action, Next.js re-renders the current page and its layouts on
+the server... Client state is preserved for re-rendered components, and
+**effects re-run if their dependencies changed**." `setGuestName`
+(`app/events/[id]/lobby/actions.ts`) does exactly this: `cookies().set(...)`
+inside a Server Action, with no `revalidatePath` needed to trigger the
+re-render — the cookie write alone does it.
+
+That re-render re-executes `EventPage` (`app/events/[id]/page.tsx`),
+which re-calls `getLiveKitToken(id)` unconditionally as part of its
+`Promise.all`. `mintLiveKitToken` (`lib/livekit/token.ts`) signs a new
+`AccessToken.toJwt()` on every call — a genuinely different token
+string each time, even for identical grants — confirmed by reading the
+signing code directly, not assumed. That fresh string becomes
+`EventRoom`'s new `initialToken` prop, which flows into
+`useLiveRoomConnection`'s `params.token`. The connect effect's
+dependency array was `[params?.livekitUrl, params?.token]` — a changed
+token string, even while already connected, tore the effect down: its
+cleanup calls `room.disconnect()` (a **real LiveKit disconnect**, not a
+local-only artifact — every other participant would have seen the
+speaker's tracks drop too) and `stopPreparedTracks()`, which
+unconditionally calls `setLocalVideoTrack(null)` — hiding the
+self-preview. The effect then re-ran, created a new `Room`, reconnected
+with the new token, and on `RoomEvent.Connected` re-published camera/mic
+via `setCameraEnabled`/`setMicrophoneEnabled` — a genuine `getUserMedia`
+reacquisition, since an already-published speaker's tracks had already
+left `preparedTracksRef` (the only branch of `applyPublishState` that
+sets `localVideoTrack` is the *prepared-tracks* branch, which this path
+never touches) — so `localVideoTrack` was never restored, permanently
+hiding the preview even though the participant was, after a beat,
+actually republishing.
+
+**Why the previous fix didn't help**: it addressed two real but
+unrelated defects (a genuine corner overlap, a genuine reintroduced iOS
+zoom bug) that happened to *also* exist, neither of which was the actual
+cause. Both are still worth keeping — they're real fixes — but this is
+the bug the user was actually seeing.
+
+**Decision**: `useLiveRoomConnection`'s connect effect now depends on
+`Boolean(params?.token)`, not `params?.token`'s value. This is not a
+workaround — it's aligning the implementation with a principle this
+project's own architecture doc already states: "token expiry doesn't
+enforce anything... revocation happens live via `syncPublishPermission()`'s
+push to an already-connected participant, no reconnect required" (see
+the LiveKit authorization model section). A token refreshed for reasons
+unrelated to permissions (a cookie write) was never supposed to be a
+reconnect signal — the connect effect just hadn't fully lived up to that
+principle, since nothing had previously exercised the "already
+connected, new token value arrives" case until a guest-name edit made it
+observable. The one legitimate case this must still handle — the
+documented null-params → real-params transition (e.g. phase flipping to
+"ready") — still works, since presence flips from `false` to `true`
+regardless of the specific string value.
+
+**Verification honesty**: a new test suite
+(`use-live-room-connection.test.ts`) mocks `Room` directly (previously
+only `createLocalTracks` was mocked) to assert: a token-value-only
+change never creates a second `Room` or calls `connect()`/`disconnect()`
+again; the null → real transition still connects exactly once; an actual
+`livekitUrl` change still reconnects correctly. These are strong,
+code-level guarantees against regressing this specific mechanism — they
+cannot verify the end-to-end real-device experience (whether the
+self-preview visibly survives repeated real edits on an actual iPhone),
+which remains the user's own check.
+
+**Landscape site-header decision**: real-device testing separately found
+the existing `room-active` padding-only header compaction insufficient
+for Speaker View's landscape composition specifically, since it has no
+sidebar/chat competing for space the way the audience composition does
+— the header became proportionally the largest non-video element.
+Added a second, more specific body class, `speaker-view-active` (tracks
+`isSpeaker`, not just "any room mounted" — a separate effect in
+`EventRoom` since its dependency is real, unlike `room-active`'s
+mount/unmount-only lifecycle), gated behind the same landscape+short-height
+media query, that hides the site header outright (`display: none`)
+rather than further shrinking it. Explicitly scoped to the speaking
+state only — ordinary audience landscape keeps exactly its existing
+padding-only treatment, unchanged. Not unit-tested directly (`EventRoom`
+has no existing test file, and mocking its full hook surface for a
+two-line class-toggle effect wasn't judged worth the setup cost) —
+verified structurally (build succeeds, class name matches the CSS
+selector) and left to real-device confirmation.
+
 ## 2026-08-24 — Speaker View Phase 1 corrective pass: self-preview corner collision traced to two root causes; landscape gets its own thin role-router view, not a `soloMode` branch inside `MobileLandscapeRoom`
 
 **Problem 1**: real-device testing found the self-preview disappearing

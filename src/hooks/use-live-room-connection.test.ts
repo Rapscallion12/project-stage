@@ -3,11 +3,48 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyMediaError, shouldPublish, useLiveRoomConnection } from "./use-live-room-connection";
 import { Track } from "livekit-client";
 
-const { createLocalTracks } = vi.hoisted(() => ({ createLocalTracks: vi.fn() }));
+const { createLocalTracks, RoomMock, roomInstances } = vi.hoisted(() => {
+  const roomInstances: Array<{
+    connect: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+    on: () => unknown;
+    localParticipant: {
+      identity: string;
+      permissions: { canPublish: boolean };
+      getTrackPublication: ReturnType<typeof vi.fn>;
+      setMicrophoneEnabled: ReturnType<typeof vi.fn>;
+      setCameraEnabled: ReturnType<typeof vi.fn>;
+      publishTrack: ReturnType<typeof vi.fn>;
+    };
+    remoteParticipants: Map<string, unknown>;
+  }> = [];
+
+  class RoomMock {
+    connect = vi.fn().mockResolvedValue(undefined);
+    disconnect = vi.fn().mockResolvedValue(undefined);
+    localParticipant = {
+      identity: "profile:me",
+      permissions: { canPublish: false },
+      getTrackPublication: vi.fn(),
+      setMicrophoneEnabled: vi.fn().mockResolvedValue(undefined),
+      setCameraEnabled: vi.fn().mockResolvedValue(undefined),
+      publishTrack: vi.fn().mockResolvedValue(undefined),
+    };
+    remoteParticipants = new Map();
+    on() {
+      return this;
+    }
+    constructor() {
+      roomInstances.push(this as unknown as (typeof roomInstances)[number]);
+    }
+  }
+
+  return { createLocalTracks: vi.fn(), RoomMock, roomInstances };
+});
 
 vi.mock("livekit-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("livekit-client")>();
-  return { ...actual, createLocalTracks };
+  return { ...actual, createLocalTracks, Room: RoomMock };
 });
 
 describe("shouldPublish", () => {
@@ -243,5 +280,62 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
       });
       expect(createLocalTracks).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+/**
+ * Real-device finding (issue #18, Speaker View corrective pass): editing
+ * the guest-name chip while seated made the self-preview disappear and
+ * stay gone. Traced to `getLiveKitToken` minting a fresh-but-equivalent
+ * JWT on every Server-Action-triggered page refresh (Next.js re-renders
+ * the current page's Server Components after any cookie write) — with
+ * the token's own string value in the connect effect's dependency array,
+ * that alone tore down and reconnected an already-healthy `Room`. These
+ * tests exercise the real (mocked) `Room` construction path, unlike the
+ * `params: null` tests above.
+ */
+describe("useLiveRoomConnection — a refreshed token must never force a reconnect", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    roomInstances.length = 0;
+  });
+
+  it("does not create a second Room or call connect again when only the token string changes for the same url", () => {
+    const { rerender } = renderHook(
+      ({ token }: { token: string }) => useLiveRoomConnection({ livekitUrl: "wss://example.com", token }),
+      { initialProps: { token: "token-one" } },
+    );
+    expect(roomInstances).toHaveLength(1);
+    expect(roomInstances[0].connect).toHaveBeenCalledTimes(1);
+
+    rerender({ token: "token-two-completely-different-jwt" });
+
+    expect(roomInstances).toHaveLength(1);
+    expect(roomInstances[0].connect).toHaveBeenCalledTimes(1);
+    expect(roomInstances[0].disconnect).not.toHaveBeenCalled();
+  });
+
+  it("still connects once params first become available — the documented null-to-real transition is unaffected", () => {
+    type Params = { livekitUrl: string; token: string } | null;
+    const { rerender } = renderHook(({ params }: { params: Params }) => useLiveRoomConnection(params), {
+      initialProps: { params: null as Params },
+    });
+    expect(roomInstances).toHaveLength(0);
+
+    rerender({ params: { livekitUrl: "wss://example.com", token: "token-one" } });
+    expect(roomInstances).toHaveLength(1);
+    expect(roomInstances[0].connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("does reconnect with a new Room if the livekitUrl itself actually changes", () => {
+    const { rerender } = renderHook(
+      ({ url }: { url: string }) => useLiveRoomConnection({ livekitUrl: url, token: "token-one" }),
+      { initialProps: { url: "wss://a.example.com" } },
+    );
+    expect(roomInstances).toHaveLength(1);
+
+    rerender({ url: "wss://b.example.com" });
+    expect(roomInstances).toHaveLength(2);
+    expect(roomInstances[0].disconnect).toHaveBeenCalledTimes(1);
   });
 });

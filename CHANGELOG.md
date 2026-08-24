@@ -28,7 +28,40 @@ separate release cadence to track here.
   has no in-UI way to leave the stage; closing the tab still releases the
   seat via the existing disconnect webhook. See DECISIONS.md.
 
+### Changed
+
+- **Speaker View, landscape: the site-wide header is now hidden (not just
+  shrunk) in short landscape viewports while actively speaking** —
+  Speaker View's landscape composition has no sidebar/chat competing for
+  space the way the audience composition does, so the site header was
+  proportionally the largest remaining non-video element. A new
+  `speaker-view-active` body class (tracks `isSpeaker`, gated behind the
+  same landscape+short-height media query the existing `room-active`
+  padding compaction already uses) hides it outright. Ordinary audience
+  landscape is unaffected — it keeps its existing padding-only
+  compaction. See DECISIONS.md.
+
 ### Fixed
+
+- **Self-preview actually disappeared after committing a guest-name edit
+  while seated — traced to a real LiveKit reconnect, not a CSS issue.**
+  A previous pass fixed two real but unrelated defects (a corner overlap
+  with the guest-name chip, a reintroduced iOS-zoom bug) that didn't
+  actually explain the symptom. The real cause: editing the name sets a
+  cookie inside a Server Action, which — per Next.js's own documented
+  behavior — re-renders the current page's Server Components, re-running
+  `getLiveKitToken` and minting a fresh (but permission-equivalent) JWT.
+  `useLiveRoomConnection`'s connect effect depended on that token's exact
+  string value, so a refreshed token — even while already connected —
+  tore down and reconnected the entire LiveKit `Room` (a real disconnect
+  visible to the other participant too), reacquired camera/mic via
+  `setCameraEnabled`/`setMicrophoneEnabled`, and never restored
+  `localVideoTrack` afterward, permanently hiding the self-preview. Fixed
+  by depending on the token's *presence*, not its value — a token
+  refreshed for reasons unrelated to permissions was never supposed to
+  be a reconnect signal (this project's own LiveKit authorization model
+  already documents permission changes as a live push, not a
+  reconnect). See DECISIONS.md.
 
 - **Self-preview appeared to disappear after editing the guest-name chip
   in Speaker View** — two real, independent causes, both from Phase 1's
@@ -42,7 +75,9 @@ separate release cadence to track here.
   `SpeakerViewTopChrome` keeps the status pill and guest chip anchored
   together on the left, away from `SelfPreview`'s corner, in every
   Speaker View composition; `GuestNameEditor` no longer sets any
-  font-size class on its edit input, in either variant. See DECISIONS.md.
+  font-size class on its edit input, in either variant. Real but not the
+  actual cause of the persisting bug — see the entry above. See
+  DECISIONS.md.
 
 - **"05 — Social Stage" Phase 3: ambient live comments in mobile
   portrait Watch Mode** — the room's live chat stream now surfaces as a

@@ -66,6 +66,12 @@ const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
  * …)` media query), this class only marks "currently inside a room" for
  * that CSS to key off. Added on mount, removed on unmount — never left
  * stuck on after navigating away.
+ *
+ * **`speaker-view-active` body class** (issue #18): the same pattern,
+ * one level more specific — tracks `isSpeaker` rather than "any room is
+ * mounted," so the site header can be hidden outright (not just shrunk)
+ * in short landscape viewports while, and only while, the viewer is
+ * actively seated. See globals.css's own comment.
  */
 export function EventRoom({
   event,
@@ -172,6 +178,21 @@ export function EventRoom({
   const isSpeaker = speakers.some((s) =>
     identity.type === "profile" ? s.profile_id === identity.id : s.guest_id === identity.id,
   );
+
+  // Issue #18, Speaker View corrective pass: mirrors the `room-active`
+  // class above, but tracks `isSpeaker` specifically (not just "a room is
+  // mounted") — see globals.css's own comment for what this actually
+  // does (hides the site header in short landscape viewports, reclaiming
+  // space for Speaker View's full-bleed composition). A separate effect,
+  // not folded into the one above, since this one's dependency is real
+  // (`isSpeaker` can flip repeatedly across a single mount, unlike
+  // `room-active`'s mount-once/unmount-once lifecycle).
+  useEffect(() => {
+    document.body.classList.toggle("speaker-view-active", isSpeaker);
+    return () => {
+      document.body.classList.remove("speaker-view-active");
+    };
+  }, [isSpeaker]);
 
   // Issue #23: replaces the manual "Claim your seat" button. Called
   // unconditionally here (above the phase==="upcoming" early return

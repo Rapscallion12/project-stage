@@ -471,6 +471,15 @@ different dependencies. Current order:
       composition on rotation while seated (fixed with a new
       `MobileLandscapeSpeakerView`, mirroring the portrait role-router
       pattern). See DECISIONS.md's second 2026-08-24 entry.
+      **Second corrective pass**: the self-preview bug persisted — root
+      cause traced to `useLiveRoomConnection` reconnecting the entire
+      LiveKit `Room` whenever a guest-name edit's cookie write triggered
+      a page-level Server Component re-render that minted a fresh
+      LiveKit token, which the connect effect treated as a reconnect
+      signal. Fixed by depending on the token's presence, not its exact
+      value. Landscape's site-wide header is now hidden outright (not
+      just shrunk) while actively speaking. See DECISIONS.md's third
+      2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -82,6 +82,31 @@ body {
 }
 
 /*
+ * Real-device finding (issue #18, Speaker View corrective pass): the
+ * padding-only compaction above still left the site-wide header
+ * consuming real height once a seated speaker's own full-bleed landscape
+ * composition (issue #18) needs every pixel it can get — unlike the
+ * ordinary audience composition, Speaker View has no permanent chat/
+ * controls sidebar competing for space either, so the header is
+ * proportionally the biggest remaining non-video element on screen.
+ * `body.speaker-view-active` is toggled by `EventRoom` for exactly as
+ * long as the viewer holds a seat (see its own doc comment) — same
+ * height-gated media query as the rule above, so this only ever applies
+ * to a real phone in landscape, never a narrow desktop window. Removes
+ * the header outright rather than further shrinking it — explicitly
+ * authorized for this specific, temporary state (actively speaking, in
+ * landscape) — not a change to ordinary audience landscape, which still
+ * only gets the padding compaction above. Pure CSS: the header returns
+ * immediately on leaving Speaker View or rotating to portrait, no
+ * component state involved.
+ */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.speaker-view-active > header {
+    display: none;
+  }
+}
+
+/*
  * Issue #21, "05 — Social Stage" Phase 3: one bubble's whole lifecycle
  * (enter, hold, expire) as a single CSS animation, applied per-bubble by
  * `AmbientComments` — see its own doc comment for why the fade timing
