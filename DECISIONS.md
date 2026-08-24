@@ -3,6 +3,98 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View: hardened the empty-seat tap's actual mutation source; declined to auto-restore media without a gesture
+
+**Issue 1 — tapping the empty remote seat while seated.** Traced
+exhaustively before touching anything, per instruction: `SpeakerStage`'s
+`renderTile()` already passes `onTapEmptySeat={viewerIsSpeaking ?
+undefined : onTapEmptySeat}` to `SpeakerTile` — when `viewerIsSpeaking`
+is true (guaranteed whenever `soloMode`'s `renderSolo` branch is even
+reachable, since `mySeatNumber` and `viewerIsSpeaking` are derived from
+the *same* `speakers`/`myIdentity` props in the same render pass, so
+they cannot disagree within one render), `SpeakerTile` renders the empty
+seat as a plain, non-interactive `<div>` — not a `<button>`, no
+`onClick` at all. A passing regression test already proved this before
+this pass started. Separately, even in a hypothetical worst case where
+this *were* reachable, `joinOpenSeat` (`room/actions.ts`) has its own
+server-side guard — `getActiveSeatForIdentity` — that rejects an
+already-seated identity's claim before it ever reaches
+`claim_speaker_seat`, whose own SQL additionally raises on a duplicate
+active seat. So a genuine seat swap is provably impossible through this
+path, in the client or the database.
+
+**What I could not do**: conclusively reproduce, from static analysis
+alone, a code path in the current build where the "split-screen returns"
+symptom actually occurs — every reachable trigger I traced is already
+inert or already guarded twice. I'm reporting this honestly rather than
+claiming a root cause I couldn't verify.
+
+**What I did fix — a real, independently-worthwhile gap**:
+`handleTapEmptySeat` (`EventRoom`) itself had no guard of its own; it
+unconditionally called `connection.prepareLocalMedia()` before even
+attempting `joinOpenSeat`, trusting every caller to never invoke it
+while seated. `prepareLocalMedia()`'s idempotency guard
+(`preparedTracksRef.current.length > 0`) does **not** protect an
+already-published speaker — their tracks already transferred out of
+that ref on publish, so a stray invocation would have acquired a
+*second*, unpublished `getUserMedia()` track and pointed
+`localVideoTrack` state at it via `setLocalVideoTrack`, hiding the real
+published track behind an orphaned one. Added an explicit `isSpeaker`
+early return at the top of `handleTapEmptySeat` — the same value already
+computed once in `EventRoom`, checked at the point the mutating action
+actually originates, rather than relying solely on a second,
+independently-re-derived check deep in `SpeakerStage`. This is the
+"single source of truth, checked at the source" fix the user asked for,
+not a cosmetic block — `SpeakerStage`'s own tap-gating stays exactly as
+it was (already correct), this closes the gap in front of it.
+`speaker-stage.test.tsx` gained the user's literal required test
+(repeated taps, still full-bleed, divider/local tile never returns) —
+already passing. `EventRoom`'s own new guard isn't independently unit
+tested (no test file exists for `EventRoom` at all — a pre-existing
+project characteristic, not introduced here — mocking its full hook
+surface for a one-line early return wasn't judged worth the setup cost)
+— its correctness rests on the guard being trivially reviewable plus the
+already-independently-verified server-side check behind it.
+
+**Issue 2 — auto-restoring camera/mic on a fresh, still-entitled
+mount.** Investigated whether `prepareLocalMedia`/`activateMedia` can be
+called automatically, without a fresh gesture, when `isSpeaker` and
+`canPublish` are both already true on mount. **Conclusion: no, not
+safely — the button stays as the only path**, per the user's own
+explicit fallback instruction for exactly this outcome.
+
+Camera/mic *permission* (the browser's allow/deny grant for the origin)
+does persist across navigation — a returning user wouldn't see a new
+permission dialog. But that's a different question from whether
+`getUserMedia()` itself may be called without an active user gesture,
+which is what actually determines whether `createLocalTracks()` (inside
+`prepareLocalMedia`) succeeds. This project's own `useLiveRoomConnection`
+already documents, from prior real-device testing, that Safari enforces
+this **independently of whether permission was previously granted** —
+"iOS/macOS Safari silently refuses to even show the permission prompt
+for a `getUserMedia` call that isn't inside the call stack of a real
+user gesture," with no clean, fast, catchable failure mode (`onclick`
+handlers already carry an explicit comment: "MUST be called synchronously
+... not a promise continuation or a LiveKit event callback"). The
+existing "no second tap needed" behavior this codebase already relies on
+(`activateMedia`'s own doc comment: "later `canPublish` flips resync
+automatically without another tap") only holds *within one continuous
+tab session* — the same `useLiveRoomConnection` hook instance, same
+`mediaActivatedRef`. A genuine route-level remount (this exact scenario)
+creates a *fresh* hook instance with `mediaActivatedRef.current` reset
+to `false`, which is precisely the condition Safari's gesture
+requirement was already found to bite on once, for real, on a real
+iPhone.
+
+Given that, calling `prepareLocalMedia()` automatically on mount would
+mean deliberately violating an invariant this codebase states as an
+absolute rule in multiple places, with a real, previously-proven risk of
+silently reproducing the exact original bug (camera/mic never
+activating, no visible error) — and no reliable way to detect success
+vs. failure in advance to safely fall back. Not implemented. The
+existing `SpeakerMediaActivationPrompt` (added last pass) remains the
+only path, exactly as the user's own fallback instruction anticipated.
+
 ## 2026-08-24 — Speaker View: navigating away and back left no way to re-enable camera/mic — a missing UI entry point, not a state-loss bug; seat-vacate-on-navigation confirmed as already-expected behavior
 
 **Problem**: after leaving the room via the site header's "VIRTUAL STAGE"

@@ -262,6 +262,30 @@ describe("SpeakerStage", () => {
       expect(onTapEmptySeat).not.toHaveBeenCalled();
     });
 
+    it("required test (issue #18 real-device finding): repeatedly tapping the large empty remote seat while seated never invokes onTapEmptySeat and never brings back the divider/local tile", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          onTapEmptySeat={onTapEmptySeat}
+          soloMode
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      for (let i = 0; i < 10; i++) {
+        fireEvent.click(emptySeat);
+      }
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+      // Still solo, still full-bleed — no divider, no second (local) tile
+      // ever appeared as a result of any of those taps.
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-tile")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+    });
+
     it("still renders the self-preview corner slot in soloMode when a local video track is held", () => {
       render(
         <SpeakerStage

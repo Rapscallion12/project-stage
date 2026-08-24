@@ -489,6 +489,16 @@ different dependencies. Current order:
       connection instance that's still seated. Fixed with a new shared
       `SpeakerMediaActivationPrompt`, reusing the existing activation
       path verbatim. See DECISIONS.md's fourth 2026-08-24 entry.
+      **Fourth corrective pass**: hardened `handleTapEmptySeat` with an
+      `isSpeaker` guard at the source (couldn't conclusively reproduce
+      the reported split-screen symptom from static analysis — every
+      traced path was already inert or already server-guarded — reported
+      honestly as defense-in-depth, not a confirmed root cause).
+      Investigated and declined to auto-restore camera/mic on mount
+      without a user gesture — Safari's gesture requirement resets per
+      fresh page/hook instance regardless of prior permission, a
+      previously-proven real-device failure mode; kept the existing
+      button as the only path. See DECISIONS.md's fifth 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -43,6 +43,33 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **`handleTapEmptySeat` hardened with its own `isSpeaker` guard** — it
+  previously trusted `SpeakerStage`'s independently-re-derived
+  `viewerIsSpeaking` check to be the only thing preventing a seated
+  speaker from ever reaching it, with no guard of its own. Closed the
+  gap at the source: an already-seated identity now short-circuits
+  before `prepareLocalMedia()` (which, for an already-published speaker,
+  would **not** have been a no-op — it would have acquired a second,
+  unpublished track and pointed `localVideoTrack` at it) or `joinOpenSeat`
+  (already separately rejected server-side) are ever called. Could not
+  conclusively reproduce the exact real-device symptom from static
+  analysis — every path traced was already inert or already guarded — so
+  this is reported as a defense-in-depth fix, not a confirmed root
+  cause. See DECISIONS.md.
+
+- **Investigated auto-restoring camera/mic on a fresh, still-seated
+  mount — not implemented, kept the existing button.** Camera/mic
+  *permission* persists across navigation, but Safari's requirement that
+  `getUserMedia()` run inside an active user gesture does not — this
+  project's own prior real-device finding already established that
+  requirement holds independently of whether permission was previously
+  granted, and only resets once per fresh page/hook-instance lifecycle
+  (exactly the scenario here). Auto-calling `prepareLocalMedia()` on
+  mount would violate an invariant documented elsewhere as absolute, with
+  a real, previously-proven risk of silently reproducing the original
+  "camera/mic never activates" bug and no reliable way to detect failure
+  in advance. See DECISIONS.md.
+
 - **Speaker View had no way to re-enable camera/mic after navigating away
   and back** — a fresh `useLiveRoomConnection` instance (any real route
   remount, e.g. leaving via the site header link and returning while

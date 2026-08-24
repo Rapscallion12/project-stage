@@ -107,6 +107,33 @@ export function EventRoom({
   const [isJoiningSeat, startJoiningSeat] = useTransition();
 
   function handleTapEmptySeat() {
+    // Issue #18, Speaker View real-device finding: `SpeakerStage`'s own
+    // `viewerIsSpeaking` check already omits `onTapEmptySeat` entirely
+    // for a seated viewer (never wires a click handler to the empty-tile
+    // button at all — see its own doc comment), which is what actually
+    // makes the tile inert in the normal case. But that's a *second*,
+    // independently-recomputed check, deep in the tree, and this
+    // function had no guard of its own — it trusted every caller to
+    // never invoke it while seated. If it ever were reachable regardless
+    // (a future composition change, a stale prop, anything), it would
+    // have called `prepareLocalMedia()` unconditionally below — and for
+    // an *already-published* speaker, `preparedTracksRef` is empty (the
+    // original tracks already transferred to the Room on publish), so
+    // that call would **not** have been the usual no-op: it would have
+    // acquired a second, unpublished `getUserMedia()` track and
+    // overwritten `localVideoTrack` state with it via `setLocalVideoTrack`,
+    // pointing the self-preview at an orphaned track instead of the one
+    // actually being published. This early return is the single source
+    // of truth this function should have had from the start — `isSpeaker`
+    // is already computed once, right here, from the same data
+    // `SpeakerStage` re-derives independently; checking it directly at
+    // the point where the mutating action actually originates means
+    // nothing downstream has to get its own re-derivation exactly right
+    // for this to stay safe. `joinOpenSeat`'s own server-side check
+    // (`getActiveSeatForIdentity` — see room/actions.ts) was already a
+    // second, real guard against an actual seat swap even without this;
+    // this closes the client-side gap in front of it.
+    if (isSpeaker) return;
     setJoinSeatMessage(null);
     // Issue #22 convergence (real-device finding, 2026-08-22): tapping an
     // open seat is the same expressed intent to speak as the composer's

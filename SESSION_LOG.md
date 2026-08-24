@@ -220,6 +220,51 @@ actual publication (checkable from the other participant's view), and
 confirm the landscape corrections from the previous pass are still
 intact. Do not begin Phase 2 until explicitly approved.
 
+**Two more real-device issues found before Phase 1 could be approved.**
+(1) Tapping the large empty remote seat while seated could bring back
+the old split-screen composition. Traced exhaustively: `SpeakerStage`'s
+own tap-gating (`viewerIsSpeaking ? undefined : onTapEmptySeat`) is
+already correct and already tested — the empty tile is provably a
+non-interactive `<div>`, no `onClick`, whenever `soloMode` is actually
+engaged, and `joinOpenSeat` separately rejects an already-seated
+identity server-side even in the worst case, so a genuine seat swap is
+structurally impossible either way. Could not conclusively reproduce the
+exact symptom from static analysis alone — reported that honestly rather
+than claiming a root cause. Found and fixed one real, independently
+worthwhile gap instead: `handleTapEmptySeat` (`EventRoom`) had no guard
+of its own — for an already-published speaker, its unconditional
+`prepareLocalMedia()` call would **not** have been the usual no-op (that
+speaker's tracks already left `preparedTracksRef` on publish), so a
+stray invocation would have acquired a second, unpublished track and
+pointed `localVideoTrack` at it. Added an explicit `isSpeaker` early
+return at the point the mutating action actually originates, not just
+relying on a second, independently-re-derived check deep in
+`SpeakerStage`. Added the user's literal required test (repeated taps,
+still full-bleed, divider/local tile never returns) to
+`speaker-stage.test.tsx`.
+
+(2) Investigated whether `prepareLocalMedia`/`activateMedia` could be
+called automatically on mount when already entitled, to skip the tap
+prompt after a quick navigate-away-and-back. Concluded no, and explained
+why rather than guessing: camera/mic *permission* persists across
+navigation, but Safari's requirement that `getUserMedia()` run inside an
+active gesture does not — it resets per fresh
+`useLiveRoomConnection`/page-load instance, which is exactly this
+scenario, and this project already has a real-device-proven history of
+that exact silent failure mode. Not implemented — the existing
+`SpeakerMediaActivationPrompt` stays the only path, per the user's own
+anticipated fallback.
+
+lint/tsc/build/test all pass (365/365, 41 files, +1 new test). Local
+production smoke test confirmed the built route serves the homepage
+(200).
+
+**Next task**: stop for the user's own real-device confirmation —
+repeatedly tapping the empty remote seat while seated should now be a
+guaranteed no-op (both client and server layers), and the media-activation
+prompt/button remain the only (correct, gesture-safe) recovery path. Do
+not begin Phase 2 until explicitly approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)
