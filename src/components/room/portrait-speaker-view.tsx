@@ -1,5 +1,5 @@
 import { SpeakerStage } from "@/components/room/speaker-stage";
-import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
+import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import type { RoomLayoutProps } from "@/components/room/types";
 
 /**
@@ -28,6 +28,15 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * regardless of role — `soloMode` doesn't touch that logic at all, so
  * the viewer's own floating camera preview needs no changes here.
  *
+ * **Top chrome** (real-device corrective pass, same day): shared with
+ * `MobileLandscapeSpeakerView` via `SpeakerViewTopChrome` — see that
+ * component's own doc comment for why its layout deliberately never
+ * shares `SelfPreview`'s top-right corner. This view originally
+ * duplicated Watch Mode's top chrome inline, putting the guest-name chip
+ * in that exact corner; real-device testing found that made the
+ * self-preview appear to vanish after editing the name — see
+ * DECISIONS.md.
+ *
  * **Empty other seat**: also free — `soloMode` still calls the same
  * `renderTile()` used for the ordinary two-tile layout, which already
  * renders the existing "Seat open" placeholder when that seat has no
@@ -36,13 +45,12 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * **What's deliberately not here yet** (later Speaker View phases, each
  * gated on real-device approval): no `SpeakerControlBar` (mic/camera
  * toggles, a purpose-built "Leave the stage") — Phase 3. No speaker
- * composer or ambient comments — Phase 2. No landscape equivalent — not
- * planned this round at all. Concretely, that means this Phase 1 build
- * has **no in-UI way to leave the stage or recover from a mid-session
- * media-activation prompt** (e.g. after a page refresh) — closing the
- * tab or navigating away still releases the seat via the existing
- * LiveKit-webhook disconnect path (issue #13), just not from a button in
- * this view yet.
+ * composer or ambient comments — Phase 2. Concretely, that means this
+ * Phase 1 build has **no in-UI way to leave the stage or recover from a
+ * mid-session media-activation prompt** (e.g. after a page refresh) —
+ * closing the tab or navigating away still releases the seat via the
+ * existing LiveKit-webhook disconnect path (issue #13), just not from a
+ * button in this view yet.
  */
 export function PortraitSpeakerView({
   event,
@@ -75,29 +83,7 @@ export function PortraitSpeakerView({
         soloMode
       />
 
-      {/* Same minimal top chrome as Watch Mode's PortraitRoom — status pill (left) + guest identity chip (right), both floating over the video. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 p-3">
-        <div
-          data-testid="watch-status-pill"
-          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90"
-        >
-          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-          <span className="max-w-[10rem] truncate font-medium">{event.title}</span>
-          {connectionStatus !== "connected" && (
-            <span className="text-white/70">
-              {connectionStatus === "connecting" && "· Connecting…"}
-              {connectionStatus === "reconnecting" && "· Reconnecting…"}
-              {connectionStatus === "disconnected" && "· Connection lost"}
-              {connectionStatus === "unavailable" && "· Video unavailable"}
-            </span>
-          )}
-        </div>
-        {identity.type === "guest" && (
-          <div className="pointer-events-auto">
-            <GuestNameEditor initialName={identity.displayName} variant="chip" />
-          </div>
-        )}
-      </div>
+      <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
     </div>
   );
 }

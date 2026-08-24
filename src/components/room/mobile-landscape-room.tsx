@@ -3,6 +3,7 @@ import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomChatPanel } from "@/components/room/room-chat-panel";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
+import { MobileLandscapeSpeakerView } from "@/components/room/mobile-landscape-speaker-view";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { useCommentsMode } from "@/hooks/use-comments-mode";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -54,39 +55,55 @@ const SCRIM_OPACITY_WHEN_OPEN = 0.55;
  * `RoomHeader` stays a translucent top overlay (reclaims its document-
  * flow footprint for the stage); `pr-16`/`pr-20` on its wrapper reserves
  * room for the top-right self-preview so the two don't visually collide.
+ *
+ * **Role router** (issue #18, Speaker View corrective pass): everything
+ * above this point describes the Audience/Candidate composition only. A
+ * seated speaker (`isSpeaker`) is delegated to `MobileLandscapeSpeakerView`
+ * instead — checked *after* `useCommentsMode()` is called, not before,
+ * since `isSpeaker` can flip while this component stays mounted (e.g.
+ * getting promoted while already rotated to landscape) and a hook must be
+ * called on every render regardless of which branch follows it, the same
+ * "hooks above the branch" rule this file already follows for everything
+ * `EventRoom` owns. See `MobileLandscapeSpeakerView`'s own doc comment.
  */
-export function MobileLandscapeRoom({
-  event,
-  phase,
-  countdownText,
-  roomStatus,
-  speakers,
-  myIdentity,
-  identity,
-  isSpeaker,
-  hasPendingRequest,
-  onHasPendingRequestChange,
-  promotionCountdown,
-  onCancelPromotion,
-  micRequestMode,
-  onMicRequestModeChange,
-  onTapEmptySeat,
-  isJoiningSeat,
-  joinSeatMessage,
-  getParticipant,
-  participantCount,
-  connectionStatus,
-  canPublish,
-  needsMediaActivation,
-  activateMedia,
-  mediaError,
-  localVideoTrack,
-  onPrepareMedia,
-  reconnectingIdentities,
-  messages,
-  reactions,
-}: RoomLayoutProps) {
+export function MobileLandscapeRoom(props: RoomLayoutProps) {
   const { open: commentsOpen, openComments, closeComments } = useCommentsMode();
+
+  if (props.isSpeaker) {
+    return <MobileLandscapeSpeakerView {...props} />;
+  }
+
+  const {
+    event,
+    phase,
+    countdownText,
+    roomStatus,
+    speakers,
+    myIdentity,
+    identity,
+    isSpeaker,
+    hasPendingRequest,
+    onHasPendingRequestChange,
+    promotionCountdown,
+    onCancelPromotion,
+    micRequestMode,
+    onMicRequestModeChange,
+    onTapEmptySeat,
+    isJoiningSeat,
+    joinSeatMessage,
+    getParticipant,
+    participantCount,
+    connectionStatus,
+    canPublish,
+    needsMediaActivation,
+    activateMedia,
+    mediaError,
+    localVideoTrack,
+    onPrepareMedia,
+    reconnectingIdentities,
+    messages,
+    reactions,
+  } = props;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">

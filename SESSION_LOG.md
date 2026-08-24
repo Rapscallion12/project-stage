@@ -96,6 +96,40 @@ disconnect, since there's no in-UI button yet), and no landscape
 regression. Do not begin Phase 2 (speaker composer + ambient comments)
 until explicitly approved.
 
+**Phase 1 portrait transition confirmed correct on a real iPhone, but
+real-device testing found two regressions**, fixed on the same branch
+before Phase 2: (1) the self-preview appeared to disappear after editing
+the guest-name chip — traced (not patched around) to two real causes:
+the chip was positioned directly in `SelfPreview`'s own fixed top-right
+corner, and `GuestNameEditor`'s edit input carried a `text-sm` override
+that silently defeated `<Input>`'s own iOS-Safari-zoom-on-focus fix (the
+same bug already fixed once for the Watch Mode composer, never checked
+against this component). Fixed both directly — a new shared
+`SpeakerViewTopChrome` keeps the status pill and guest chip anchored
+left, away from the self-preview corner; `GuestNameEditor` no longer sets
+any font-size class on its edit input. (2) Rotating a seated speaker to
+landscape reverted to `MobileLandscapeRoom`'s ordinary audience
+composition (equal-split tiles, full `RoomHeader`, Comments toggle) —
+undoing the whole role hierarchy. Resolved with a new
+`MobileLandscapeSpeakerView`, mirroring `PortraitSpeakerView` exactly
+(same `soloMode`, same shared top chrome, same reused `SelfPreview`) —
+the same role-router pattern already proven for portrait, not a
+`soloMode` conditional threaded into `MobileLandscapeRoom`'s unrelated
+audience JSX. `MobileLandscapeRoom` calls `useCommentsMode()`
+unconditionally before its role check specifically because `isSpeaker`
+can flip while it stays mounted — a genuine Rules-of-Hooks constraint,
+not a style choice, with its own regression test. No new video/media
+logic in either fix — same `soloMode`/`SelfPreview`/attach-not-reacquire
+tolerance as Phase 1 itself. lint/tsc/build/test all pass (352/352, 40
+files, +26 new tests). Local production smoke test confirmed the built
+route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of this
+corrective pass specifically — self-preview surviving repeated name
+edits, landscape Speaker View's role hierarchy and reduced clutter,
+rotation both directions, and no regression to audience landscape. Do
+not begin Phase 2 until explicitly approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

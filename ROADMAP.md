@@ -464,6 +464,13 @@ different dependencies. Current order:
       unchanged. No composer, ambient comments, or control bar yet — see
       DECISIONS.md's 2026-08-24 entry. "05 — Social Stage" Phases 4–7
       remain paused on `feature/social-stage-shell` during this work.
+      **Phase 1 corrective pass**: real-device testing found the
+      self-preview disappearing after editing the guest-name chip (traced
+      to a real corner collision plus a reintroduced iOS-zoom bug, both
+      fixed directly) and landscape reverting to the old audience
+      composition on rotation while seated (fixed with a new
+      `MobileLandscapeSpeakerView`, mirroring the portrait role-router
+      pattern). See DECISIONS.md's second 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -3,6 +3,110 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View Phase 1 corrective pass: self-preview corner collision traced to two root causes; landscape gets its own thin role-router view, not a `soloMode` branch inside `MobileLandscapeRoom`
+
+**Problem 1**: real-device testing found the self-preview disappearing
+after tapping the guest-name chip in portrait Speaker View, and staying
+gone after committing — not just a transient glitch during editing.
+Instructed to trace the actual cause (remount, prop/state loss,
+z-index/visibility, or the chip variant itself) rather than patch around
+it with a "recreate the preview after editing" workaround.
+
+**Investigation**: `GuestNameEditor`'s internal `editing`/`name` state is
+local to that component — a React state update there cannot, by itself,
+cause a sibling (`SpeakerStage`/`SelfPreview`) to re-render or remount;
+confirmed no `revalidatePath`/`router.refresh()` anywhere in
+`setGuestName` or its call path that could force a wider tree refresh
+either. Two *real*, independently-verifiable defects were found instead,
+both introduced when `PortraitSpeakerView` copied Watch Mode's top-chrome
+markup verbatim in Phase 1, without accounting for the fact that Speaker
+View — unlike ordinary Watch Mode — always has an active `SelfPreview`
+occupying the fixed `top-3 right-3` corner:
+
+1. **Positional collision**: the guest-name chip was placed at the
+   opposite end of the top-chrome row via `justify-between`, landing it
+   directly in `SelfPreview`'s own `top-3 right-3` box. Watch Mode's
+   original layout this was copied from never had this problem because
+   an ordinary audience member usually has no self-preview competing for
+   that corner.
+2. **A real, reproducible iOS-zoom bug, not just a visual overlap**:
+   `GuestNameEditor`'s edit-mode `<Input>` passed `className="... text-sm"`
+   in *both* variants. `cn()`'s `twMerge` correctly treats this as an
+   override of `<Input>`'s own `text-base` default — the exact fix
+   already added there, and already documented in its own comment,
+   specifically to prevent iOS Safari's auto-zoom-on-focus (the *same*
+   bug already found and fixed once for the Watch Mode composer, see the
+   2026-08-23 entry below — it had just never been checked against this
+   component too). Tapping the name to edit it silently re-triggered a
+   real viewport zoom, which is what made the fixed-position self-preview
+   appear to leave the visible screen — and, depending on whether the
+   zoom fully settles back on blur, why it could still look "gone" after
+   committing.
+
+**Decision**: fixed both root causes directly, no workaround layer.
+`GuestNameEditor` no longer sets any font-size class at all on the edit
+`<Input>` (both variants), letting `<Input>`'s own 16px default apply
+unmodified. A new shared `SpeakerViewTopChrome` component (used by both
+`PortraitSpeakerView` and the new `MobileLandscapeSpeakerView`) keeps the
+status pill and guest-name chip anchored together on the left
+(`justify-start`, not `justify-between`), leaving the top-right corner
+exclusively to `SelfPreview` in every Speaker View composition. Neither
+fix touches `SelfPreview`, `useLiveRoomConnection`, or the local video
+track at all — satisfying the explicit requirement that this be a real
+fix, not a "recreate the preview" patch over a component that's still
+actually losing it.
+
+**Known adjacent risk, not fixed here**: the exact same corner-collision
+pattern could in principle also affect ordinary Watch Mode for a
+*candidate* (pending request, media already prepared ahead of promotion)
+— `SpeakerStage` renders `SelfPreview` for anyone holding a local video
+track, regardless of role, and `PortraitRoom`'s own top chrome still uses
+`justify-between`. This wasn't reported and is out of this pass's scope
+(Watch Mode is confirmed working from Phase 1–3 real-device testing), but
+is worth a deliberate check rather than assuming it can't happen — noted
+here rather than silently fixed or silently ignored.
+
+**Problem 2**: rotating a seated speaker's phone to landscape dropped
+them into `MobileLandscapeRoom`'s ordinary *audience* composition
+(equal-split tiles, full `RoomHeader`, Comments Mode toggle, `RoomControls`'
+full block) — undoing the entire role hierarchy Portrait Speaker View
+had just established, since landscape was explicitly left unbuilt in the
+original Phase 1 scope.
+
+**Architecture question, resolved**: threading a `soloMode`-driven
+conditional directly into `MobileLandscapeRoom`'s existing JSX was
+rejected — that component's audience composition (`useCommentsMode`,
+`RoomHeader`, `RoomChatPanel`, the scrim tied to `commentsOpen`) shares
+essentially nothing with Speaker View, and conditionally stripping all of
+it inline would tangle two unrelated concerns in one file. Instead: a new
+`MobileLandscapeSpeakerView`, mirroring `PortraitSpeakerView` exactly
+(same `SpeakerStage` `soloMode`, same `SpeakerViewTopChrome`, same reused
+`SelfPreview`) — the same role-router pattern already proven for
+portrait, applied consistently rather than inventing a second pattern.
+`MobileLandscapeRoom` still calls `useCommentsMode()` unconditionally
+before its own role check, since `isSpeaker` can flip while the component
+stays mounted (promoted while already rotated to landscape) — calling a
+hook conditionally there would be a genuine Rules-of-Hooks violation, not
+just a style preference; a regression test (`rerender` toggling
+`isSpeaker` back and forth without throwing) guards this specifically.
+
+**No new video/media logic in either fix**: `soloMode` is reused exactly
+as built in Phase 1; rotating between `PortraitSpeakerView` and
+`MobileLandscapeSpeakerView` is the same "recreate the `<video>`
+attachment, never reacquire the track, never touch `EventRoom`/
+`useLiveRoomConnection`" tolerance already relied on for the ordinary
+Audience/Candidate rotation and for entering Speaker View itself.
+
+**Verification honesty**: automated tests cover the positioning class
+(`justify-between` absent), the font-size class (`text-base` present,
+`text-sm` absent), the role-router delegation for both orientations, and
+the Rules-of-Hooks safety of toggling `isSpeaker` on a mounted
+`MobileLandscapeRoom`. They cannot verify the actual felt experience on
+real iOS Safari (whether the zoom fix fully eliminates the visual
+disappearance end-to-end, whether the landscape layout reads as
+"materially less cluttered" as asked) — both remain real-device-only
+checks, reported as such.
+
 ## 2026-08-24 — Speaker View (#18): #16/#17 verified (not assumed) complete; Direction B chosen; Phase 1 built as a `soloMode` extension, not a new stage implementation
 
 **Problem**: #18 (role-based room UI) was blocked on #16/#17, both still

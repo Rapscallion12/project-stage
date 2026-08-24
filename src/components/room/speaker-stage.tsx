@@ -85,10 +85,14 @@ import type { Orientation } from "@/hooks/use-orientation";
  * the app's light/dark mode, the same convention any video player uses.
  *
  * **`soloMode`** (issue #18, Speaker View Phase 1): when the viewer holds
- * one of the two seats, `PortraitSpeakerView` passes `true` so the
- * *other* seat's tile fills this entire box — no divider, no equal-sized
- * tile for the viewer's own seat (their own feed is already covered by
- * the self-preview slot below, unconditionally, regardless of this flag).
+ * one of the two seats, `PortraitSpeakerView`/`MobileLandscapeSpeakerView`
+ * both pass `true` so the *other* seat's tile fills this entire box — no
+ * divider, no equal-sized tile for the viewer's own seat (their own feed
+ * is already covered by the self-preview slot below, unconditionally,
+ * regardless of this flag). One orientation-agnostic flag, not a
+ * per-orientation prop — the sizing/takeover logic itself never differed
+ * between portrait and landscape, only which `orientation` value picks
+ * stacked vs. side-by-side for the (now singular) remaining tile.
  * Deliberately doesn't add a new tile-rendering path: it's the exact same
  * `renderTile()` used for the ordinary two-tile layout, just called once
  * instead of twice, so every existing per-tile behavior (empty-seat

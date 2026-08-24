@@ -34,6 +34,17 @@ import { Input } from "@/components/ui/input";
  * state machine, same commit-on-blur behavior, same server action,
  * only the rendered markup differs. Added as a variant rather than a
  * new component so the tricky blur-commit logic isn't duplicated.
+ *
+ * **No `text-sm` override on the edit `<Input>`** (real-device finding,
+ * issue #18 Speaker View corrective pass): this used to pass
+ * `text-sm` (14px) in both variants' className, which `cn()`'s
+ * `twMerge` resolves as an override of `<Input>`'s own `text-base`
+ * default — silently defeating the exact iOS-Safari-auto-zoom-on-focus
+ * fix that default exists for (see `Input`'s own comment; the same bug
+ * was already found and fixed once for the Watch Mode composer, see
+ * DECISIONS.md's 2026-08-23 entry — it just hadn't been checked here
+ * too). Leaving font-size out of this component's className entirely
+ * lets `<Input>`'s own 16px default apply untouched, in both variants.
  */
 export function GuestNameEditor({
   initialName,
@@ -98,7 +109,7 @@ export function GuestNameEditor({
         onChange={(e) => setName(e.target.value)}
         onBlur={commit}
         maxLength={40}
-        className={variant === "chip" ? "h-8 w-32 py-1 text-sm" : "h-8 py-1 text-sm"}
+        className={variant === "chip" ? "h-8 w-32 py-1" : "h-8 py-1"}
         autoFocus
       />
       {variant !== "chip" && (

@@ -209,4 +209,20 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(document.querySelector("[data-gesture-ignore]")).not.toBeInTheDocument();
     });
   });
+
+  describe("role router (issue #18, Speaker View corrective pass — rotating to landscape while seated no longer reverts to the audience composition)", () => {
+    it("a seated speaker is routed to Speaker View instead of the ordinary audience landscape composition", () => {
+      render(<MobileLandscapeRoom {...baseProps} isSpeaker={true} canPublish={true} />);
+      expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
+      expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Late Night Debate" })).not.toBeInTheDocument();
+    });
+
+    it("still calls useCommentsMode unconditionally — toggling isSpeaker on the same mounted instance doesn't throw a Rules-of-Hooks error", () => {
+      const { rerender } = render(<MobileLandscapeRoom {...baseProps} isSpeaker={false} />);
+      expect(() => rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={true} />)).not.toThrow();
+      expect(() => rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={false} />)).not.toThrow();
+    });
+  });
 });

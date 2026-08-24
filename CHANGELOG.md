@@ -9,22 +9,40 @@ separate release cadence to track here.
 
 ### Added
 
-- **Speaker View (issue #18) Phase 1: full-bleed remote speaker, portrait**
-  — when the viewer holds a seat, `PortraitRoom` now routes to a new
-  `PortraitSpeakerView` composition instead of Watch Mode: the *other*
-  speaker's video fills the entire stage (no divider, no equal-sized
-  tile for the viewer's own seat), while the viewer's own camera stays
-  in the existing floating `SelfPreview` corner, reused unchanged.
-  `SpeakerStage` gained one new optional prop, `soloMode` (default
-  `false`, every existing caller unaffected), reusing its existing
-  per-tile rendering logic rather than a new stage implementation — an
-  empty other seat still shows the ordinary "Seat open" placeholder, no
-  separate "waiting for a partner" UI. Landscape and desktop are
-  untouched. Deliberately not yet included, per the approved phased
-  plan: `SpeakerControlBar` (mic/camera toggles, leave-the-stage), the
-  speaker composer, and ambient comments — a seated speaker currently
-  has no in-UI way to leave the stage; closing the tab still releases
-  the seat via the existing disconnect webhook. See DECISIONS.md.
+- **Speaker View (issue #18) Phase 1: full-bleed remote speaker, portrait
+  and landscape** — when the viewer holds a seat, both `PortraitRoom` and
+  `MobileLandscapeRoom` now route to a dedicated Speaker View composition
+  instead of their ordinary audience content: the *other* speaker's video
+  fills the entire stage (no divider, no equal-sized tile for the
+  viewer's own seat), while the viewer's own camera stays in the existing
+  floating `SelfPreview` corner, reused unchanged. `SpeakerStage` gained
+  one new optional prop, `soloMode` (default `false`, every existing
+  caller unaffected), reusing its existing per-tile rendering logic
+  rather than a new stage implementation — an empty other seat still
+  shows the ordinary "Seat open" placeholder, no separate "waiting for a
+  partner" UI. Rotating between portrait and landscape while seated no
+  longer reverts to the old audience-like split-stage composition.
+  Desktop is untouched. Deliberately not yet included, per the approved
+  phased plan: `SpeakerControlBar` (mic/camera toggles, leave-the-stage),
+  the speaker composer, and ambient comments — a seated speaker currently
+  has no in-UI way to leave the stage; closing the tab still releases the
+  seat via the existing disconnect webhook. See DECISIONS.md.
+
+### Fixed
+
+- **Self-preview appeared to disappear after editing the guest-name chip
+  in Speaker View** — two real, independent causes, both from Phase 1's
+  top chrome copying Watch Mode's layout without accounting for
+  `SelfPreview` always being present in Speaker View: (1) the guest-name
+  chip was positioned in `SelfPreview`'s own fixed top-right corner; (2)
+  `GuestNameEditor`'s edit `<Input>` carried an explicit `text-sm` that
+  silently overrode `<Input>`'s own iOS-Safari-auto-zoom-on-focus fix —
+  the same zoom bug already fixed once for the Watch Mode composer,
+  reintroduced here. Fixed both directly: a new shared
+  `SpeakerViewTopChrome` keeps the status pill and guest chip anchored
+  together on the left, away from `SelfPreview`'s corner, in every
+  Speaker View composition; `GuestNameEditor` no longer sets any
+  font-size class on its edit input, in either variant. See DECISIONS.md.
 
 - **"05 — Social Stage" Phase 3: ambient live comments in mobile
   portrait Watch Mode** — the room's live chat stream now surfaces as a
