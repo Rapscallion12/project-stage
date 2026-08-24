@@ -1,5 +1,4 @@
 import { SpeakerStage } from "@/components/room/speaker-stage";
-import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
@@ -80,8 +79,6 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
 
   const {
     event,
-    phase,
-    countdownText,
     speakers,
     myIdentity,
     identity,
@@ -98,7 +95,6 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
     joinSeatMessage,
     getParticipant,
     connectionStatus,
-    canPublish,
     needsMediaActivation,
     activateMedia,
     mediaError,
@@ -156,24 +152,6 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
                 {joinSeatMessage}
               </p>
             )}
-            {!isSpeaker && hasPendingRequest && (
-              <RoomControls
-                eventId={event.id}
-                isSpeaker={isSpeaker}
-                hasPendingRequest={hasPendingRequest}
-                promotionCountdown={promotionCountdown}
-                onCancelPromotion={onCancelPromotion}
-                canPublish={canPublish}
-                needsMediaActivation={needsMediaActivation}
-                activateMedia={activateMedia}
-                onPrepareMedia={onPrepareMedia}
-                mediaError={mediaError}
-                connectionStatus={connectionStatus}
-                phase={phase}
-                countdownText={countdownText}
-                compact
-              />
-            )}
             <WatchModeControls
               composer={
                 <ChatPanel
@@ -184,6 +162,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
                   onMicRequestModeChange={onMicRequestModeChange}
                   onHasPendingRequestChange={onHasPendingRequestChange}
                   onPrepareMedia={onPrepareMedia}
+                  hasPendingRequest={!isSpeaker && hasPendingRequest}
+                  onCancelPendingRequest={onCancelPromotion}
                   compact
                 />
               }

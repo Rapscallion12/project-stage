@@ -231,23 +231,23 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
     });
   });
 
-  describe("RoomControls — compact pending-request pill only (no legacy block, matches PortraitRoom)", () => {
-    it("renders nothing for a plain audience member with no pending request", () => {
+  describe("no separate 'Request sent' bar (issue #18 UX finding — matches PortraitRoom, the composer's own mic button carries the pending state)", () => {
+    it("renders nothing extra for a plain audience member with no pending request", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
       expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-composer-mic")).toHaveAccessibleName("Request to speak");
     });
 
-    it("renders the compact 'Request sent · Cancel' pill for a pending requester", () => {
+    it("renders no standalone pending-request bar/pill — the mic button reflects the pending state instead", () => {
       render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} />);
-      expect(screen.getByText("Request sent")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      expect(screen.queryByText("Request sent")).not.toBeInTheDocument();
+      expect(screen.getByTestId("watch-composer-mic")).toHaveAccessibleName("Cancel speaker request");
     });
 
-    it("Cancel on the compact pill calls onCancelPromotion", () => {
+    it("tapping the pending mic button calls onCancelPromotion", () => {
       const onCancelPromotion = vi.fn();
       render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} onCancelPromotion={onCancelPromotion} />);
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(screen.getByTestId("watch-composer-mic"));
       expect(onCancelPromotion).toHaveBeenCalledTimes(1);
     });
   });
@@ -293,11 +293,11 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(screen.getByTestId("room-scrim").style.opacity).not.toBe("0");
     });
 
-    it("no scrim, ordinary controls, when promotionCountdown is null", () => {
+    it("no scrim, ordinary composer, when promotionCountdown is null", () => {
       render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} promotionCountdown={null} />);
       expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
       expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
-      expect(screen.getByText("Request sent")).toBeInTheDocument();
+      expect(screen.getByTestId("watch-composer-mic")).toHaveAccessibleName("Cancel speaker request");
     });
 
     it("preserves top chrome during the countdown — still the same room, not a separate page", () => {

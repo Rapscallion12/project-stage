@@ -594,8 +594,14 @@ different dependencies. Current order:
       an already-live camera publication into `localVideoTrack` state
       without ever re-acquiring media) since no reproducible root cause
       could be confirmed. See DECISIONS.md's fifteenth 2026-08-24 entry.
-      **Not checked off** — #18 stays open, pending the user's own
-      real-device re-test.
+      A real-device screenshot from that re-check found the compact
+      "Request sent · Cancel" pill overlapping the composer/ambient
+      request comment — removed it entirely; the composer's own mic
+      button now carries a distinct pending state and cancels the
+      request when tapped again, wired to the same existing
+      `onCancelPromotion` action. See DECISIONS.md's sixteenth
+      2026-08-24 entry. **Not checked off** — #18 stays open, pending
+      the user's own real-device re-test.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

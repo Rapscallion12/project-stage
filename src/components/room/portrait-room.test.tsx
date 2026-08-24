@@ -267,19 +267,48 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(screen.queryByText(/setting up your mic access/i)).not.toBeInTheDocument();
     });
 
-    it("renders the compact 'Request sent · Cancel' pill for a pending requester, not the old paragraph+Withdraw block", () => {
-      render(<PortraitRoom {...baseProps} hasPendingRequest={true} />);
-      expect(screen.getByText("Request sent")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-      expect(screen.queryByText(/you'll go live automatically/i)).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /withdraw/i })).not.toBeInTheDocument();
-    });
+    describe("no separate 'Request sent' bar (issue #18 UX finding — the composer's own mic button carries the pending state instead)", () => {
+      it("renders no standalone pending-request bar/pill at all — no 'Request sent' text, no old paragraph+Withdraw block", () => {
+        render(<PortraitRoom {...baseProps} hasPendingRequest={true} />);
+        expect(screen.queryByText("Request sent")).not.toBeInTheDocument();
+        expect(screen.queryByText(/you'll go live automatically/i)).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /withdraw/i })).not.toBeInTheDocument();
+      });
 
-    it("Cancel on the compact pill calls onCancelPromotion", () => {
-      const onCancelPromotion = vi.fn();
-      render(<PortraitRoom {...baseProps} hasPendingRequest={true} onCancelPromotion={onCancelPromotion} />);
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+      it("the composer's mic button reflects the pending state and is still the sole Cancel affordance", () => {
+        render(<PortraitRoom {...baseProps} hasPendingRequest={true} />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton).toHaveAccessibleName("Cancel speaker request");
+        expect(micButton.className).toMatch(/\bbg-accent\/30\b/);
+      });
+
+      it("tapping the pending mic button calls onCancelPromotion — the same existing action the old bar's Cancel button used", () => {
+        const onCancelPromotion = vi.fn();
+        render(<PortraitRoom {...baseProps} hasPendingRequest={true} onCancelPromotion={onCancelPromotion} />);
+        fireEvent.click(screen.getByTestId("watch-composer-mic"));
+        expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+      });
+
+      it("the ambient request comment is unaffected by this composition — still whatever ChatPanel/AmbientComments already renders", () => {
+        render(
+          <PortraitRoom
+            {...baseProps}
+            hasPendingRequest={true}
+            messages={[
+              {
+                id: "m1",
+                author_display_name: "Jamie",
+                author_profile_id: "p1",
+                author_guest_id: null,
+                body: "AI and creativity",
+                created_at: new Date().toISOString(),
+                is_speaker_request: true,
+              },
+            ]}
+          />,
+        );
+        expect(screen.getByTestId("ambient-comment")).toHaveTextContent("AI and creativity");
+      });
     });
   });
 
@@ -378,11 +407,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(screen.getByTestId("room-scrim").style.opacity).not.toBe("0");
     });
 
-    it("no scrim, ordinary controls, when promotionCountdown is null (including the plain 'Request sent' waiting state)", () => {
+    it("no scrim, ordinary composer, when promotionCountdown is null (including the plain pending-request waiting state, shown via the mic button's own pending style)", () => {
       render(<PortraitRoom {...baseProps} hasPendingRequest={true} promotionCountdown={null} />);
       expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
       expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
-      expect(screen.getByText("Request sent")).toBeInTheDocument();
+      expect(screen.getByTestId("watch-composer-mic")).toHaveAccessibleName("Cancel speaker request");
     });
 
     it("preserves top chrome (status pill/guest chip) during the countdown — still feels like the same room, not a separate page", () => {

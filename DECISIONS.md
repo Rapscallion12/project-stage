@@ -3,6 +3,43 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Removed the separate "Request sent" bar; the composer's mic button carries the pending state (issue #18)
+
+**Problem**: a real-device screenshot showed the compact "Request sent ·
+Cancel" pill overlapping the composer/ambient request comment once the
+bottom row got crowded — visually broken, not just aesthetically
+redundant.
+
+**Decision**: the pill is gone entirely from `PortraitRoom`/
+`MobileLandscapeRoom`'s audience branch. `ChatPanel`'s own 🎙 mic button
+now carries three states instead of two: idle (gray, opens the request
+input), actively composing a not-yet-submitted request (`micRequestMode`,
+solid accent — unchanged), and sent-but-not-yet-promoted
+(`hasPendingRequest` while `micRequestMode` is false, a lighter pulsing
+accent) — tapping the button in the third state calls
+`onCancelPendingRequest` (wired to the same existing `onCancelPromotion`
+action the removed bar's own Cancel button already called; issue #23's
+automatic promotion has always supported cancelling a request whether or
+not its countdown has started, so this needed no new server-side
+capability) instead of reopening the input. Both new `ChatPanel` props
+default to inert values, so every other caller is unaffected.
+
+**Reason**: the existing badged ambient "requesting the mic" chat message
+(`AmbientComments`/`MessageItem`, already styled distinctly for
+`is_speaker_request` messages) is already the social feedback a request
+went through — a second, separate UI element saying the same thing was
+redundant even before it started visually overlapping. Once accepted,
+`promotionCountdown` already takes the whole composition over to the
+center-stage countdown (previous entries) — with the bar gone, there is
+now no intermediate "request sent" screen at all between the mic
+button's pending state and the countdown taking over.
+
+**Verification honesty**: automated (lint/tsc/full suite — 521/521, 46
+files) and a local production smoke test pass. Whether the new pending
+mic-button state actually reads as clear on a real phone — distinct
+enough from both idle and actively-composing, not too subtle — is a
+real-device-only judgment.
+
 ## 2026-08-24 — Three corrective fixes on the center-stage countdown: no pre-countdown flash, Cancel actually cancels, self-preview reconciliation (issue #18)
 
 **Problem 1 — pre-countdown candidate UI flash**: right before the

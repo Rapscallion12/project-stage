@@ -9,6 +9,14 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **Removed the separate "Request sent" bar** — real-device report found
+  it overlapping the composer/ambient request comment once the bottom row
+  got crowded. The composer's own mic button now carries the pending
+  state (a third, distinct visual, alongside idle and actively-composing)
+  and cancels the request when tapped again — the existing badged ambient
+  "requesting the mic" chat message was already sufficient feedback that
+  a request went through.
+
 - **Pre-countdown candidate UI flash** — the old "Request sent" pill/
   composer/controls/ambient comments could briefly flash right before the
   center-stage countdown appeared. `useAutomaticPromotion`'s

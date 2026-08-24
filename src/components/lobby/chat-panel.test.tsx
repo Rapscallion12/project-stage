@@ -255,5 +255,69 @@ describe("ChatPanel", () => {
         await waitFor(() => expect(sendMessage).toHaveBeenCalled());
       });
     });
+
+    describe("hasPendingRequest / onCancelPendingRequest (issue #18 UX finding: no separate 'Request sent' bar — the mic button itself carries the pending state)", () => {
+      it("defaults to the idle state when hasPendingRequest is omitted — every existing caller unaffected", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton).toHaveAccessibleName("Request to speak");
+        expect(micButton.className).not.toMatch(/\banimate-pulse\b/);
+      });
+
+      it("shows a distinct pending visual state when hasPendingRequest is true and micRequestMode is false", () => {
+        render(<ChatPanel {...baseProps} compact hasPendingRequest={true} />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton).toHaveAccessibleName("Cancel speaker request");
+        expect(micButton.className).toMatch(/\banimate-pulse\b/);
+        expect(micButton.className).toMatch(/\bbg-accent\/30\b/);
+      });
+
+      it("the pending state is visually distinct from the actively-composing state — not the same solid accent treatment", () => {
+        render(<ChatPanel {...baseProps} compact hasPendingRequest={true} />);
+        const pendingButton = screen.getByTestId("watch-composer-mic");
+        expect(pendingButton.className).not.toMatch(/\bbg-accent text-white\b/);
+      });
+
+      it("micRequestMode takes visual priority over hasPendingRequest — actively composing a new request always shows the solid accent state", () => {
+        render(<ChatPanel {...baseProps} compact hasPendingRequest={true} micRequestMode={true} />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton.className).toMatch(/\bbg-accent text-white\b/);
+        expect(micButton.className).not.toMatch(/\banimate-pulse\b/);
+      });
+
+      it("tapping the mic button while pending calls onCancelPendingRequest, not onMicRequestModeChange", () => {
+        const onCancelPendingRequest = vi.fn();
+        const onMicRequestModeChange = vi.fn();
+        render(
+          <ChatPanel
+            {...baseProps}
+            compact
+            hasPendingRequest={true}
+            onCancelPendingRequest={onCancelPendingRequest}
+            onMicRequestModeChange={onMicRequestModeChange}
+          />,
+        );
+        fireEvent.click(screen.getByTestId("watch-composer-mic"));
+        expect(onCancelPendingRequest).toHaveBeenCalledTimes(1);
+        expect(onMicRequestModeChange).not.toHaveBeenCalled();
+      });
+
+      it("tapping the mic button while idle (no pending request) still opens the request-mode input as before", () => {
+        const onCancelPendingRequest = vi.fn();
+        const onMicRequestModeChange = vi.fn();
+        render(
+          <ChatPanel
+            {...baseProps}
+            compact
+            hasPendingRequest={false}
+            onCancelPendingRequest={onCancelPendingRequest}
+            onMicRequestModeChange={onMicRequestModeChange}
+          />,
+        );
+        fireEvent.click(screen.getByTestId("watch-composer-mic"));
+        expect(onMicRequestModeChange).toHaveBeenCalledWith(true);
+        expect(onCancelPendingRequest).not.toHaveBeenCalled();
+      });
+    });
   });
 });

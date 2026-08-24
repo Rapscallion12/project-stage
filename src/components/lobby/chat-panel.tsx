@@ -61,6 +61,31 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * caller is responsible for also keeping `micRequestMode` false; this
  * prop only controls whether the toggle is offered at all.
  *
+ * `hasPendingRequest`/`onCancelPendingRequest` (issue #18 UX finding,
+ * real-device report: a persistent "Request sent · Cancel" bar rendered
+ * *underneath* this same composer, overlapping the ambient request
+ * comment and reading as broken UI once the compact bottom row got
+ * crowded). That bar is gone — the existing badged ambient "requesting
+ * the mic" chat message (see `MessageItem`/`AmbientComments`) is already
+ * the social feedback a request went through; this composer's own mic
+ * button now carries the pending state instead of a second, separate
+ * element. Three states, one button: idle (gray, tap → open the
+ * request-mode input), actively composing a not-yet-submitted request
+ * (`micRequestMode`, solid accent — unchanged), and sent-but-not-yet-
+ * promoted (`hasPendingRequest` while `micRequestMode` is false, a
+ * lighter pulsing accent) — tapping in the third state calls
+ * `onCancelPendingRequest` (the same `onCancelPromotion` action the old
+ * bar's own Cancel button already called — issue #23's automatic
+ * promotion has always supported cancelling a request whether or not its
+ * countdown has actually started) instead of re-opening the input. Both
+ * props default to `false`/`undefined` — every existing caller (which
+ * never had a pending-request concept to show) is unaffected. Once a
+ * request is actually accepted, `EventRoom`'s own `promotionCountdown`
+ * takes the *whole* composition over to the center-stage countdown (see
+ * `PortraitRoom`/`MobileLandscapeRoom`), so this component isn't even
+ * mounted by then — there is no intermediate "request sent" screen
+ * between this pending state and the countdown.
+ *
  * **`landscape:max-w-[40%]` on the compact form** (real-device finding,
  * issue #21): `WatchModeControls`' row gives this composer no explicit
  * width of its own — it grows to fill whatever space isn't claimed by
@@ -123,6 +148,8 @@ export function ChatPanel({
   onPrepareMedia,
   compact = false,
   allowMicRequest = true,
+  hasPendingRequest = false,
+  onCancelPendingRequest,
 }: {
   eventId: string;
   messages: LobbyMessage[];
@@ -133,6 +160,10 @@ export function ChatPanel({
   onPrepareMedia: () => Promise<void>;
   compact?: boolean;
   allowMicRequest?: boolean;
+  /** Issue #18 UX finding: drives the mic button's third (pending) visual state — see this component's own doc comment. */
+  hasPendingRequest?: boolean;
+  /** Called instead of re-opening the request-mode input when the mic button is tapped while a request is already pending. */
+  onCancelPendingRequest?: () => void;
 }) {
   const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
   const [requestState, requestFormAction, requestPending] = useActionState(
@@ -208,13 +239,25 @@ export function ChatPanel({
             <button
               type="button"
               data-testid="watch-composer-mic"
-              onClick={() => onMicRequestModeChange(!micRequestMode)}
+              onClick={() => {
+                if (hasPendingRequest && !micRequestMode) {
+                  onCancelPendingRequest?.();
+                  return;
+                }
+                onMicRequestModeChange(!micRequestMode);
+              }}
               disabled={pending}
-              aria-pressed={micRequestMode}
-              aria-label={micRequestMode ? "Cancel speaker request" : "Request to speak"}
+              aria-pressed={micRequestMode || hasPendingRequest}
+              aria-label={
+                micRequestMode || hasPendingRequest ? "Cancel speaker request" : "Request to speak"
+              }
               className={cn(
                 "flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-xs transition-colors disabled:opacity-50",
-                micRequestMode ? "bg-accent text-white" : "bg-white/10 text-white/80",
+                micRequestMode
+                  ? "bg-accent text-white"
+                  : hasPendingRequest
+                    ? "animate-pulse bg-accent/30 text-accent"
+                    : "bg-white/10 text-white/80",
               )}
             >
               🎙

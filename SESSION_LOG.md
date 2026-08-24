@@ -655,6 +655,27 @@ canceled even after waiting, and self-preview consistently appears
 across repeated promotions/camera toggles/rotation/leave-rejoin. #18
 still not moved to Done.
 
+**A real-device screenshot during that check showed one more issue**:
+the compact "Request sent · Cancel" pill overlapping the composer and
+ambient request comment once the bottom row got crowded — visibly
+broken, not just redundant. Removed the pill entirely from
+`PortraitRoom`/`MobileLandscapeRoom`; `ChatPanel`'s own 🎙 mic button now
+carries a third, distinct pending state (a lighter pulsing accent,
+alongside its existing idle/actively-composing states) and cancels the
+request when tapped again in that state — wired to the same existing
+`onCancelPromotion` action the removed bar's own Cancel button already
+called, no new server-side capability needed. The existing badged
+ambient "requesting the mic" chat message is preserved unchanged and is
+already the social feedback that a request went through. lint/tsc/full
+suite/build all pass (521/521, 46 files — +8 tests). Local production
+smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device re-check of this specific change — no overlap,
+the pending mic-button state reads as clearly distinct from idle, and
+tapping it while pending actually cancels the request. #18 still not
+moved to Done.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)
