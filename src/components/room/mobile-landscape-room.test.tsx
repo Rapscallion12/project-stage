@@ -1,19 +1,30 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileLandscapeRoom } from "./mobile-landscape-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 
+const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction } = vi.hoisted(
+  () => ({
+    leaveSpeakerSeat: vi.fn(),
+    withdrawSpeakerRequest: vi.fn(),
+    submitSpeakerRequest: vi.fn(),
+    sendMessage: vi.fn(),
+    addReaction: vi.fn(),
+  }),
+);
+
 vi.mock("@/app/events/[id]/room/actions", () => ({
-  leaveSpeakerSeat: vi.fn(),
-  withdrawSpeakerRequest: vi.fn(),
-  submitSpeakerRequest: vi.fn(),
+  leaveSpeakerSeat,
+  withdrawSpeakerRequest,
+  submitSpeakerRequest,
 }));
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({
-  sendMessage: vi.fn(),
-  addReaction: vi.fn(),
+  sendMessage,
+  addReaction,
+  setGuestName: vi.fn(),
 }));
 
 Element.prototype.scrollTo = vi.fn();
@@ -67,6 +78,10 @@ const baseProps: RoomLayoutProps = {
 };
 
 describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is not a small desktop)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("keeps the video-first overlay philosophy — chat/controls layer over the stage, not beside it (no sidebar)", () => {
     render(<MobileLandscapeRoom {...baseProps} />);
     const stage = screen.getByTestId("room-stage");
@@ -75,19 +90,9 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
     expect(stage.parentElement).toBe(overlay.parentElement);
   });
 
-  it("lays the two seats out side by side (landscape), not stacked", () => {
+  it("lays the two seats out side by side (landscape), not stacked — two-speaker audience viewing unchanged", () => {
     render(<MobileLandscapeRoom {...baseProps} />);
     expect(screen.getByTestId("speaker-divider").className).toMatch(/\bw-2\b/);
-  });
-
-  it("uses the compact room header, not the full one", () => {
-    render(<MobileLandscapeRoom {...baseProps} />);
-    expect(screen.getByRole("heading", { name: "Late Night Debate" }).className).toMatch(/\btext-sm\b/);
-  });
-
-  it("gives the overlay less top padding than portrait — less vertical room to spend on decoration", () => {
-    render(<MobileLandscapeRoom {...baseProps} />);
-    expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bpt-8\b/);
   });
 
   it("tapping an empty seat tile still calls onTapEmptySeat", () => {
@@ -97,121 +102,157 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
     expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
   });
 
-  it("the overlay's decorative margin is click-through, same as PortraitRoom", () => {
+  it("the bottom overlay's decorative margin is click-through, same as PortraitRoom", () => {
     render(<MobileLandscapeRoom {...baseProps} />);
     const overlay = screen.getByTestId("stage-bottom-overlay");
     expect(overlay.className).toMatch(/\bpointer-events-none\b/);
     expect((overlay.firstElementChild as HTMLElement).className).toMatch(/\bpointer-events-auto\b/);
   });
 
-  describe("room header as a top overlay (real-device finding: two document-flow headers ate too much of an already-short viewport)", () => {
-    it("the room header is no longer a document-flow sibling of the stage — it renders inside the same relatively-positioned stage wrapper", () => {
+  it("opts out of StageOverlayShell's heavy gradient wash, same as PortraitRoom", () => {
+    render(<MobileLandscapeRoom {...baseProps} />);
+    expect(screen.getByTestId("stage-bottom-overlay").className).not.toMatch(/\bfrom-black\/90\b/);
+  });
+
+  it("SpeakerStage never receives a darkened scrim — no Comments Mode left to darken it for", () => {
+    render(<MobileLandscapeRoom {...baseProps} />);
+    expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+  });
+
+  describe("minimal top chrome — same SpeakerViewTopChrome as Speaker View (issue #21, Social Stage adaptation)", () => {
+    it("shows a compact status pill with the event title", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      const stage = screen.getByTestId("room-stage");
-      const heading = screen.getByRole("heading", { name: "Late Night Debate" });
-      expect(stage.parentElement).toBe(screen.getByTestId("room-header-overlay").parentElement);
-      expect(screen.getByTestId("room-header-overlay")).toContainElement(heading);
+      expect(screen.getByTestId("watch-status-pill")).toHaveTextContent("Late Night Debate");
     });
 
-    it("the header overlay is click-through outside its actual content, same pattern as the bottom overlay", () => {
+    it("reserves SelfPreview's own responsive footprint on the right — same fix as Speaker View, matters here too for a candidate's self-preview", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      const overlay = screen.getByTestId("room-header-overlay");
-      expect(overlay.className).toMatch(/\bpointer-events-none\b/);
-      expect((overlay.firstElementChild as HTMLElement).className).toMatch(/\bpointer-events-auto\b/);
+      const row = screen.getByTestId("watch-status-pill").parentElement as HTMLElement;
+      expect(row.className).toMatch(/\bpr-20\b/);
     });
 
-    it("reserves space on the right so it doesn't collide with the top-right self-preview slot", () => {
-      render(<MobileLandscapeRoom {...baseProps} />);
-      const inner = screen.getByTestId("room-header-overlay").firstElementChild as HTMLElement;
-      expect(inner.className).toMatch(/\bpr-16\b/);
+    it("shows the guest identity chip for a guest, not for an account holder", () => {
+      const { rerender } = render(
+        <MobileLandscapeRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Cheerful Raven" }} />,
+      );
+      expect(screen.getByRole("button", { name: "Cheerful Raven" })).toBeInTheDocument();
+
+      rerender(<MobileLandscapeRoom {...baseProps} identity={identity} />);
+      expect(screen.queryByRole("button", { name: /cheerful raven/i })).not.toBeInTheDocument();
     });
   });
 
-  describe("Watch Mode / Comments Mode (issue #21, gesture retired 2026-08-22: a plain tap toggle, no drag)", () => {
-    it("defaults to Watch Mode: comments closed, no chat panel mounted at all", () => {
+  describe("legacy audience chrome is gone (issue #21, real-device finding: rotating to landscape reverted to the pre-05 interface)", () => {
+    it("no RoomHeader-style heading, no Comments toggle — the persistent compact composer is a real input, not the old modal RoomChatPanel", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      expect(toggle).toHaveAttribute("aria-expanded", "false");
-      expect(toggle).toHaveTextContent("Comments");
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+      expect(screen.queryByRole("heading", { name: "Late Night Debate" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
+      // Exactly one textbox (the compact composer) — never the old
+      // RoomChatPanel's message-history + quick-emoji layout.
+      expect(screen.getAllByRole("textbox")).toHaveLength(1);
+      expect(screen.queryByLabelText(/^Insert /)).not.toBeInTheDocument();
     });
 
-    it("Watch Mode exposes a compact, always-available Comments control", () => {
+    it("no room-header-overlay wrapper — SpeakerViewTopChrome replaces it entirely", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      expect(toggle.tagName).toBe("BUTTON");
+      expect(screen.queryByTestId("room-header-overlay")).not.toBeInTheDocument();
     });
+  });
 
-    it("tapping the toggle opens Comments Mode: full composer/history mount, scrim darkens", () => {
+  describe("persistent composer, always available — no modal Comments Mode gate (issue #21, Social Stage model)", () => {
+    it("renders a real, focusable comment field immediately, no toggle required", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-
-      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "true");
-      expect(screen.getByTestId("comments-toggle")).toHaveTextContent("Hide");
-      expect(screen.getByRole("textbox")).toBeInTheDocument();
-      expect(Number(screen.getByTestId("room-scrim").style.opacity)).toBeGreaterThan(0);
+      const input = screen.getByPlaceholderText("Add a comment…");
+      expect(input).toBeInTheDocument();
+      expect(input).not.toBeDisabled();
     });
 
-    it("Comments Mode shows message history and the reaction/emoji affordance, not just a bare composer", () => {
-      const messages = [
-        {
-          id: "m1",
-          author_display_name: "Jamie",
-          author_profile_id: "p1",
-          author_guest_id: null,
-          body: "hello from the audience",
-          created_at: new Date().toISOString(),
-          is_speaker_request: false,
-        },
-      ];
-      render(<MobileLandscapeRoom {...baseProps} messages={messages} />);
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-
-      expect(screen.getByText("hello from the audience")).toBeInTheDocument();
-      expect(screen.getAllByLabelText(/^Insert /).length).toBeGreaterThan(0);
+    it("sending a comment calls the existing sendMessage action", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<MobileLandscapeRoom {...baseProps} />);
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello from the audience" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitSpeakerRequest).not.toHaveBeenCalled();
     });
 
-    it("opening Comments Mode never resizes, remounts, or reconnects SpeakerStage — same DOM node, same class list", () => {
+    it("React/Vote/Gift stay inert, unchanged — no reactions/voting/gifting behavior added", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
+    });
+
+    it("opening the composer never resizes, remounts, or reconnects SpeakerStage — same DOM node, same class list", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
       const stage = screen.getByTestId("room-stage");
       const stageClassBefore = stage.className;
-
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
       expect(screen.getByTestId("room-stage")).toBe(stage);
       expect(stage.className).toBe(stageClassBefore);
-    });
-
-    it("tapping close/back returns immediately to Watch Mode — chat panel unmounts entirely, not just shrinks", () => {
-      render(<MobileLandscapeRoom {...baseProps} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      fireEvent.click(toggle);
-      fireEvent.click(toggle);
-
-      expect(toggle).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
-    });
-
-    it("the guest-name editor renders above the toggle, not inside Comments Mode", () => {
-      render(<MobileLandscapeRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      const changeNameButton = screen.getByRole("button", { name: /change name/i });
-      expect(changeNameButton.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("no pointer/drag gesture infrastructure remains active on the stage wrapper", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
       const surface = screen.getByTestId("room-stage").parentElement as HTMLElement;
-
       fireEvent.pointerDown(surface, { pointerId: 1, clientY: 100 });
       fireEvent.pointerMove(surface, { pointerId: 1, clientY: 260 });
       fireEvent.pointerUp(surface, { pointerId: 1, clientY: 260 });
-
-      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "false");
       expect(document.querySelector("[data-gesture-ignore]")).not.toBeInTheDocument();
     });
+  });
+
+  describe("ambient comments (issue #21, Social Stage adaptation — same AmbientComments/messages stream as portrait)", () => {
+    it("renders a recent comment ambiently", () => {
+      render(
+        <MobileLandscapeRoom
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "great show",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      expect(screen.getByTestId("ambient-comment")).toHaveTextContent("great show");
+    });
+
+    it("renders nothing when there are no messages yet", () => {
+      render(<MobileLandscapeRoom {...baseProps} messages={[]} />);
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("RoomControls — compact pending-request pill only (no legacy block, matches PortraitRoom)", () => {
+    it("renders nothing for a plain audience member with no pending request", () => {
+      render(<MobileLandscapeRoom {...baseProps} />);
+      expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+    });
+
+    it("renders the compact 'Request sent · Cancel' pill for a pending requester", () => {
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} />);
+      expect(screen.getByText("Request sent")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    });
+
+    it("Cancel on the compact pill calls onCancelPromotion", () => {
+      const onCancelPromotion = vi.fn();
+      render(<MobileLandscapeRoom {...baseProps} hasPendingRequest={true} onCancelPromotion={onCancelPromotion} />);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("surfaces a failed join attempt's message visibly", () => {
+    render(<MobileLandscapeRoom {...baseProps} joinSeatMessage="Create an account to join as a speaker." />);
+    expect(screen.getByText("Create an account to join as a speaker.")).toBeInTheDocument();
   });
 
   describe("role router (issue #18, Speaker View corrective pass — rotating to landscape while seated no longer reverts to the audience composition)", () => {
@@ -220,13 +261,11 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
       expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Late Night Debate" })).not.toBeInTheDocument();
-      // Speaker View has its own leave control (issue #18, Phase 2) — a
-      // real button exists, just not the legacy audience composition's
-      // RoomHeader/Comments toggle above.
+      // Speaker View has its own leave control — untouched by this pass.
       expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
     });
 
-    it("still calls useCommentsMode unconditionally — toggling isSpeaker on the same mounted instance doesn't throw a Rules-of-Hooks error", () => {
+    it("toggling isSpeaker on the same mounted instance doesn't throw — no hooks of this component's own left to order around the branch", () => {
       const { rerender } = render(<MobileLandscapeRoom {...baseProps} isSpeaker={false} />);
       expect(() => rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={true} />)).not.toThrow();
       expect(() => rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={false} />)).not.toThrow();

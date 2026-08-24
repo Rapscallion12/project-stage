@@ -1414,6 +1414,22 @@ component, not caused by or specific to Watch Mode/Comments Mode) is
 documented in DECISIONS.md; it touched `GuestNameEditor` and `<Input>`'s
 ref-forwarding only, nothing in this section's architecture.
 
+**Superseded for both orientations (2026-08-23/24)**: the Watch Mode /
+Comments Mode two-state model this whole section describes was
+first replaced in `PortraitRoom` by the "05 — Social Stage" redesign
+(issue #21) — a single, always-visible composition (minimal top chrome,
+persistent compact composer/React/Vote/Gift row, ambient comments)
+rather than a modal toggle between a bare stage and a full chat panel.
+`MobileLandscapeRoom`'s audience composition was rebuilt onto that same
+model shortly after (issue #21, real-device finding: rotating to
+landscape still fell back to this section's legacy Comments Mode
+toggle/`RoomChatPanel`/`RoomHeader`, which read as reverting to the
+pre-05 interface). `useCommentsMode` (and its test) were deleted
+outright once nothing referenced it. This section is kept as the
+historical record of the tap-toggle design and why it was built that
+way; see `PortraitRoom`'s and `MobileLandscapeRoom`'s own doc comments,
+and DECISIONS.md, for the current architecture.
+
 ## Testing & Definition of Done
 
 A feature is not done — regardless of what the roadmap checkbox says —

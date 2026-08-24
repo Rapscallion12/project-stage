@@ -543,6 +543,18 @@ different dependencies. Current order:
       responsive footprint. Not yet merged or closed — gated on this
       pass's approval plus the integrated real-device sign-off. See
       DECISIONS.md's ninth 2026-08-24 entry.
+      **Audience landscape rebuilt onto "05 — Social Stage"**, surfaced
+      during the same #18 sign-off pass but genuinely #21 scope: rotating
+      to landscape as an audience member still fell back to the legacy
+      `RoomHeader`/"💬 Comments" toggle/`RoomChatPanel` interface, since
+      only portrait Watch Mode had moved onto the "05" model.
+      `MobileLandscapeRoom`'s audience branch now reuses the exact same
+      `SpeakerViewTopChrome`/`AmbientComments`/`WatchModeControls`
+      components portrait and Speaker View already use — only
+      `SpeakerStage`'s own `orientation="landscape"` genuinely differs.
+      `useCommentsMode` deleted outright, nothing referenced it after.
+      React/Vote/Gift still inert; no Discussion Expanded/reactions/
+      voting/gifting added. See DECISIONS.md's tenth 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

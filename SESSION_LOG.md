@@ -425,6 +425,47 @@ keyboard behavior, toggling, leave/rejoin. #18 is not merged or closed
 yet — that's still gated on this approval plus the originally-planned
 integrated sign-off pass.
 
+**The UI cleanup approved. One more integration issue surfaced during
+that same sign-off pass, this time about #21, not #18**: rotating to
+landscape as an *audience* member (not speaking) still fell back to the
+legacy pre-05 interface — `RoomHeader`'s full status bar, the centered
+"💬 Comments" toggle, `RoomChatPanel` — since portrait Watch Mode moved
+past that model days earlier and nobody had come back to update
+`MobileLandscapeRoom`'s audience branch. Explicitly scoped as a minimal
+adaptation of the already-approved "05" shell, not a new design system,
+and not a stretched-sideways portrait clone.
+
+Rebuilt `MobileLandscapeRoom`'s audience/candidate branch to reuse the
+*exact* components portrait Watch Mode and Speaker View already use —
+`SpeakerViewTopChrome`, `AmbientComments`, `WatchModeControls` wrapping
+the compact `ChatPanel`, `StageOverlayShell` — with the only genuine
+orientation-specific difference being `SpeakerStage`'s own
+`orientation="landscape"` (side-by-side tiles, two-speaker audience
+viewing untouched). Reusing `SpeakerViewTopChrome` here (despite its
+name) also closes the same self-preview-collision risk for a landscape
+*candidate*'s prepared media that portrait's own inline top chrome still
+has — deliberately left unfixed there this pass, since the user's own
+verification plan required audience portrait to look unchanged.
+`useCommentsMode` (and its test) deleted outright once this rebuild
+removed its last import — confirmed `RoomChatPanel` stays alive via
+`DesktopRoom`, so that component wasn't touched. With `useCommentsMode`
+gone, this file no longer owns any hooks of its own, so the role router
+can sit at the very top exactly like `PortraitRoom`'s, no "hooks above
+the branch" ordering concern left to satisfy.
+
+React/Vote/Gift stay exactly as inert as before; no Discussion Expanded,
+reactions, voting, or gifting behavior added; `MobileLandscapeSpeakerView`
+(working Speaker Landscape) untouched. lint/tsc/build/test all pass
+(432/432, 42 files — one file fewer, `use-comments-mode.test.ts` deleted
+along with the hook). Local production smoke test confirmed the built
+route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation —
+audience portrait unchanged, audience landscape now Social-Stage-styled
+(not legacy), commenting and ambient comments both working in landscape,
+rotating back to portrait intact, Speaker View (both orientations) still
+working exactly as before. Neither #18 nor #21 merged or closed yet.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

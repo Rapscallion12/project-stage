@@ -9,6 +9,21 @@ separate release cadence to track here.
 
 ### Changed
 
+- **Audience landscape rebuilt onto "05 — Social Stage" (issue #21)** —
+  rotating to landscape as an audience member no longer falls back to
+  the legacy interface (`RoomHeader`'s full status bar, the centered
+  "💬 Comments" toggle, `RoomChatPanel`). `MobileLandscapeRoom`'s
+  audience/candidate branch now reuses the *exact* components portrait
+  Watch Mode and Speaker View already use — `SpeakerViewTopChrome`,
+  `AmbientComments`, `WatchModeControls` wrapping the compact
+  `ChatPanel` — with the only genuine difference being `SpeakerStage`'s
+  own `orientation="landscape"` (side-by-side tiles, two-speaker
+  audience viewing unchanged). React/Vote/Gift remain exactly as inert
+  as before; no reactions/voting/gifting behavior added. Portrait Watch
+  Mode and the working Speaker Landscape composition are untouched.
+  `useCommentsMode` (and its test) deleted outright — nothing referenced
+  it once this landed. See DECISIONS.md.
+
 - **Speaker View (issue #18) UI cleanup: one control row, not two** —
   mic/camera toggles moved out of `SpeakerControlBar`'s own floating row
   and into the persistent bottom row (`WatchModeControls`' new

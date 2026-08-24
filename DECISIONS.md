@@ -3,6 +3,80 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Audience landscape rebuilt onto "05 — Social Stage" (issue #21) — the last surviving pre-05 composition
+
+**Problem**: real-device testing during the #18 integrated sign-off pass
+found that rotating to landscape *as an audience member* still fell back
+to the legacy interface — `RoomHeader`'s full status bar, the centered
+"💬 Comments" toggle, `RoomChatPanel` mounted only when opened. Portrait
+Watch Mode moved past this model days earlier (issue #21's "05" redesign
+— always-visible minimal chrome + persistent composer + ambient
+comments, no modal chat gate); `MobileLandscapeRoom`'s audience branch
+was the one composition nobody had come back to update, so rotating
+read as reverting to an older app.
+
+**Decision**: rebuilt `MobileLandscapeRoom`'s audience/candidate branch
+to reuse the *exact* components/props `PortraitRoom` and Speaker View
+already use — `SpeakerViewTopChrome`, `AmbientComments`,
+`WatchModeControls` wrapping the compact `ChatPanel`, `StageOverlayShell`
+— rather than inventing a landscape-specific reimplementation of any of
+them. The only genuine orientation-specific difference left is
+`SpeakerStage`'s own `orientation="landscape"` (side-by-side tiles,
+unchanged — two-speaker audience viewing untouched); everything else
+(chrome, composer, ambient comments, positioning conventions) is
+identical to portrait's, since none of it was ever actually
+portrait-specific — only the stage tiling itself genuinely varies by
+orientation. This directly answers "don't stretch portrait sideways":
+the fix reuses portrait's *components*, not its *layout dimensions* —
+landscape still tiles side-by-side, chrome still fits a short/wide box.
+
+**`SpeakerViewTopChrome` reused here too, name notwithstanding**: despite
+its name, the component's actual job (status pill + guest chip, left-
+anchored, reserving `SelfPreview`'s responsive footprint) is
+role-agnostic — `SelfPreview` renders for *any* held local video track,
+including a landscape *candidate*'s prepared media ahead of promotion,
+not just a seated speaker's. Reusing it here closes that same
+self-preview-collision risk for audience landscape that portrait Watch
+Mode's own inline top chrome still has *unfixed* (a known, previously
+flagged, deliberately out-of-scope gap — portrait's own top chrome was
+explicitly left untouched this pass, since the user's own verification
+plan required "audience portrait looks unchanged").
+
+**`useCommentsMode` deleted outright**, along with its test — once this
+rebuild removed `MobileLandscapeRoom`'s last import of it, nothing in
+the codebase referenced it (`RoomChatPanel` is still used by
+`DesktopRoom`, confirmed separately, so that component stays). No shim,
+no re-export — the retired-comments-mode precedent (`use-comments-focus.ts`,
+deleted the same way when the drag gesture was retired) already
+established this project's convention for genuinely dead hooks.
+
+**Role router simplified as a side effect**: with `useCommentsMode()`
+gone, `MobileLandscapeRoom` no longer owns any hooks of its own, so the
+"call hooks before the branch" ordering constraint the previous role-
+router pass needed (a dedicated regression test, since `isSpeaker` can
+flip while the component stays mounted) no longer applies — the role
+check can sit at the very top of the function, matching `PortraitRoom`'s
+own structure exactly. The regression test for that constraint was
+updated, not deleted, since toggling `isSpeaker` on a mounted instance
+without throwing is still worth guarding even though the specific risk
+(a hook call skipped) no longer exists in this file — cheap insurance,
+not dead weight.
+
+**Explicitly not done, per instruction**: no Discussion Expanded,
+reactions, voting, or gifting behavior; React/Vote/Gift stay exactly as
+inert as they already were; no landscape-specific chat/media
+reimplementation; `MobileLandscapeSpeakerView` (the working Speaker
+Landscape composition) untouched.
+
+**Verification honesty**: automated tests cover the composition
+directly (top chrome present, legacy chrome absent, composer always
+rendered and functional, ambient comments render, React/Vote/Gift still
+inert, role router still correct, ordinary rotation doesn't touch
+`SpeakerStage`'s own DOM node/class list). They cannot verify the actual
+felt result on a real device — whether landscape now genuinely reads as
+"the same app" after rotating, not just a checklist of present
+elements — that remains the user's own check.
+
 ## 2026-08-24 — Speaker View UI cleanup: one control row, safe-area-aware bottom clearance, top-right footprint reservation
 
 **Problem**: functionally complete Speaker View (Phase 2 confirmed on
