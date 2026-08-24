@@ -499,6 +499,18 @@ different dependencies. Current order:
       fresh page/hook instance regardless of prior permission, a
       previously-proven real-device failure mode; kept the existing
       button as the only path. See DECISIONS.md's fifth 2026-08-24 entry.
+      **Fifth corrective pass**: a precise "top seat works, bottom seat
+      doesn't" report investigated as a seat-index asymmetry, confirmed
+      (not assumed) via an actually-executed probe test, not just
+      re-reading the code — `SpeakerStage`/`EventRoom`/the role router
+      are all symmetric for seat 1 vs. seat 2. No production code change
+      made without evidence; instead added the full required
+      local-seat-permutation test matrix (16 new tests, all passing) to
+      close a real pre-existing coverage gap. Flagged a relevant finding
+      to the user: `findOpenSeat` always prefers seat 1 regardless of
+      which tile is tapped, so confirming which seat the "bottom" test
+      actually landed in is the open question. See DECISIONS.md's sixth
+      2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

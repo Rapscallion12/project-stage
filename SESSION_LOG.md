@@ -265,6 +265,44 @@ guaranteed no-op (both client and server layers), and the media-activation
 prompt/button remain the only (correct, gesture-safe) recovery path. Do
 not begin Phase 2 until explicitly approved.
 
+**A much more precise report followed**: claiming the top seat reliably
+works, claiming the bottom seat leaves the old split-screen composition
+in place — asked to trace this specifically as a seat-index/local-seat
+asymmetry, confirmed from the actual state/render path rather than
+assumed. This time verified empirically rather than by re-reading code:
+wrote and *ran* a throwaway probe test rendering `SpeakerStage` with the
+viewer occupying seat 2 (both remote-empty and remote-occupied) before
+concluding anything — it passed cleanly. Read `mySeatNumber`'s
+computation, `EventRoom`'s `isSpeaker`, the role router in both
+`PortraitRoom`/`MobileLandscapeRoom`, and `determineCanPublish` — all
+five relevant pieces are provably symmetric, none branch on seat number.
+
+Found one concrete, relevant fact while tracing: `findOpenSeat` (used by
+both direct-tap and automatic-promotion claim paths) always prefers the
+lowest-numbered open seat, and neither `onTapEmptySeat` nor the server
+action it calls take a seat number at all — tapping *either* tile, when
+both seats are genuinely open, assigns the *same* seat (1). A "bottom
+seat" test only actually exercises seat 2 if seat 1 was already occupied
+by something else at the time — flagged this to the user as a concrete
+question rather than a guess.
+
+Per instruction not to assume a cause, made **no speculative production
+code change** this pass — added the full required test matrix instead
+(both local-seat permutations × remote-occupied/empty × repeated taps ×
+self-preview) across `speaker-stage.test.tsx`,
+`portrait-speaker-view.test.tsx`, `mobile-landscape-speaker-view.test.tsx` —
+closing a real, pre-existing gap (every previous soloMode test only ever
+put "my" seat at seat_number 1). lint/tsc/build/test all pass (381/381,
+41 files, +16 new tests, all passing — none needed for a fix, since none
+revealed a failure).
+
+**Next task**: stop for the user's own real-device confirmation, and
+specifically to answer whether seat 1 was already occupied during the
+"bottom seat" test — that would resolve whether the two tests actually
+exercised different seat numbers at all, which the automated evidence
+here couldn't settle on its own. Do not begin Phase 2 until explicitly
+approved.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

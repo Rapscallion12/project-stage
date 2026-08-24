@@ -315,6 +315,87 @@ describe("SpeakerStage", () => {
       );
       expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
     });
+
+    describe("local-seat permutation symmetry (real-device report, issue #18: 'claiming seat 1 works, claiming seat 2 doesn't') — every case run for BOTH permutations, not just seat 1", () => {
+      it.each([
+        { mine: 1 as const, other: 2 as const },
+        { mine: 2 as const, other: 1 as const },
+      ])("viewer owns seat $mine, remote seat $other empty → only the empty seat $other's tile renders, no divider, no local tile", ({ mine }) => {
+        render(
+          <SpeakerStage
+            speakers={[speaker({ id: `s${mine}`, seat_number: mine, profile_id: "me" })]}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:me"
+            soloMode
+          />,
+        );
+        expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("speaker-tile")).not.toBeInTheDocument();
+        const emptySeat = screen.getByTestId("empty-seat");
+        expect(emptySeat).toBeInTheDocument();
+        expect(emptySeat.tagName).toBe("DIV");
+      });
+
+      it.each([
+        { mine: 1 as const, other: 2 as const },
+        { mine: 2 as const, other: 1 as const },
+      ])("viewer owns seat $mine, remote seat $other occupied → only seat $other's tile renders full-bleed, no divider, no local tile", ({ mine, other }) => {
+        render(
+          <SpeakerStage
+            speakers={[
+              speaker({ id: `s${mine}`, seat_number: mine, profile_id: "me" }),
+              speaker({ id: `s${other}`, seat_number: other, profile_id: "remote" }),
+            ]}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:me"
+            soloMode
+          />,
+        );
+        expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+        expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+        expect(screen.queryByTestId("empty-seat")).not.toBeInTheDocument();
+      });
+
+      it.each([
+        { mine: 1 as const, other: 2 as const },
+        { mine: 2 as const, other: 1 as const },
+      ])("viewer owns seat $mine → the remote empty seat $other is never tappable by the viewer themselves, repeated taps included", ({ mine }) => {
+        const onTapEmptySeat = vi.fn();
+        render(
+          <SpeakerStage
+            speakers={[speaker({ id: `s${mine}`, seat_number: mine, profile_id: "me" })]}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:me"
+            onTapEmptySeat={onTapEmptySeat}
+            soloMode
+          />,
+        );
+        const emptySeat = screen.getByTestId("empty-seat");
+        for (let i = 0; i < 5; i++) fireEvent.click(emptySeat);
+        expect(onTapEmptySeat).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      });
+
+      it.each([1 as const, 2 as const])(
+        "viewer owns seat %i → self-preview still renders when a local video track is held",
+        (mine) => {
+          render(
+            <SpeakerStage
+              speakers={[speaker({ id: `s${mine}`, seat_number: mine, profile_id: "me" })]}
+              orientation="portrait"
+              {...baseProps}
+              myIdentity="profile:me"
+              localVideoTrack={fakeVideoTrack()}
+              soloMode
+            />,
+          );
+          expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+        },
+      );
+    });
   });
 
   describe("reconnect grace period (real-device finding)", () => {

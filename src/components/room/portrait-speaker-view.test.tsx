@@ -100,6 +100,42 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B, Phase 1)",
     expect(screen.queryByTestId("speaker-view-activate-media")).not.toBeInTheDocument();
   });
 
+  describe("local-seat permutation symmetry (real-device report, issue #18: claiming seat 1 worked, claiming seat 2 didn't) — same coverage as SpeakerStage's own matrix, exercised through the full role-router path", () => {
+    it.each([
+      { mine: 1 as const, other: 2 as const },
+      { mine: 2 as const, other: 1 as const },
+    ])("viewer owns seat $mine, other seat $other occupied → only seat $other's tile renders, no divider", ({ mine, other }) => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          myIdentity="profile:me"
+          speakers={[
+            seat({ id: `s${mine}`, seat_number: mine, profile_id: "me" }),
+            seat({ id: `s${other}`, seat_number: other, profile_id: "remote" }),
+          ]}
+        />,
+      );
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+    });
+
+    it.each([1 as const, 2 as const])(
+      "viewer owns seat %i, other seat empty → the empty seat's tile renders full-bleed, no divider",
+      (mine) => {
+        render(
+          <PortraitSpeakerView
+            {...baseProps}
+            myIdentity="profile:me"
+            speakers={[seat({ id: `s${mine}`, seat_number: mine, profile_id: "me" })]}
+          />,
+        );
+        expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+        expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+        expect(screen.queryByTestId("speaker-tile")).not.toBeInTheDocument();
+      },
+    );
+  });
+
   describe("media-activation recovery (real-device lifecycle finding: returning to the room after navigating away left no way to re-enable camera/mic)", () => {
     it("shows the activate-media prompt when needsMediaActivation is true — e.g. a fresh connection instance that's still seated", () => {
       render(<PortraitSpeakerView {...baseProps} needsMediaActivation={true} />);

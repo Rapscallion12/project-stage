@@ -3,6 +3,57 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Speaker View "top seat vs. bottom seat" report: confirmed no seat-index asymmetry exists, via an actual empirical test run, not just re-reading the code
+
+**Problem**: a precise real-device report — claiming the top seat lands
+correctly in Speaker View, claiming the bottom seat leaves the old
+two-tile composition in place. Explicitly instructed to confirm this
+from the actual state/render path, not assume, and to trace both claim
+paths side by side across a specific list of values (seat number,
+resulting rows, `isSpeaker`, `viewerIsSpeaking`, `myIdentity`, which seat
+`soloMode` treats as local/other, whether `PortraitRoom` actually
+switches composition, any `seat === 1`/index/"first speaker" assumption).
+
+**Method — verified empirically, not just re-read**: every prior pass
+this session traced code by reading it; this time, before writing
+anything, I wrote a throwaway probe test rendering `SpeakerStage` with
+the viewer occupying seat 2 specifically (both remote-empty and
+remote-occupied) and actually ran it. It passed cleanly — no divider, no
+local tile, correct empty/occupied handling — proving `SpeakerStage`'s
+`soloMode` is symmetric, not just arguing it should be. Also read
+`mySeatNumber`'s computation (loops `[1, 2]`, returns whichever matches
+`myIdentity` — no ordering bias), `EventRoom`'s `isSpeaker` (`speakers.some(...)`
+— doesn't discriminate by seat_number), `PortraitRoom`/`MobileLandscapeRoom`'s
+role router (`if (props.isSpeaker) return <...SpeakerView />` — no
+seat-number logic at all), and `determineCanPublish`
+(`activeSeat !== null` — seat-number-agnostic). All five are provably
+symmetric.
+
+**A concrete, relevant discovery while tracing**: `findOpenSeat`
+(`lib/speaker-queue.ts`) — used by *both* `joinOpenSeat` (direct tap) and
+`decideClaimEligibility`/`claimOpenSeat` (automatic promotion) — always
+prefers the lowest-numbered open seat: `if (!occupied.has(1)) return 1;`.
+Neither `onTapEmptySeat` nor the server action it calls take a seat
+number at all — tapping *either* tile, when both seats are genuinely
+open, results in the *same* seat (1) being assigned, regardless of which
+tile was physically tapped. This means a "bottom seat" test only
+actually exercises seat 2 if seat 1 was already occupied by someone or
+something else at the time — worth confirming with the user, since it
+changes what the two test runs actually compared.
+
+**Conclusion**: no seat-index asymmetry found in `SpeakerStage`,
+`PortraitRoom`/`MobileLandscapeRoom`'s role router, or `EventRoom`'s
+`isSpeaker`/`viewerIsSpeaking` computation — all five relevant pieces are
+symmetric by code and now by an executed test. Per the user's own
+instruction not to assume a cause, no speculative production code change
+was made this pass. What *was* added: the full required test matrix
+(both local-seat permutations × remote-occupied/remote-empty × repeated
+taps × self-preview) across `speaker-stage.test.tsx`,
+`portrait-speaker-view.test.tsx`, and `mobile-landscape-speaker-view.test.tsx`
+— closing a real, pre-existing coverage gap (every previous soloMode test
+only ever put "my" seat at seat_number 1) and giving future changes a
+guardrail this specific regression would trip.
+
 ## 2026-08-24 — Speaker View: hardened the empty-seat tap's actual mutation source; declined to auto-restore media without a gesture
 
 **Issue 1 — tapping the empty remote seat while seated.** Traced
