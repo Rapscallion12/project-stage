@@ -3,6 +3,108 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — "Tap to reconnect" wording, and a genuinely server-authoritative 11-second speaker disconnect grace period (issue #18)
+
+**Problem 1 — reconnect wording**: Speaker View's media-activation
+prompt read "Tap to enable camera & mic" even when it was showing to an
+already-seated speaker whose tab came back fresh (a route remount while
+still holding a seat) — not a first-time setup step, a reconnection.
+
+**Decision**: changed the copy to "Tap to reconnect" in
+`SpeakerMediaActivationPrompt` only — `RoomControls`/`SpeakerTile`'s own
+"Enable camera & mic" entry points elsewhere are correctly still
+first-activation wording, untouched. No behavior change: confirmed (see
+that component's own doc comment) that `needsMediaActivation` becoming
+true in Speaker View specifically can only mean an already-seated
+speaker's tab came back fresh — a genuine first promotion always runs
+`prepareLocalMedia` ahead of time, so `mediaActivated` is already `true`
+before `canPublish` ever flips, meaning this state never legitimately
+represents a first-time activation there.
+
+**Problem 2 — the disconnect "grace period" wasn't real**: the LiveKit
+webhook (`api/livekit/webhook/route.ts`) called `end_speaker_seat`
+immediately on `participant_left` — releasing the seat the instant
+LiveKit reported the disconnect, with *no* grace period server-side. A
+client-side hook (`useSpeakerReconnectGrace`) layered a purely visual
+"Speaker reconnecting…" state on top of that (comparing DB occupancy
+against LiveKit's live participant list, then asking the server to
+re-check after ~25s) — but the seat itself was already gone by then. The
+"grace period" a viewer saw on screen didn't correspond to any real
+protection for the disconnected speaker's seat.
+
+**Decision**: migration 00000000000016 adds `event_speakers.disconnected_at`
+and three `service_role`-only functions:
+- `mark_speaker_disconnected` — sets `disconnected_at = now()`, called
+  from the webhook's `participant_left` handler. Idempotent (only sets
+  it if currently null, so a duplicate delivery never restarts the
+  clock). Starts the grace period; does **not** release the seat.
+- `mark_speaker_reconnected` — clears `disconnected_at`, called from a
+  *new* `participant_joined` webhook handler (the webhook route now
+  handles both event types) — the same authoritative, server-to-server
+  signal disconnection uses, not anything the client asserts about
+  itself. Scoped to the identity's own active-seat row only, never by
+  seat number.
+- `release_expired_disconnected_speaker` — the actual expiration: a
+  single atomic `UPDATE ... WHERE left_at is null AND disconnected_at is
+  not null AND disconnected_at <= now() - interval` releases the seat
+  (`left_reason = 'disconnected'`). Called from
+  `checkAndEvictDisconnectedSpeaker` (room/actions.ts, simplified — the
+  old LiveKit `RoomServiceClient.getParticipant` live-check is gone
+  entirely, replaced by this timestamp comparison), itself triggered by
+  a connected client's local estimate of when the grace period should
+  have elapsed (`useSpeakerReconnectGrace`) — but, exactly as before,
+  that trigger is never trusted directly; the WHERE clause re-derives
+  the real decision from Postgres's own clock every time.
+
+`SPEAKER_DISCONNECT_GRACE_SECONDS = 11` (new `lib/speaker-reconnect.ts`,
+shared by both the server enforcement and the client's scheduling
+estimate) replaces the old, purely-cosmetic 25s.
+
+**Race safety is the WHERE clause, not a separate check-then-write
+step** — a single UPDATE is atomic per row in Postgres:
+- A concurrent `mark_speaker_reconnected` clearing `disconnected_at`
+  makes `disconnected_at is not null` fail, so a stale/late-firing
+  release trigger can never evict someone who already reconnected —
+  verified directly against the real linked project (see below), not
+  just reasoned about.
+- `left_at is null` failing (already released, by this call or an
+  earlier one) makes a second release attempt a no-op, not an error.
+- `mark_speaker_reconnected` matches only the identity's *own* active
+  row — a stale reconnect signal for an already-released, since-reclaimed
+  seat can never reach across to touch whoever claimed it afterward,
+  because that new occupant's row has a different identity entirely.
+
+**`useSpeakerReconnectGrace` redesigned** to match: "who's currently in
+a disconnect grace window" is now a *pure derivation* from
+`speaker.disconnected_at` (already flowing through `speakers` via the
+same Realtime subscription `useActiveSpeakers` already has) — no more
+comparing against LiveKit's own live participant list at all, which
+removes a second, racier signal in favor of the one now-authoritative
+one. The hook no longer needs a `getParticipant` parameter at all. What
+it still does locally: schedule a `setTimeout` per disconnected seat,
+computed from the seat's own `disconnected_at` (not from mount time —
+loading the room partway through an existing grace window schedules
+correspondingly sooner), and call `checkAndEvictDisconnectedSpeaker`
+when it fires — a trigger, never a decision, same as before.
+
+**Verification honesty**: this is the one piece of this session's work
+verified against the real, live, linked Supabase project, not just
+mocks — `event-speakers-disconnect-grace.test.ts` (new) exercises
+`mark_speaker_disconnected`/`mark_speaker_reconnected`/
+`release_expired_disconnected_speaker` for real, including every race
+scenario asked for: reconnect at ~10s retains the seat, no-return
+releases at 11s, a reconnect that lands *after* a stale release
+trigger already fired is a no-op (the exact "old timeout can't evict a
+reconnected participant" guarantee), and a late reconnect signal after
+the seat was reclaimed by someone else never touches the new occupant.
+`route.test.ts` (webhook) extended the same way for `participant_left`/
+`participant_joined`. `useSpeakerReconnectGrace`'s own tests (mocked,
+not live-DB) cover the client-side scheduling/derivation logic
+separately. lint/tsc/full suite/build all pass (540/540, 47 files).
+Whether the "Speaker reconnecting…" UI and the actual seat-release
+timing feel right on a real device, across an actual network drop, is
+still real-device-only.
+
 ## 2026-08-24 — Removed the separate "Request sent" bar; the composer's mic button carries the pending state (issue #18)
 
 **Problem**: a real-device screenshot showed the compact "Request sent ·

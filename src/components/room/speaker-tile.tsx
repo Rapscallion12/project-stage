@@ -74,7 +74,7 @@ export function SpeakerTile({
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
   isJoiningSeat?: boolean;
-  /** Real-device reconnect-grace-period finding: true when `useSpeakerReconnectGrace` has been watching this seat's occupant be absent from LiveKit for a while, still within the grace period — always false for the local viewer's own seat (see that hook's own doc comment for why). Shown as "Speaker reconnecting…" instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
+  /** Real-device reconnect-grace-period finding (issue #18 UX finding: now server-authoritative): true while this seat's occupant has a `disconnected_at` set (the LiveKit webhook's `participant_left` signal) and the server-side grace period hasn't yet expired — see `useSpeakerReconnectGrace`'s own doc comment. Always false for the local viewer's own seat. Shown as "Speaker reconnecting…" instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
   isReconnecting?: boolean;
   /**
    * Issue #21 (05 interaction model): portrait gets the new lightweight

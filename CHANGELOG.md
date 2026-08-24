@@ -7,6 +7,29 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Added
+
+- **Server-authoritative 11-second speaker disconnect grace period** —
+  migration `00000000000016` adds `event_speakers.disconnected_at` and
+  `mark_speaker_disconnected`/`mark_speaker_reconnected`/
+  `release_expired_disconnected_speaker` (all `service_role`-only,
+  race-safe via a single atomic `UPDATE ... WHERE`). The LiveKit webhook
+  now starts the clock on `participant_left` and clears it on a new
+  `participant_joined` handler, instead of releasing the seat
+  immediately with no grace at all. `useSpeakerReconnectGrace` derives
+  "who's reconnecting" directly from `disconnected_at` (no more
+  comparing against LiveKit's own live participant list) and schedules
+  the same server re-check as before, now genuinely enforcing the 11s
+  boundary rather than a cosmetic 25s. See DECISIONS.md for the
+  real-database-verified race-safety coverage.
+
+### Changed
+
+- **"Tap to reconnect"** replaces "Tap to enable camera & mic" in
+  Speaker View's media-activation prompt specifically — that state only
+  ever represents an already-seated speaker's tab coming back fresh, not
+  a first-time setup step. Copy only, no behavior change.
+
 ### Fixed
 
 - **Removed the separate "Request sent" bar** — real-device report found

@@ -600,8 +600,14 @@ different dependencies. Current order:
       button now carries a distinct pending state and cancels the
       request when tapped again, wired to the same existing
       `onCancelPromotion` action. See DECISIONS.md's sixteenth
-      2026-08-24 entry. **Not checked off** — #18 stays open, pending
-      the user's own real-device re-test.
+      2026-08-24 entry. Two final changes before sign-off: Speaker
+      View's activation prompt now reads "Tap to reconnect" (copy only —
+      confirmed this state can only ever mean an already-seated speaker's
+      tab coming back fresh); and the speaker disconnect grace period
+      became genuinely server-authoritative (see the roadmap item below
+      and DECISIONS.md's seventeenth 2026-08-24 entry). **Not checked
+      off** — #18 stays open, pending the user's own real-device
+      re-test.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
@@ -610,14 +616,26 @@ different dependencies. Current order:
       second, incomplete acquisition path, fixing that and, as a side
       effect, a failed-attempt-permanently-hides-the-retry-button bug too.
       Separately, the LiveKit webhook's immediate (no-grace-period)
-      eviction on `participant_left` was exposed as a real gap — new
-      `useSpeakerReconnectGrace`/`checkAndEvictDisconnectedSpeaker` add a
-      25s (tunable), server-re-validated grace period, reusing
-      `useAutomaticPromotion`'s own grace-period shape rather than a
-      second timer system; `SpeakerTile` shows "Speaker reconnecting…"
-      during it. No new SQL. **Not checked off** — pending the user's own
-      real-device confirmation (refresh, and a real temporary
-      disconnect). See ARCHITECTURE.md and DECISIONS.md.
+      eviction on `participant_left` was exposed as a real gap — original
+      fix added `useSpeakerReconnectGrace`/`checkAndEvictDisconnectedSpeaker`
+      with a 25s client-side-triggered, server-re-validated grace period.
+      **Made genuinely server-authoritative (issue #18 UX finding,
+      2026-08-24)**: the "grace period" was still a client-side
+      illusion — the webhook released the seat immediately, no grace at
+      all server-side. New migration `00000000000016` adds
+      `event_speakers.disconnected_at` plus
+      `mark_speaker_disconnected`/`mark_speaker_reconnected`/
+      `release_expired_disconnected_speaker` (race-safe via a single
+      atomic `UPDATE ... WHERE`, applied to the real linked project);
+      the webhook now starts/clears the clock on
+      `participant_left`/`participant_joined` instead of evicting
+      immediately, and the actual 11-second boundary (down from the
+      cosmetic 25s) is enforced by Postgres, not a client timer. See
+      DECISIONS.md's seventeenth 2026-08-24 entry — includes real-database
+      -verified coverage (not mocks) for every race scenario. **Not
+      checked off** — pending the user's own real-device confirmation
+      (refresh, and a real temporary disconnect/reconnect cycle). See
+      ARCHITECTURE.md and DECISIONS.md.
 - [x] Desktop anti-squashing fix (2026-08-22, real-device follow-up) —
       right at the 1024px desktop threshold, a fixed 320px sidebar left
       the two video tiles pathologically narrow; one isolated responsive

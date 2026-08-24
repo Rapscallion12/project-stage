@@ -274,14 +274,14 @@ export function EventRoom({
     onHasPendingRequestChange: setHasPendingRequest,
   });
 
-  // Real-device reconnect-grace-period finding: enabled only once LiveKit
-  // is actually meant to be connected (canConnect/"ready") — before that,
-  // every getParticipant lookup is undefined for reasons unrelated to
-  // anyone disconnecting (see the hook's own doc comment).
+  // Real-device reconnect-grace-period finding, issue #18 UX finding:
+  // enabled only once LiveKit is actually meant to be connected
+  // (canConnect/"ready") — kept for interface parity even though the
+  // hook's own derivation no longer depends on this tab's LiveKit
+  // connection state at all (see its own doc comment).
   const reconnectingIdentities = useSpeakerReconnectGrace({
     eventId: event.id,
     speakers,
-    getParticipant: connection.getParticipant,
     myIdentity,
     enabled: canConnect,
   });

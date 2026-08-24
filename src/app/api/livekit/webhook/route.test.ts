@@ -109,7 +109,7 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
     expect(data?.left_at).toBeNull();
   });
 
-  it("ends the speaker's occupancy as 'disconnected' on a validly-signed participant_left event", async () => {
+  it("starts the disconnect grace-period clock on a validly-signed participant_left event, without releasing the seat (issue #18 UX finding)", async () => {
     const body = JSON.stringify({
       event: "participant_left",
       room: { name: getRoomName(eventId) },
@@ -122,12 +122,16 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
 
     const { data } = await service
       .from("event_speakers")
-      .select("left_at, left_reason")
+      .select("left_at, left_reason, disconnected_at")
       .eq("event_id", eventId)
       .eq("profile_id", profileId)
       .single();
-    expect(data?.left_at).not.toBeNull();
-    expect(data?.left_reason).toBe("disconnected");
+    // The seat is deliberately NOT released here — only the grace-period
+    // clock starts. See release_expired_disconnected_speaker (migration
+    // 00000000000016) for the actual, later expiration.
+    expect(data?.left_at).toBeNull();
+    expect(data?.left_reason).toBeNull();
+    expect(data?.disconnected_at).not.toBeNull();
   });
 
   it("is a safe no-op for a guest identity with no active seat (e.g. an audience guest disconnecting)", async () => {
@@ -142,7 +146,7 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
     expect(response.status).toBe(200);
   });
 
-  it("ends a genuinely seated guest's occupancy as 'disconnected' too (issue #16 — guests can hold a seat now, this is the regression the migration comment specifically flags)", async () => {
+  it("marks a genuinely seated guest's disconnect too (issue #16 — guests can hold a seat now, this is the regression the migration comment specifically flags)", async () => {
     const guestId = crypto.randomUUID();
     await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, 2, "Test Webhook Guest");
 
@@ -158,15 +162,64 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
 
     const { data } = await service
       .from("event_speakers")
-      .select("left_at, left_reason")
+      .select("left_at, disconnected_at")
       .eq("event_id", eventId)
       .eq("guest_id", guestId)
       .single();
-    expect(data?.left_at).not.toBeNull();
-    expect(data?.left_reason).toBe("disconnected");
+    expect(data?.left_at).toBeNull();
+    expect(data?.disconnected_at).not.toBeNull();
   });
 
-  it("ignores webhook events other than participant_left", async () => {
+  it("participant_joined clears a seated speaker's disconnect grace-period clock (issue #18 UX finding — the authoritative 'they're back' signal)", async () => {
+    const guestId = crypto.randomUUID();
+    await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, 1, "Test Webhook Reconnect Guest");
+
+    const leftBody = JSON.stringify({
+      event: "participant_left",
+      room: { name: getRoomName(eventId) },
+      participant: { identity: getParticipantIdentity({ type: "guest", id: guestId }) },
+    });
+    await POST(webhookRequest(leftBody, await signWebhookBody(leftBody)));
+
+    const { data: disconnected } = await service
+      .from("event_speakers")
+      .select("disconnected_at")
+      .eq("event_id", eventId)
+      .eq("guest_id", guestId)
+      .single();
+    expect(disconnected?.disconnected_at).not.toBeNull();
+
+    const joinedBody = JSON.stringify({
+      event: "participant_joined",
+      room: { name: getRoomName(eventId) },
+      participant: { identity: getParticipantIdentity({ type: "guest", id: guestId }) },
+    });
+    const response = await POST(webhookRequest(joinedBody, await signWebhookBody(joinedBody)));
+    expect(response.status).toBe(200);
+
+    const { data: reconnected } = await service
+      .from("event_speakers")
+      .select("left_at, disconnected_at")
+      .eq("event_id", eventId)
+      .eq("guest_id", guestId)
+      .single();
+    expect(reconnected?.left_at).toBeNull();
+    expect(reconnected?.disconnected_at).toBeNull();
+  });
+
+  it("participant_joined is a safe no-op for an ordinary audience member with no active seat", async () => {
+    const body = JSON.stringify({
+      event: "participant_joined",
+      room: { name: getRoomName(eventId) },
+      participant: { identity: getParticipantIdentity({ type: "guest", id: crypto.randomUUID() }) },
+    });
+    const authHeader = await signWebhookBody(body);
+
+    const response = await POST(webhookRequest(body, authHeader));
+    expect(response.status).toBe(200);
+  });
+
+  it("ignores webhook events other than participant_left/participant_joined", async () => {
     const body = JSON.stringify({ event: "room_started", room: { name: getRoomName(eventId) } });
     const authHeader = await signWebhookBody(body);
 

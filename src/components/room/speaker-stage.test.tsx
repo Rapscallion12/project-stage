@@ -20,6 +20,7 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     joined_at: new Date().toISOString(),
     left_at: null,
     left_reason: null,
+    disconnected_at: null,
     ...overrides,
   };
 }

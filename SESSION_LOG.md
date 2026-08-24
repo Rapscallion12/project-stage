@@ -676,6 +676,50 @@ the pending mic-button state reads as clearly distinct from idle, and
 tapping it while pending actually cancels the request. #18 still not
 moved to Done.
 
+**Two final changes before #18 sign-off**: (1) Speaker View's "Tap to
+enable camera & mic" reworded to "Tap to reconnect" — confirmed (not
+assumed) that this state only ever represents an already-seated
+speaker's tab coming back fresh, never a genuine first-time activation,
+since a real first promotion always runs `prepareLocalMedia` ahead of
+time. Copy-only change. (2) The speaker disconnect "grace period" was
+found to be entirely a client-side illusion: the LiveKit webhook called
+`end_speaker_seat` the instant `participant_left` fired, no grace at
+all server-side — a client-side hook only showed a cosmetic
+"reconnecting" state on top of an already-vacated seat. Made it
+genuinely server-authoritative: new migration `00000000000016` adds
+`event_speakers.disconnected_at` plus three `service_role`-only
+functions (`mark_speaker_disconnected`/`mark_speaker_reconnected`/
+`release_expired_disconnected_speaker`), applied to the real linked
+Supabase project via `supabase db push --linked` and regenerated types,
+per the project's own established migration workflow. The webhook now
+starts the clock on `participant_left` and clears it on a new
+`participant_joined` handler instead of evicting immediately;
+`checkAndEvictDisconnectedSpeaker` (room/actions.ts) now enforces the
+real 11-second boundary via a single atomic `UPDATE ... WHERE` (race
+safety is the WHERE clause itself, not a separate check-then-write) —
+the old LiveKit `RoomServiceClient.getParticipant` live-check is gone
+entirely. `useSpeakerReconnectGrace` redesigned to derive "who's
+reconnecting" as a pure function of `disconnected_at` (already flowing
+through the existing Realtime subscription) instead of comparing
+against LiveKit's own live participant list — one fewer racy signal.
+New `event-speakers-disconnect-grace.test.ts` verifies every requested
+race scenario against the **real, live, linked database** (not mocks):
+reconnect at ~10s retains the seat, no-return releases at 11s, a stale
+release trigger arriving after a successful reconnect is a no-op, and a
+late reconnect after the seat was reclaimed by someone else never
+touches the new occupant. The webhook's own real-DB test file
+(`route.test.ts`) extended to cover both event types; the hook's own
+tests (mocked) cover the client-side scheduling/derivation separately.
+lint/tsc/full suite/build all pass (540/540, 47 files — +2 files,
++19 tests). Local production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device verification — the reconnect copy, and
+specifically a real disconnect/reconnect cycle (both inside and outside
+the 11-second window) on an actual device, are the two things automated
+coverage genuinely cannot confirm by itself. #18 still not moved to
+Done.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

@@ -26,6 +26,7 @@ const fakeActiveSeat: EventSpeaker = {
   joined_at: new Date().toISOString(),
   left_at: null,
   left_reason: null,
+  disconnected_at: null,
 };
 
 describe("determineCanPublish", () => {

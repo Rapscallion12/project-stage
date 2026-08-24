@@ -25,6 +25,17 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
     expect(screen.getByTestId("speaker-view-activate-media")).toBeInTheDocument();
   });
 
+  it("reads 'Tap to reconnect', not the generic 'Tap to enable camera & mic' — this state always means an already-seated speaker's tab came back fresh, never a first-time activation (issue #18 UX finding)", () => {
+    render(
+      <SpeakerMediaActivationPrompt
+        needsMediaActivation={true}
+        activateMedia={vi.fn(async () => {})}
+        mediaError={null}
+      />,
+    );
+    expect(screen.getByTestId("speaker-view-activate-media")).toHaveTextContent("Tap to reconnect");
+  });
+
   it("calls activateMedia synchronously from the tap, the same gesture-safe path used everywhere else", () => {
     const activateMedia = vi.fn(async () => {});
     render(

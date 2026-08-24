@@ -131,6 +131,7 @@ export type Database = {
       }
       event_speakers: {
         Row: {
+          disconnected_at: string | null
           display_name: string
           event_id: string
           guest_id: string | null
@@ -142,6 +143,7 @@ export type Database = {
           seat_number: number
         }
         Insert: {
+          disconnected_at?: string | null
           display_name: string
           event_id: string
           guest_id?: string | null
@@ -153,6 +155,7 @@ export type Database = {
           seat_number: number
         }
         Update: {
+          disconnected_at?: string | null
           display_name?: string
           event_id?: string
           guest_id?: string | null
@@ -306,6 +309,7 @@ export type Database = {
           p_seat_number: number
         }
         Returns: {
+          disconnected_at: string | null
           display_name: string
           event_id: string
           guest_id: string | null
@@ -331,6 +335,7 @@ export type Database = {
           p_reason: string
         }
         Returns: {
+          disconnected_at: string | null
           display_name: string
           event_id: string
           guest_id: string | null
@@ -351,6 +356,7 @@ export type Database = {
       leave_speaker_seat: {
         Args: { p_event_id: string }
         Returns: {
+          disconnected_at: string | null
           display_name: string
           event_id: string
           guest_id: string | null
@@ -371,6 +377,49 @@ export type Database = {
       leave_speaker_seat_as_guest: {
         Args: { p_event_id: string; p_guest_id: string }
         Returns: {
+          disconnected_at: string | null
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      mark_speaker_disconnected: {
+        Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
+        Returns: {
+          disconnected_at: string | null
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      mark_speaker_reconnected: {
+        Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
+        Returns: {
+          disconnected_at: string | null
           display_name: string
           event_id: string
           guest_id: string | null
@@ -397,6 +446,32 @@ export type Database = {
           rank: number
           request_id: string
         }[]
+      }
+      release_expired_disconnected_speaker: {
+        Args: {
+          p_event_id: string
+          p_grace_seconds: number
+          p_guest_id?: string
+          p_profile_id?: string
+        }
+        Returns: {
+          disconnected_at: string | null
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       request_to_speak: {
         Args: { p_body: string; p_event_id: string }

@@ -1,118 +1,107 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { checkAndEvictDisconnectedSpeaker } from "@/app/events/[id]/room/actions";
 import { getParticipantIdentity } from "@/lib/livekit/token";
-import type { Participant } from "livekit-client";
+import { SPEAKER_DISCONNECT_GRACE_MS } from "@/lib/speaker-reconnect";
 import type { EventSpeaker, SeatIdentity } from "@/lib/repositories/event-speakers";
 
-/** Tunable, not architectural doctrine — ~20-30s per the product ask. */
-export const RECONNECT_GRACE_PERIOD_MS = 25_000;
-
 /**
- * Real-device finding: the LiveKit webhook evicts a seat the instant
- * `participant_left` fires — no grace period — so a seated speaker who
- * merely refreshes, blips offline, or briefly loses signal loses their
- * seat outright, the same as someone who genuinely left. This is the
- * client-side half of the fix: watches every *other* occupied seat for a
- * gap between the DB's occupancy (`event_speakers`, via
- * `useActiveSpeakers`) and LiveKit's own live participant list
- * (`getParticipant`) — a seat still recognized server-side with no
- * connected LiveKit participant. Purely a local *trigger*: after
- * `RECONNECT_GRACE_PERIOD_MS` of that gap persisting, calls the
- * server-re-validated `checkAndEvictDisconnectedSpeaker` (room/actions.ts)
- * — the actual eviction decision is never made here, only requested. If
- * the participant reconnects before the timer fires, the seat naturally
- * drops out of the "disconnected" set on the next render and the pending
- * timer is cleared, never reaching the server at all.
+ * Issue #18 UX finding: this used to derive "who's disconnected" from a
+ * client-local heuristic (a seat the DB still shows occupied, but with no
+ * matching entry in LiveKit's own live participant list) and run the
+ * grace period as its own client-side timer — the seat was actually
+ * already gone server-side the instant LiveKit reported the disconnect,
+ * so the "grace period" was a purely visual illusion. It's now a thin
+ * client-side trigger around a genuinely server-authoritative clock: the
+ * LiveKit webhook (api/livekit/webhook/route.ts) sets each seat's own
+ * `disconnected_at` the moment `participant_left` fires and clears it on
+ * `participant_joined` — both already flow through to `speakers` here via
+ * the same Realtime subscription `useActiveSpeakers` already has, so
+ * "who's currently in a disconnect grace window" is now a *pure
+ * derivation* from already-subscribed state, not a second thing this
+ * hook has to detect.
+ *
+ * What this hook still does locally: schedule, per disconnected seat, a
+ * `setTimeout` for roughly when the grace period should elapse, and ask
+ * the server to check then (`checkAndEvictDisconnectedSpeaker`) — but
+ * that server call re-derives the real decision from Postgres's own
+ * clock and the row's own `disconnected_at` (see
+ * `release_expired_disconnected_speaker`, migration 00000000000016), so
+ * this timer only ever *triggers* a check; it never decides anything.
+ * Firing early, late, or redundantly (several viewers' timers landing
+ * around the same moment) is harmless — the server-side atomic UPDATE
+ * either finds the threshold genuinely cleared or it doesn't.
  *
  * Runs for every connected viewer, audience included — not scoped to
  * just the other active speaker the way issue #25's own heartbeat is
  * scoped to avoid *continuous* audience-wide polling. This schedules at
- * most one deferred call per genuine disconnect event, not a recurring
+ * most one deferred call per genuine disconnect, not a recurring
  * interval, so the cost doesn't scale with audience size the same way
  * continuous polling would — and it's what guarantees a *solo*
  * disconnected speaker (no co-speaker around to notice) still eventually
  * gets released, as long as anyone at all is watching.
  *
- * The viewer's own seat is explicitly excluded (`myIdentity`) — a client
- * reconnecting itself (e.g. right after its own page refresh) would
- * otherwise transiently see *itself* as "disconnected" during the brief
- * window before its own LiveKit connection finishes establishing, and
- * start a grace timer against its own seat for no reason.
+ * The viewer's own seat is explicitly excluded (`myIdentity`) — nothing
+ * about a client watching its own occupancy makes sense here; if it's
+ * genuinely disconnected, this tab isn't running JS to schedule anything
+ * anyway.
+ *
+ * No longer takes a `getParticipant` lookup at all (unlike the previous,
+ * LiveKit-live-participant-comparing design) — `disconnected_at` is now
+ * the single source this derives from.
  */
 export function useSpeakerReconnectGrace(params: {
   eventId: string;
   speakers: EventSpeaker[];
-  getParticipant: (identity: string) => Participant | undefined;
   myIdentity: string;
-  /** False before LiveKit ever connects (e.g. still lobby_open) — every `getParticipant` lookup returns undefined then for reasons that have nothing to do with anyone actually disconnecting, so the watch must stay off, not treat that as a room full of disconnected speakers. */
+  /** False before LiveKit ever connects (e.g. still lobby_open) — kept for interface parity with the previous design; no longer changes the derivation itself, since that's now sourced from `speakers` regardless of this tab's own connection state. */
   enabled: boolean;
 }): ReadonlySet<string> {
-  const { eventId, speakers, getParticipant, myIdentity, enabled } = params;
-  const [reconnecting, setReconnecting] = useState<ReadonlySet<string>>(new Set());
+  const { eventId, speakers, myIdentity, enabled } = params;
   const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
-  useEffect(() => {
-    const timers = timersRef.current;
-    if (!enabled) {
-      // `enabled` only ever transitions false → true (it tracks
-      // `canConnect`, itself derived from the event's phase, which only
-      // moves forward within a session) — so this branch's job is purely
-      // "stay off during the very first renders before LiveKit is even
-      // meant to connect," a state the initial `useState(new Set())`
-      // already got right. No setState call needed here (a lint
-      // violation for a genuine reason — see useLiveRoomConnection's own
-      // comment on this exact rule): there's nothing to correct.
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-      return;
-    }
-
-    const disconnectedNow = new Map<string, SeatIdentity>();
+  // Pure derivation from already-subscribed, server-authoritative state —
+  // no client-side "are they really gone" heuristic left at all.
+  const disconnected = useMemo(() => {
+    const map = new Map<string, { seatIdentity: SeatIdentity; disconnectedAt: string }>();
+    if (!enabled) return map;
     for (const speaker of speakers) {
+      if (!speaker.disconnected_at) continue;
       const seatIdentity: SeatIdentity = speaker.profile_id
         ? { type: "profile", id: speaker.profile_id }
         : { type: "guest", id: speaker.guest_id! };
       const identity = getParticipantIdentity(seatIdentity);
       if (identity === myIdentity) continue;
-      if (!getParticipant(identity)) disconnectedNow.set(identity, seatIdentity);
+      map.set(identity, { seatIdentity, disconnectedAt: speaker.disconnected_at });
     }
+    return map;
+  }, [speakers, myIdentity, enabled]);
+
+  useEffect(() => {
+    const timers = timersRef.current;
 
     for (const [identity, timer] of timers) {
-      if (!disconnectedNow.has(identity)) {
+      if (!disconnected.has(identity)) {
         clearTimeout(timer);
         timers.delete(identity);
       }
     }
 
-    for (const [identity, seatIdentity] of disconnectedNow) {
+    for (const [identity, entry] of disconnected) {
       if (timers.has(identity)) continue;
+      const elapsedMs = Date.now() - new Date(entry.disconnectedAt).getTime();
+      const remainingMs = Math.max(0, SPEAKER_DISCONNECT_GRACE_MS - elapsedMs);
       const timer = setTimeout(() => {
         timers.delete(identity);
-        setReconnecting(new Set(timers.keys()));
         // The actual eviction decision is made server-side, independent
         // of this timer having fired — see checkAndEvictDisconnectedSpeaker's
         // own doc comment.
-        void checkAndEvictDisconnectedSpeaker(eventId, seatIdentity);
-      }, RECONNECT_GRACE_PERIOD_MS);
+        void checkAndEvictDisconnectedSpeaker(eventId, entry.seatIdentity);
+      }, remainingMs);
       timers.set(identity, timer);
     }
-
-    // A functional update, comparing contents rather than unconditionally
-    // creating a new Set — this effect's own deps include `getParticipant`,
-    // whose reference legitimately changes on unrelated room activity
-    // (any track/participant update bumps it), so re-running with an
-    // unchanged outcome must not still produce a new object identity: that
-    // would set state every time, which schedules a render, which (if a
-    // caller's own getParticipant happens to be recreated per-render, as
-    // opposed to memoized) can re-trigger this same effect indefinitely.
-    setReconnecting((prev) => {
-      const nextKeys = [...timers.keys()];
-      if (prev.size === nextKeys.length && nextKeys.every((key) => prev.has(key))) return prev;
-      return new Set(nextKeys);
-    });
-  }, [eventId, speakers, getParticipant, myIdentity, enabled]);
+  }, [eventId, disconnected]);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -122,5 +111,5 @@ export function useSpeakerReconnectGrace(params: {
     };
   }, []);
 
-  return reconnecting;
+  return useMemo(() => new Set(disconnected.keys()), [disconnected]);
 }

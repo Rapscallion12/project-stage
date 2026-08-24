@@ -42,6 +42,17 @@ import type { MediaError } from "@/hooks/use-live-room-connection";
  * the stage" pill and the composer row — both only present once actually
  * publishing, but this prompt needs to stay clear of them regardless,
  * without needing to know their exact rendered height.
+ *
+ * **"Tap to reconnect" wording** (issue #18 UX finding): copy only, not
+ * a behavior change — see "When this actually happens" above:
+ * `needsMediaActivation` becoming true here always means an already-
+ * seated speaker's tab came back fresh, never a first-time activation
+ * (a genuine first promotion always runs `prepareLocalMedia` ahead of
+ * time, so `mediaActivated` is already true before `canPublish` ever
+ * flips). "Tap to enable camera & mic" (still the correct wording for
+ * `RoomControls`/`SpeakerTile`'s own first-activation entry points
+ * elsewhere) read as a fresh setup step here instead of what it actually
+ * is: reconnecting camera/mic to the seat this tab already holds.
  */
 export function SpeakerMediaActivationPrompt({
   needsMediaActivation,
@@ -68,7 +79,7 @@ export function SpeakerMediaActivationPrompt({
         }}
         className="pointer-events-auto rounded-full border border-white/30 bg-black/50 px-4 py-2 text-sm font-medium text-white"
       >
-        Tap to enable camera &amp; mic
+        Tap to reconnect
       </button>
       {mediaError && (
         <p className="pointer-events-auto max-w-xs rounded-lg bg-black/50 px-3 py-1.5 text-center text-xs text-red-400" role="alert">
