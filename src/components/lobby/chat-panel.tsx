@@ -61,6 +61,26 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * caller is responsible for also keeping `micRequestMode` false; this
  * prop only controls whether the toggle is offered at all.
  *
+ * **`landscape:max-w-[40%]` on the compact form** (real-device finding,
+ * issue #21): `WatchModeControls`' row gives this composer no explicit
+ * width of its own — it grows to fill whatever space isn't claimed by
+ * the fixed-size emblems beside it, which in **portrait** (a genuinely
+ * narrow viewport) reads fine, but in **landscape** (a much wider one)
+ * stretched the composer across most of the screen before React/Vote/
+ * Gift, reading as unbalanced. Capped with Tailwind's built-in
+ * `landscape:` variant (`@media (orientation: landscape)`) — safe to use
+ * bare here, unlike the app's own hand-written media queries elsewhere
+ * that also exclude a desktop window by height: `compact` mode is never
+ * rendered outside the four mobile room compositions
+ * (`PortraitRoom`/`MobileLandscapeRoom`, audience or speaker) — `DesktopRoom`
+ * uses the non-compact `ChatPanel` via `RoomChatPanel` instead — so there
+ * is no desktop-landscape case for this rule to ever mistakenly catch.
+ * Purely a max-width cap, not a fixed size: `flex-1`/`min-w-0` (see
+ * below) still let it grow and shrink normally up to that ceiling, so
+ * narrow landscape phones aren't forced into an oversized minimum. One
+ * change here covers both Watch Mode and Speaker View in landscape,
+ * since both render this exact component.
+ *
  * `min-w-0` at every level of the compact form (real-device finding,
  * 2026-08-23): the row this composer sits in (`WatchModeControls`) has
  * three `shrink-0` emblems beside it by design — the composer is the
@@ -175,7 +195,7 @@ export function ChatPanel({
             }
           : undefined
       }
-      className={compact ? "flex min-w-0 items-center gap-2" : "flex gap-2"}
+      className={compact ? "flex min-w-0 items-center gap-2 landscape:max-w-[40%]" : "flex gap-2"}
     >
       {compact ? (
         <div

@@ -492,6 +492,30 @@ ambient comments, and composer/React/Vote/Gift row all stay visible;
 audience portrait, landscape outside the room, and Speaker Landscape all
 unchanged. Neither #18 nor #21 merged or closed yet.
 
+**Header removal confirmed — one more small layout note**: the compact
+composer stretched across most of the control row in landscape, pushing
+React/Vote/Gift toward the far right instead of sitting immediately
+after it. Root cause: the composer has no explicit width of its own in
+`WatchModeControls`' row, so it grows to fill whatever the fixed-size
+emblems don't claim — fine in portrait's narrow viewport, visibly
+unbalanced in landscape's wide one. Fixed with a single Tailwind
+`landscape:max-w-[40%]` on `ChatPanel`'s own compact-mode form —
+confirmed safe to use bare (no desktop-exclusion clause needed, unlike
+the app's own hand-written media queries elsewhere) since `compact`
+mode structurally never renders outside the four mobile room
+compositions. One change fixes both Watch Mode and Speaker View in
+landscape at once, since both share this exact component; portrait is
+provably unaffected. Still `flex-1`/`min-w-0` underneath — a cap, not a
+fixed size. lint/tsc/build/test all pass (435/435, 42 files, +3 new
+tests). Local production smoke test confirmed the built route serves
+the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of the
+composer width specifically — comfortably shows "Add a comment…" at
+roughly 35–45% of the row, React/Vote/Gift (or Mic/Camera/Gift) sit
+immediately after, portrait unchanged, no clipping at narrow landscape
+widths. Neither #18 nor #21 merged or closed yet.
+
 ---
 
 ## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)

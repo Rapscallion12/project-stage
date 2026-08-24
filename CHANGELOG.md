@@ -9,6 +9,15 @@ separate release cadence to track here.
 
 ### Changed
 
+- **Compact composer capped to ~40% width in mobile landscape** — it
+  previously grew to fill most of the control row before React/Vote/Gift
+  (or Mic/Camera/Gift for a speaker), reading as unbalanced. A single
+  `landscape:max-w-[40%]` on `ChatPanel`'s compact-mode form fixes both
+  Watch Mode and Speaker View at once, since both share this exact
+  component — portrait is unaffected. Still `flex-1`/`min-w-0`
+  underneath, so it grows/shrinks normally up to that cap rather than
+  becoming a fixed size. See DECISIONS.md.
+
 - **Site-wide header now hidden for audience landscape too, not just
   Speaker View** — the header-hiding CSS (previously
   `body.speaker-view-active`, speaker-only) is broadened into

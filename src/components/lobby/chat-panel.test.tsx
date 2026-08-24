@@ -141,6 +141,33 @@ describe("ChatPanel", () => {
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
     });
 
+    describe("landscape width cap (real-device finding, issue #21: the composer stretched across most of the screen in landscape, pushing React/Vote/Gift to the far right)", () => {
+      // Pins the rendered CSS class — jsdom doesn't evaluate the
+      // `orientation` media query itself, so this can't exercise the
+      // actual landscape-vs-portrait visual difference. Real-device-only
+      // check for that (see this session's verification report).
+      it("the compact form caps its width in landscape, uncapped in portrait", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const form = screen.getByTestId("chat-composer-form");
+        expect(form.className).toMatch(/\blandscape:max-w-\[40%\]/);
+      });
+
+      it("still grows/shrinks normally up to that cap — min-w-0 and flex-1 both preserved, not a fixed size", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const form = screen.getByTestId("chat-composer-form");
+        expect(form.className).toMatch(/\bmin-w-0\b/);
+        const pill = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pill.className).toMatch(/\bflex-1\b/);
+        expect(pill.className).toMatch(/\bmin-w-0\b/);
+      });
+
+      it("full (non-compact) mode is unaffected — no landscape cap applied", () => {
+        render(<ChatPanel {...baseProps} />);
+        const form = screen.getByTestId("chat-composer-form");
+        expect(form.className).not.toMatch(/landscape:/);
+      });
+    });
+
     describe("input font size (real-device finding, 2026-08-23: text-sm/14px triggered iOS Safari's auto-zoom-on-focus)", () => {
       // This only pins the rendered CSS class, which is what actually
       // governs the computed font-size — it does not and cannot exercise

@@ -3,6 +3,61 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Composer capped to 40% width in landscape, one Tailwind variant covering both Watch Mode and Speaker View
+
+**Problem**: after the landscape audience rebuild, the compact composer
+stretched across most of the control row's width in landscape, pushing
+React/Vote/Gift (or Mic/Camera/Gift for a speaker) toward the far right
+instead of sitting immediately after it — reported directly, with a
+requested target of roughly 35–45% of the row's width.
+
+**Root cause**: `WatchModeControls`' row gives the composer no explicit
+width of its own — it grows to fill whatever space the fixed-size
+emblems beside it don't claim. In portrait (a narrow viewport) that
+reads fine; in landscape (much wider) it visibly stretches.
+
+**Decision**: added a single Tailwind `landscape:max-w-[40%]` to
+`ChatPanel`'s own compact-mode `<form>` className — Tailwind's built-in
+`landscape:` variant, `@media (orientation: landscape)`. Deliberately
+*not* the app's own hand-written media queries elsewhere that also
+exclude a desktop window by height (`(orientation: landscape) and
+(max-height: 500px)`, used for the site-header-hiding rules): that extra
+guard exists specifically because those rules target `body`/global
+scope, which a genuine desktop browser window can also match. `compact`
+mode structurally cannot render there at all — confirmed by checking
+every caller: only the four mobile room compositions
+(`PortraitRoom`/`MobileLandscapeRoom`, audience or speaker) ever pass
+`compact`; `DesktopRoom` renders the non-compact `ChatPanel` via
+`RoomChatPanel` instead. A bare `landscape:` variant is therefore both
+correct and simpler here — no desktop-exclusion clause needed because
+there's no desktop case to exclude.
+
+**One change, both compositions fixed**: since `WatchModeControls`
+(and therefore this exact `ChatPanel` instance) is shared verbatim by
+Watch Mode and Speaker View in both mobile orientations, this single
+class change fixes the composer width in both landscape compositions at
+once — no separate Speaker-View-specific change needed, and portrait is
+provably unaffected (the `landscape:` variant simply never applies
+there).
+
+**A cap, not a fixed size**: `max-width` alone, layered on top of the
+composer's existing `flex-1`/`min-w-0` (unchanged) — it still grows and
+shrinks normally, just never past 40% of the row's own width, so a
+narrow landscape phone isn't forced into an oversized minimum. Nothing
+about `WatchModeControls`' row itself needed to change — with the
+composer capped, React/Vote/Gift (or Mic/Camera/Gift) naturally end up
+immediately after it and the whole group reads left-aligned, since the
+row was never using `justify-between` to push them to the far edge in
+the first place; the composer's own width was the only thing making it
+look that way.
+
+**Verification honesty**: a new test pins the rendered class
+(`landscape:max-w-[40%]` present in compact mode, absent in full mode)
+and confirms `flex-1`/`min-w-0` are still intact on both the form and
+the inner pill — jsdom doesn't evaluate the `orientation` media query
+itself, so this cannot exercise the actual portrait-vs-landscape visual
+difference; that remains the user's own real-device check.
+
 ## 2026-08-24 — Site header hidden for audience landscape too — broadened `speaker-view-active` into `mobile-landscape-live-active`
 
 **Problem**: the previous pass rebuilt audience landscape onto the "05"

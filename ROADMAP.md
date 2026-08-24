@@ -562,6 +562,11 @@ different dependencies. Current order:
       the actual composition rendering — one class/rule instead of two
       near-duplicates. Portrait, desktop, and landscape outside the room
       unaffected. See DECISIONS.md's eleventh 2026-08-24 entry.
+      **Composer width capped in landscape**: `landscape:max-w-[40%]` on
+      `ChatPanel`'s compact form — one change fixes the composer's
+      unbalanced width in both Watch Mode and Speaker View landscape
+      (they share this exact component); portrait unaffected. See
+      DECISIONS.md's twelfth 2026-08-24 entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
