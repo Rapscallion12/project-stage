@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
 import { cn } from "@/lib/utils";
-import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { reconnectDiagnostics, useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
@@ -60,7 +60,7 @@ export function SpeakerTile({
   mediaError = null,
   onTapEmptySeat,
   isJoiningSeat = false,
-  isReconnecting = false,
+  isReconnecting: isReconnectingProp = false,
   orientation = "landscape",
   clearTopChrome = false,
 }: {
@@ -75,7 +75,36 @@ export function SpeakerTile({
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
   isJoiningSeat?: boolean;
-  /** Real-device reconnect-grace-period finding (issue #18 UX finding: now server-authoritative): true while this seat's occupant has a `disconnected_at` set (the LiveKit webhook's `participant_left` signal) and the server-side grace period hasn't yet expired — see `useSpeakerReconnectGrace`'s own doc comment. Always false for the local viewer's own seat. Shown as "Speaker reconnecting…" (issue #18 audience-countdown finding: with the remaining seconds, once known) instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
+  /**
+   * Real-device reconnect-grace-period finding (issue #18 UX finding: now
+   * server-authoritative): true while this seat's occupant has a
+   * `disconnected_at` set (the LiveKit webhook's `participant_left`
+   * signal) and the server-side grace period hasn't yet expired — see
+   * `useSpeakerReconnectGrace`'s own doc comment. Always false for the
+   * local viewer's own seat.
+   *
+   * **Not the sole source of truth** (issue #18 real-device finding,
+   * 2026-08-25): a real-device retest found "Camera off" still showing
+   * during an active grace period — traced to this prop being an
+   * *independently re-derived* signal (via `reconnectingIdentities`,
+   * itself gated by this tab's own `canConnect`) that could disagree
+   * with the seat's own `speaker.disconnected_at`, which this component
+   * already reads directly for the countdown itself. This component now
+   * ORs the two together (see `isReconnecting` below, the local const) so
+   * the seat's own authoritative field always wins regardless of whatever
+   * the caller's derived set says — "reconnect UI must take precedence
+   * over generic media-off UI" is now true by construction from a single
+   * field, not by keeping two independent derivations in sync by hand.
+   * Kept as a prop (not removed) since `SpeakerStage`'s existing
+   * `reconnectingIdentities` plumbing still does real scheduling work
+   * (triggering the server-side eviction check) — only the *display*
+   * decision no longer trusts it alone.
+   *
+   * Shown as "Speaker reconnecting…" (issue #18 audience-countdown
+   * finding: with the remaining seconds, once known) instead of the
+   * generic "Camera off", since the seat isn't lost, just temporarily
+   * disconnected.
+   */
   isReconnecting?: boolean;
   /**
    * Issue #21 (05 interaction model): portrait gets the new lightweight
@@ -106,6 +135,13 @@ export function SpeakerTile({
   // null (no suffix) whenever there's nothing to count down, so passing
   // it unconditionally here is safe regardless of `isReconnecting`.
   const reconnectSecondsRemaining = useReconnectCountdown(speaker?.disconnected_at ?? null);
+
+  // Issue #18 real-device finding (2026-08-25): ORs the caller's own
+  // derived signal with the seat's own authoritative field directly —
+  // see the isReconnecting prop's own doc comment above for why the two
+  // could disagree and why this field must win. Only ever adds true,
+  // never suppresses a true the caller already passed.
+  const isReconnecting = isReconnectingProp || Boolean(speaker?.disconnected_at);
 
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
@@ -164,8 +200,26 @@ export function SpeakerTile({
     );
   }
 
+  // Issue #18 real-device finding (2026-08-25): un-gated (visible on the
+  // real preview) diagnostic showing exactly what this tile received for
+  // the seat this occupant holds — see reconnectDiagnostics' own doc
+  // comment. Rendered regardless of which branch below actually shows,
+  // specifically so it's visible even in the "Camera off" branch, the
+  // one the bug report says shows when it shouldn't. Reuses
+  // `reconnectSecondsRemaining` verbatim — the exact value already
+  // driving the visible countdown text below, so the diagnostic can
+  // never disagree with what's actually on screen.
+  const diag = reconnectDiagnostics(speaker?.disconnected_at ?? null, reconnectSecondsRemaining);
+
   return (
     <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
+      <div
+        data-testid="diagnostic-audience-reconnect"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-50 bg-amber-700/90 px-1 py-0.5 font-mono text-[8px] leading-tight break-all text-white"
+      >
+        raw={diag.raw} parsed={diag.parsed} deadline={diag.deadline} remain={String(diag.remainingSeconds)} active=
+        {String(diag.active)} propFlag={String(isReconnectingProp)} effFlag={String(isReconnecting)}
+      </div>
       {showBigVideo ? (
         // Only ever a remote participant's video now — the local
         // speaker's own feed lives in SelfPreview instead (see this

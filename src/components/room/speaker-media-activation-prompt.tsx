@@ -1,5 +1,5 @@
 import { mediaErrorMessage } from "@/components/room/room-controls";
-import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { reconnectDiagnostics, useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 
 /**
@@ -85,8 +85,24 @@ export function SpeakerMediaActivationPrompt({
 
   if (!needsMediaActivation) return null;
 
+  // Un-gated diagnostic showing exactly what this prompt received for
+  // the viewer's own seat — see reconnectDiagnostics' own doc comment.
+  // Rendered whenever this prompt renders at all, i.e. exactly when "Tap
+  // to reconnect" is on screen, so a screenshot of the missing-countdown
+  // report always includes it. Reuses `remainingSeconds` verbatim — the
+  // exact value already driving the visible countdown text below, so the
+  // diagnostic can never disagree with what's actually on screen.
+  const diag = reconnectDiagnostics(disconnectedAt, remainingSeconds);
+
   return (
     <div className="pointer-events-none absolute inset-x-0 top-1/2 z-10 flex -translate-y-1/2 flex-col items-center gap-1.5 px-4">
+      <div
+        data-testid="diagnostic-speaker-reconnect"
+        className="pointer-events-none rounded bg-amber-700/90 px-1.5 py-0.5 font-mono text-[8px] leading-tight break-all text-white"
+      >
+        raw={diag.raw} parsed={diag.parsed} deadline={diag.deadline} remain={String(diag.remainingSeconds)} active=
+        {String(diag.active)}
+      </div>
       <button
         type="button"
         data-testid="speaker-view-activate-media"

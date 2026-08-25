@@ -264,6 +264,47 @@ describe("SpeakerTile", () => {
       expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent("Speaker reconnecting…");
     });
 
+    it("real-device precedence fix: disconnected_at alone (isReconnecting prop omitted/false) still overrides the generic 'Camera off' placeholder — the seat's own field is authoritative, not a separately-derived flag that could disagree with it", () => {
+      const disconnectedAt = new Date(Date.now() - 2000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={false}
+        />,
+      );
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+      expect(screen.getByTestId("speaker-reconnecting")).toBeInTheDocument();
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent(
+        `Speaker reconnecting · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 2}s`,
+      );
+    });
+
+    it("the on-screen diagnostic strip reports raw/parsed/deadline/remaining/active for a disconnected seat", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      const diag = screen.getByTestId("diagnostic-audience-reconnect");
+      expect(diag).toHaveTextContent(`raw=${disconnectedAt}`);
+      expect(diag).toHaveTextContent("active=true");
+      expect(diag).toHaveTextContent(`remain=${SPEAKER_DISCONNECT_GRACE_SECONDS - 3}`);
+    });
+
+    it("the diagnostic strip reports active=false and no seconds when the seat isn't disconnected at all", () => {
+      render(<SpeakerTile speaker={speaker({ disconnected_at: null })} participant={undefined} isLocal={false} />);
+      const diag = screen.getByTestId("diagnostic-audience-reconnect");
+      expect(diag).toHaveTextContent("raw=null");
+      expect(diag).toHaveTextContent("active=false");
+      expect(diag).toHaveTextContent("remain=null");
+    });
+
     it("renders the remaining seconds derived from the seat's own disconnected_at — the same deadline the returning speaker's own prompt reads from", () => {
       const disconnectedAt = new Date(Date.now() - 3000).toISOString();
       render(

@@ -179,4 +179,37 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       expect(screen.queryByTestId("speaker-reconnect-countdown")).not.toBeInTheDocument();
     });
   });
+
+  describe("on-screen diagnostics (issue #18 real-device finding, 2026-08-25: 'Tap to reconnect' still showed with no countdown on real devices)", () => {
+    it("reports raw/parsed/deadline/remaining/active for a genuine disconnect", () => {
+      const disconnectedAt = new Date(Date.now() - 4000).toISOString();
+      render(
+        <SpeakerMediaActivationPrompt
+          needsMediaActivation={true}
+          activateMedia={vi.fn(async () => {})}
+          mediaError={null}
+          disconnectedAt={disconnectedAt}
+        />,
+      );
+      const diag = screen.getByTestId("diagnostic-speaker-reconnect");
+      expect(diag).toHaveTextContent(`raw=${disconnectedAt}`);
+      expect(diag).toHaveTextContent("active=true");
+      expect(diag).toHaveTextContent(`remain=${SPEAKER_DISCONNECT_GRACE_SECONDS - 4}`);
+    });
+
+    it("reports active=false and no remaining seconds when disconnectedAt is null, even while the prompt itself is showing", () => {
+      render(
+        <SpeakerMediaActivationPrompt
+          needsMediaActivation={true}
+          activateMedia={vi.fn(async () => {})}
+          mediaError={null}
+          disconnectedAt={null}
+        />,
+      );
+      const diag = screen.getByTestId("diagnostic-speaker-reconnect");
+      expect(diag).toHaveTextContent("raw=null");
+      expect(diag).toHaveTextContent("active=false");
+      expect(diag).toHaveTextContent("remain=null");
+    });
+  });
 });

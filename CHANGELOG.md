@@ -7,6 +7,30 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Camera off" could override the reconnect indicator during an active
+  disconnect grace period** — `SpeakerTile`'s reconnecting state was
+  gated by a separately re-derived `isReconnecting` prop that could
+  disagree with the seat's own `disconnected_at` (the same field the
+  countdown itself reads), most concretely whenever the viewer's own
+  LiveKit connection state made `useSpeakerReconnectGrace`'s signal go
+  empty regardless of the actual disconnect. The seat's own
+  `disconnected_at` field is now authoritative for this decision by
+  construction — the prop can only ever add `true`, never suppress it.
+  See DECISIONS.md.
+
+### Added
+
+- **On-screen reconnect diagnostics on both surfaces** — temporary,
+  un-gated (visible on the deployed preview) strips on the speaker's own
+  "Tap to reconnect" prompt and every occupied audience tile, showing
+  the raw `disconnected_at`, its parsed timestamp, the computed
+  deadline, the remaining seconds, and whether the countdown is
+  considered active — always in agreement with what's actually
+  rendered, never a separately-computed number. To be removed once
+  confirmed from a real-device screenshot.
+
 ### Not Yet Fixed
 
 - **Speaker View split-layout bug — still reproduces on real devices as
@@ -24,6 +48,17 @@ separate release cadence to track here.
   `SpeakerStage` instead of another speculative fix, to capture what the
   props actually are the next time this reproduces. See DECISIONS.md.
   **Issue #18 stays open.**
+
+- **Inactive-speaker seat timeout — proposed, not built.** A new product
+  rule (a connected-but-unparticipating speaker shouldn't occupy a
+  scarce seat indefinitely, distinct from the existing 11s disconnect
+  grace period) needs a genuinely new schema/backend surface — mic/
+  camera mute state has no server-observable signal in this app the way
+  LiveKit's disconnect webhook does, so idle detection can only be
+  client-observed and server-recorded, the same authoritative-release
+  shape as the disconnect grace period. Per explicit instruction, this
+  stops at a proposed architecture rather than an unreviewed migration.
+  See DECISIONS.md.
 
 ### Fixed
 

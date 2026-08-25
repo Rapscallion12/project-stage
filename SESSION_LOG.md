@@ -4,6 +4,67 @@ Newest entry first.
 
 ---
 
+## 2026-08-25 — Session 26: Reconnect-countdown root cause fixed; inactive-speaker timeout scoped and stopped per explicit instruction
+
+**Goal**: continue #18 from Session 25's diagnostics-first pass. The user
+reported the reconnect countdown was still missing on both surfaces on
+real devices, asked for the *actual render path* traced with real
+evidence (not re-verified math), asked to keep the split-layout
+diagnostics as-is without another speculative fix, and asked for a new,
+separate "inactive speaker" seat-timeout feature — with an explicit stop
+condition if it needed broader schema/backend changes than expected.
+
+**Reconnect countdown — a real root cause found and fixed**: traced
+`SpeakerTile`'s branch-selection logic (not just the countdown math
+again) and found a genuine divergence: `isReconnecting` was a *separate*
+derivation (`useSpeakerReconnectGrace`'s `reconnectingIdentities`,
+gated by the viewer's own `canConnect`) from the `disconnected_at` field
+the countdown itself already reads — the hook's own doc comment already
+flagged the `canConnect` gate as vestigial. Fixed by making `SpeakerTile`
+OR the two together, so the seat's own authoritative field always wins —
+"reconnect UI must take precedence over Camera off" is now true by
+construction, not by keeping two independent computations in sync by
+hand. Added a new unit test proving the fix: `disconnected_at` set,
+`isReconnecting` prop explicitly `false`, reconnecting UI still shows.
+
+**On-screen diagnostics added to both real render paths** (un-gated,
+visible on the deployed preview): raw `disconnected_at`, parsed
+timestamp, computed deadline, remaining seconds, and an active flag —
+on both the speaker's own "Tap to reconnect" prompt and every occupied
+audience tile. Deliberately reuse the *already-computed* remaining-
+seconds value from the same `useReconnectCountdown` call driving the
+visible text (an early draft used a second, independently-clocked
+`useNow()` instead — a test caught it disagreeing by a second at a
+rounding boundary, which would have made the diagnostic itself
+misleading).
+
+**Split-layout diagnostics (fuchsia/cyan)**: left exactly as they were,
+per explicit instruction — no new speculative fix attempted.
+
+**Inactive-speaker timeout — scoped, then stopped per the user's own
+explicit condition**: walked the design through before writing any code
+(per this project's standing rule). The core finding: disconnect
+detection is server-authoritative because LiveKit's *own* webhook
+reports it; mic/camera mute state has no equivalent server-observable
+signal in this app, so "muted + camera off + no activity" can only be
+client-observed and server-recorded — a genuinely new schema/backend
+surface (a new column, new service-role functions, a new server action,
+a new client activity-detection hook) comparable in size to the entire
+disconnect-grace-period feature. The user's own instruction said to stop
+and report the proposed architecture in exactly this situation, so this
+session ends with a concrete design handed back for confirmation instead
+of an unreviewed migration.
+
+lint/tsc/build/full suite all pass (584/584, 50 files, +9 new tests).
+Deployed a fresh `feature/social-stage-shell` preview.
+
+**Next task**: user confirmation on the inactive-speaker architecture
+proposal before any of it is implemented. Real-device confirmation of
+the reconnect-countdown fix (both "Tap to reconnect · Ns" and "Speaker
+reconnecting · Ns" actually showing correct numbers) and continued
+watch for the split-layout bug (screenshot the fuchsia/cyan strips if it
+reproduces). Do not move #18 to Done until confirmed.
+
 ## 2026-08-24 — Session 25: Real-device retest of #18 — all three findings still reported; audience countdown shipped, split-layout bug explicitly not resolved
 
 **Goal**: pick up after the hydration-race fix and countdown work

@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { remainingGraceSeconds, useReconnectCountdown } from "./use-reconnect-countdown";
+import { reconnectDiagnostics, remainingGraceSeconds, useReconnectCountdown } from "./use-reconnect-countdown";
 import { SPEAKER_DISCONNECT_GRACE_MS, SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 describe("remainingGraceSeconds (issue #18 reconnect-countdown finding)", () => {
@@ -29,6 +29,41 @@ describe("remainingGraceSeconds (issue #18 reconnect-countdown finding)", () => 
     const now = Date.now();
     const disconnectedAt = new Date(now - (SPEAKER_DISCONNECT_GRACE_MS - 500)).toISOString(); // 500ms left
     expect(remainingGraceSeconds(disconnectedAt, now)).toBe(1);
+  });
+});
+
+describe("reconnectDiagnostics (issue #18 real-device finding, 2026-08-25)", () => {
+  it("reports inactive/null for every field when there's no disconnect", () => {
+    expect(reconnectDiagnostics(null, null)).toEqual({
+      raw: "null",
+      parsed: "n/a",
+      deadline: "n/a",
+      remainingSeconds: null,
+      active: false,
+    });
+  });
+
+  it("reports the raw value verbatim, a parsed ISO timestamp, and a deadline exactly GRACE_MS later", () => {
+    const now = Date.now();
+    const disconnectedAt = new Date(now - 4000).toISOString();
+    const diag = reconnectDiagnostics(disconnectedAt, SPEAKER_DISCONNECT_GRACE_SECONDS - 4);
+    expect(diag.raw).toBe(disconnectedAt);
+    expect(diag.parsed).toBe(new Date(disconnectedAt).toISOString());
+    expect(diag.deadline).toBe(new Date(new Date(disconnectedAt).getTime() + SPEAKER_DISCONNECT_GRACE_MS).toISOString());
+    expect(diag.remainingSeconds).toBe(SPEAKER_DISCONNECT_GRACE_SECONDS - 4);
+    expect(diag.active).toBe(true);
+  });
+
+  it("passes the caller's remainingSeconds through verbatim — never recomputed from a second, independently-clocked now that could disagree with what's on screen", () => {
+    const disconnectedAt = new Date(Date.now() - 4000).toISOString();
+    expect(reconnectDiagnostics(disconnectedAt, 999).remainingSeconds).toBe(999);
+  });
+
+  it("marks an unparseable raw value as invalid instead of throwing or silently showing a wrong deadline", () => {
+    const diag = reconnectDiagnostics("not-a-real-timestamp", null);
+    expect(diag.raw).toBe("not-a-real-timestamp");
+    expect(diag.parsed).toBe("invalid");
+    expect(diag.deadline).toBe("invalid");
   });
 });
 

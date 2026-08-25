@@ -3,6 +3,109 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-25 — Reconnect-countdown precedence fixed at its actual root cause; on-screen diagnostics added to both surfaces; inactive-speaker timeout scoped but not built (stop-and-report)
+
+**Context**: a further real-device retest still showed "Tap to reconnect"
+(speaker) and "Camera off" (audience) with no countdown, even though the
+previous round's live-database script had already proven the DB/Realtime
+pipeline delivers `disconnected_at` correctly. The user asked for the
+*actual render path* to be traced with real evidence, not re-verified
+math, plus a new, separate inactive-speaker-timeout feature.
+
+**Root cause found — a real, provable divergence, not a timing
+mystery**: `SpeakerTile`'s reconnecting-vs-"Camera off" branch was gated
+by an `isReconnecting` *prop*, computed in `SpeakerStage` from
+`reconnectingIdentities` (`useSpeakerReconnectGrace`'s returned Set) —
+an independently re-derived signal from the *same* `speakers[].disconnected_at`
+data `SpeakerTile` already reads directly for its own countdown number.
+Two separately-maintained computations of the same fact, exactly the
+architecture smell `lib/participant-role.ts`'s own doc comment already
+named for a different pair of values. The concrete divergence source:
+`useSpeakerReconnectGrace`'s `disconnected` map returns *entirely empty*
+whenever its own `enabled` (`canConnect`) parameter is false — despite
+the hook's own doc comment already noting this gating is vestigial
+("kept for interface parity even though the hook's own derivation no
+longer depends on this tab's own LiveKit connection state at all"). Any
+viewer whose own `canConnect` isn't true at read time sees *no*
+reconnecting indicator for *any* seat, regardless of what
+`disconnected_at` actually says.
+
+**Decision**: `SpeakerTile` now derives its own effective reconnecting
+state as `isReconnectingProp || Boolean(speaker?.disconnected_at)` — the
+seat's own authoritative field always wins, and the existing prop can
+only ever add `true`, never suppress a `true` the field itself
+establishes. This makes "reconnect UI must take precedence over generic
+media-off UI" true by construction from one field, not by keeping two
+independent derivations in sync by hand — no dependency on
+`canConnect`/`reconnectingIdentities` remains in the *display* decision.
+`useSpeakerReconnectGrace`/`reconnectingIdentities` are kept exactly as
+they were (not removed, to avoid a 15-file prop-plumbing refactor this
+pass didn't need) — they still do real, separate work: scheduling the
+per-disconnect `setTimeout` that triggers the server-side eviction
+check. Only the *rendering* decision no longer trusts that intermediary.
+
+**Diagnostics added to both real render paths** (un-gated, visible on
+the deployed preview, per explicit request): a new pure
+`reconnectDiagnostics(disconnectedAt, remainingSeconds)` in
+`use-reconnect-countdown.ts` — deliberately takes the *already-computed*
+`remainingSeconds` from the same `useReconnectCountdown` call already
+driving the visible text, rather than recomputing it from a second,
+independently-clocked "now" (an early draft did exactly that via a
+ticking `useNow()`, and a test caught the two disagreeing by a second at
+a rounding boundary — the diagnostic must never be able to show a
+different number than what's actually on screen). Rendered as an amber
+strip in both `SpeakerMediaActivationPrompt`
+(`diagnostic-speaker-reconnect`) and `SpeakerTile`
+(`diagnostic-audience-reconnect`, rendered unconditionally whenever a
+seat is occupied — not just inside the reconnecting branch — specifically
+so it's visible even in the "Camera off" branch the bug report pointed
+at). Shows raw `disconnected_at`, parsed ISO timestamp, computed
+deadline, remaining seconds, and an active flag, exactly the five things
+requested.
+
+**Split-layout diagnostics (fuchsia/cyan) kept, unchanged, per explicit
+instruction** — no new speculative fix attempted; the bug hasn't
+reproduced with the diagnostics live yet.
+
+**Inactive-speaker timeout — scoped, not implemented, per the user's own
+stop condition**: designing this out loud (per this project's own
+standing rule for cross-system state) surfaced that "connected but
+functionally absent" cannot be detected the same way disconnection is.
+`disconnected_at` is server-authoritative because it's LiveKit's *own*
+webhook reporting a fact LiveKit's server observed; mic/camera mute
+state has no equivalent server-observable signal available to this app
+— LiveKit's webhook event set here doesn't deliver track-mute
+transitions, so "muted + camera off + no activity" can only ever be
+*observed* client-side and *reported* to the server, which then owns the
+authoritative clock and release decision the same way
+`checkAndEvictDisconnectedSpeaker`/`release_expired_disconnected_speaker`
+already work for disconnects. That's a genuinely new schema/backend
+surface — a new nullable timestamp column, three new
+service-role-only SQL functions mirroring the disconnect-grace
+migration's shape, a new server action for the client to report
+idle/active transitions, and a new client-side activity-detection hook
+— comparable in size to the entire disconnect-grace-period feature,
+which was itself a dedicated migration. Per the user's own explicit
+instruction ("if implementing this cleanly requires broader
+schema/backend changes than expected, stop and report the proposed
+architecture"), this round stops here with a concrete proposed design
+(see the session's own handoff message) rather than writing the
+migration unreviewed.
+
+**Verification honesty**: automated (tsc, lint, full suite — 584/584
+across 50 files, +9 new tests covering the precedence fix and both
+diagnostic strips, production build) all pass. The precedence fix
+removes a *provable* divergence source with a concrete before/after unit
+test (`speaker.disconnected_at` set, `isReconnecting` prop explicitly
+`false`, reconnecting UI still shows) — this is a real fix, not a
+diagnostic-only pass, for the "Camera off overriding reconnect UI" half
+of the report. Whether the *speaker's own* "Tap to reconnect" now
+reliably carries a countdown (which depends on `disconnected_at`
+actually reaching the client in time, not just being displayed
+correctly once it has) is still real-device-only — the diagnostic strip
+exists specifically to capture that if it recurs. Issue #18 stays in
+Testing / Review.
+
 ## 2026-08-24 — Real-device retest reproduced all three #18 failures; audience reconnect countdown shipped, issue 1 explicitly NOT resolved
 
 **Context**: after the hydration-race fix and countdown work below (the
