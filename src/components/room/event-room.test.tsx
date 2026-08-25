@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventRoom } from "./event-room";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
@@ -39,10 +39,14 @@ const {
   mockHasMountedOnClient,
   mockIsDesktopViewport,
   mockOrientation,
+  mockRefetchSpeakers,
+  mockJoinOpenSeat,
 } = vi.hoisted(() => ({
   mockHasMountedOnClient: vi.fn(() => false),
   mockIsDesktopViewport: vi.fn(() => false),
   mockOrientation: vi.fn(() => "portrait" as "portrait" | "landscape"),
+  mockRefetchSpeakers: vi.fn(async () => {}),
+  mockJoinOpenSeat: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-has-mounted-on-client", () => ({
@@ -59,6 +63,7 @@ vi.mock("@/hooks/use-active-speakers", () => ({
   useActiveSpeakers: (_eventId: string, initialSpeakers: EventSpeaker[]) => ({
     speakers: initialSpeakers,
     roomStatus: "live",
+    refetch: mockRefetchSpeakers,
   }),
 }));
 vi.mock("@/hooks/use-lobby-realtime", () => ({
@@ -103,15 +108,24 @@ vi.mock("@/lib/dev-demo", () => ({
   isDevToolsAvailable: () => false,
 }));
 vi.mock("@/app/events/[id]/room/actions", () => ({
-  joinOpenSeat: vi.fn(),
+  joinOpenSeat: mockJoinOpenSeat,
   reportSpeakerMediaActive: vi.fn(),
   reportSpeakerMediaInactive: vi.fn(),
   confirmOwnSeatExpiration: vi.fn(),
 }));
 
 vi.mock("@/components/room/portrait-room", () => ({
-  PortraitRoom: (props: { participantRole: string }) => (
-    <div data-testid="portrait-room" data-role={props.participantRole} />
+  // Issue #18 real-device finding (2026-08-27): the tap-empty-seat button
+  // is a deliberate addition to this stand-in — only this composition's
+  // tests exercise handleTapEmptySeat's "already-speaking" contradiction
+  // branch, and every other existing test in this file ignores an
+  // unclicked button, so this is safe to add unconditionally rather than
+  // needing a second, parallel mock just for that describe block.
+  PortraitRoom: (props: { participantRole: string; onTapEmptySeat?: () => void; joinSeatMessage?: string | null }) => (
+    <div data-testid="portrait-room" data-role={props.participantRole}>
+      <button type="button" data-testid="tap-empty-seat" onClick={() => props.onTapEmptySeat?.()} />
+      {props.joinSeatMessage && <p>{props.joinSeatMessage}</p>}
+    </div>
   ),
 }));
 vi.mock("@/components/room/mobile-landscape-room", () => ({
@@ -316,6 +330,60 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
       expect(screen.queryByText("Reconnecting to stage…")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("ownership contradiction: joinOpenSeat finds an active seat while participantRole/mySeatNumber say audience (issue #18 real-device finding, 2026-08-27)", () => {
+    afterEach(() => {
+      mockRefetchSpeakers.mockClear();
+      mockJoinOpenSeat.mockClear();
+    });
+
+    it("reconciles from the server instead of leaving the caller on a dead-end error — there is never a stable render stuck showing 'You're already speaking' while participantRole is audience", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      // getActiveSeatForIdentity (server, expiration-aware) proves this
+      // identity actually owns seat 1 — the exact contradiction the
+      // real-device report captured: this render's own participantRole/
+      // mySeatNumber (derived from useActiveSpeakers' initialSpeakers=[])
+      // says audience/null.
+      mockJoinOpenSeat.mockResolvedValue({ ok: false, reason: "already-speaking", seatNumber: 1 });
+
+      renderEventRoom([]); // isSpeaker=false, mySeatNumber=null — the "audience" side of the contradiction
+      expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "audience");
+
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockJoinOpenSeat).toHaveBeenCalledWith("e1");
+      });
+      // The reconciliation trigger — useActiveSpeakers' own resync (see
+      // its dedicated test file) is what actually corrects the client's
+      // speakers state from here; this proves EventRoom invokes it the
+      // instant the contradiction is proven, rather than rendering a
+      // generic, unrecoverable error message.
+      await waitFor(() => {
+        expect(mockRefetchSpeakers).toHaveBeenCalledTimes(1);
+      });
+      // No dead-end error text anywhere — this is a reconciliation
+      // trigger, not an ordinary rejection surfaced to the user as text.
+      expect(screen.queryByText("You're already speaking.")).not.toBeInTheDocument();
+    });
+
+    it("an ordinary rejection (not the ownership contradiction) still surfaces its own error text and does not trigger a reconciliation refetch", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockJoinOpenSeat.mockResolvedValue({ ok: false, reason: "error", error: "Both seats are currently full." });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(screen.getByText("Both seats are currently full.")).toBeInTheDocument();
+      });
+      expect(mockRefetchSpeakers).not.toHaveBeenCalled();
     });
   });
 });

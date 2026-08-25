@@ -9,6 +9,26 @@ separate release cadence to track here.
 
 ### Fixed
 
+- **"You're already speaking" while the UI showed audience, seat: none**
+  — the "split-layout" report turned out to be a client data-staleness
+  bug, not a rendering bug: `useActiveSpeakers` only ever applied
+  *incremental* Realtime deltas on top of its initial state, with no way
+  to notice or recover from one that never arrived (a routine WebSocket
+  drop/reconnect on mobile networks). `mySeatNumber`/`participantRole`
+  (and everything that already correctly derives from them — Speaker
+  View routing, the role routers) could stay wrong for the rest of a
+  session even though the server's own answer to "does this identity own
+  a seat" was correct the whole time. `useActiveSpeakers` now performs a
+  full resync (not a patch) on every Realtime `SUBSCRIBED` callback —
+  the initial subscription and every automatic reconnect — from the same
+  expiration-aware view the server already trusts, and exposes a
+  `refetch()` for an immediate, explicit trigger. `joinOpenSeat`'s
+  "already holds an active seat" rejection is now a distinct, typed
+  result carrying the real seat number instead of a dead-end error
+  string; `EventRoom` treats it as proof of exactly this contradiction,
+  logs it, and reconciles immediately rather than leaving the user
+  stuck. See DECISIONS.md.
+
 - **A late reconnect after the 11-second deadline could still keep the
   seat** — the root cause of the countdown reaching "· 0s" without
   actually releasing anything: `getActiveSeatForIdentity` (LiveKit token
@@ -98,19 +118,20 @@ separate release cadence to track here.
 
 ### Not Yet Fixed
 
-- **Speaker View split-layout bug — reproduced again on real devices
-  (2026-08-26), with the fuchsia/cyan diagnostics agreeing Speaker
-  View/solo mode was active while the visible stage still showed the
-  split layout.** A third, from-scratch static re-read of
-  `speaker-stage.tsx`'s own render function confirms this remains
-  structurally impossible from a single mounted instance (one ternary,
-  no path renders both) — the diagnostics were expanded this round with
-  per-instance ids, a live cross-instance mount count, and actual
-  rendered tile/seat counts (see "Added" above) specifically to catch
-  whether more than one instance is involved, since that's the only
-  explanation static analysis hasn't already ruled out. Not a fix — the
-  next real-device capture with these diagnostics is what's needed. See
-  DECISIONS.md. **Issue #18 stays open.**
+- **Speaker View "split-layout" report — root cause found and fixed
+  this round, pending real-device reconfirmation.** The instance
+  diagnostics added in the previous round ruled out a double-mounted
+  `SpeakerStage` outright (`liveInstances=1`, and the single instance's
+  own `role`/`renderSolo`/`tiles`/`seats` all self-consistently said
+  "audience, two-tile") — the same on-device capture also showed
+  "You're already speaking" and a live self-preview, proving this was
+  never a rendering bug: `EventRoom`'s own `participantRole`/
+  `mySeatNumber` had genuinely diverged from the server's authoritative
+  answer. See the "Fixed" entry above (`useActiveSpeakers` resync) for
+  the actual fix. Left here, not moved to a plain "Fixed" claim, because
+  only a real device can confirm the original split-layout symptom
+  doesn't reproduce again for a different reason. See DECISIONS.md.
+  **Issue #18 stays open.**
 
 ### Fixed
 

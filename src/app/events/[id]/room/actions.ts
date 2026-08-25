@@ -296,6 +296,22 @@ export async function checkPromotionEligibility(eventId: string): Promise<Promot
 export type JoinOpenSeatResult =
   | { ok: true }
   | { ok: false; reason: "queue-exists" }
+  /**
+   * Issue #18 real-device finding (2026-08-27): a distinct, typed
+   * reason — not folded into the generic `"error"` string case — because
+   * this one means something structurally different: the server just
+   * proved (via `getActiveSeatForIdentity`, the same expiration-aware
+   * check `mintLiveKitToken` uses) that this identity already owns an
+   * active seat, at the exact moment the caller believed otherwise
+   * (`handleTapEmptySeat` only ever calls this when the client's own
+   * `isSpeaker` was false). That's a genuine contradiction between the
+   * server's authoritative state and this client's accumulated
+   * `useActiveSpeakers` state, not an ordinary rejection — carrying
+   * `seatNumber` lets the caller reconcile immediately instead of
+   * leaving the user stuck on a dead-end error. See `EventRoom`'s own
+   * handling of this reason.
+   */
+  | { ok: false; reason: "already-speaking"; seatNumber: 1 | 2 }
   | { ok: false; reason: "error"; error: string };
 
 /**
@@ -336,7 +352,7 @@ export async function joinOpenSeat(eventId: string): Promise<JoinOpenSeatResult>
 
   const alreadySeated = await getActiveSeatForIdentity(eventId, identity);
   if (alreadySeated) {
-    return { ok: false, reason: "error", error: "You're already speaking." };
+    return { ok: false, reason: "already-speaking", seatNumber: alreadySeated.seat_number };
   }
 
   const [activeSpeakers, ranked] = await Promise.all([

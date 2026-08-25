@@ -106,7 +106,7 @@ export function EventRoom({
   initialHasPendingRequest: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
-  const { speakers, roomStatus } = useActiveSpeakers(event.id, initialSpeakers);
+  const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
 
   // Issue #27: lifted above the orientation branch — like every other
   // piece of state here, this must survive a rotation, and RoomControls/
@@ -178,6 +178,32 @@ export function EventRoom({
         // normal request flow instead of being told "no" and left
         // stranded — this is that fallback, not an error.
         setMicRequestMode(true);
+        return;
+      }
+      if (result.reason === "already-speaking") {
+        // Issue #18 real-device finding (2026-08-27): this is proof of a
+        // genuine contradiction, not an ordinary rejection —
+        // getActiveSeatForIdentity (server, expiration-aware) just found
+        // an active seat for an identity this component's own isSpeaker
+        // (derived from useActiveSpeakers' accumulated client state)
+        // believed was audience. The dev-facing invariant this captures:
+        // participantRole/isSpeaker said "audience" while the
+        // authoritative seat lookup said otherwise for the same
+        // identity — that combination should be structurally
+        // impossible once useActiveSpeakers' state is genuinely synced.
+        // Un-gated (not NODE_ENV-conditional) so this is inspectable via
+        // remote devtools on a real device, matching this room's other
+        // real-device diagnostics.
+        console.error(
+          "[EventRoom] contradiction: joinOpenSeat found an active seat for this identity while participantRole/isSpeaker said audience — reconciling from a fresh server read.",
+          { participantRole, isSpeaker, mySeatNumber, authoritativeSeatNumber: result.seatNumber },
+        );
+        // Reconciles this tab's speakers state from the same
+        // authoritative source getActiveSeatForIdentity just read,
+        // instead of leaving the user stuck on a dead-end error — see
+        // useActiveSpeakers' own doc comment for why its accumulated
+        // state could have drifted in the first place.
+        void refetchSpeakers();
         return;
       }
       setJoinSeatMessage(result.error);

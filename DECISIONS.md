@@ -3,6 +3,102 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — The "split-layout" bug was a client-state staleness bug, not a rendering bug: `useActiveSpeakers` now self-heals instead of trusting Realtime deltas forever
+
+**Context**: the instance-tracking diagnostics from the previous round
+worked exactly as intended — they ruled out the double-mount theory
+outright. The captured screenshot showed `liveInstances=1`,
+`role=audience`, `isSpk=false`, `seat=null`, `renderSolo=false`,
+`tiles=2`, `seats=1,2` — a single, correctly-rendering `SpeakerStage`
+instance faithfully reflecting `EventRoom`'s own `participantRole`. At
+the same time, the same identity's own `joinOpenSeat` attempt was
+rejected with "You're already speaking," and their self-preview was
+still live. That combination is only possible if `EventRoom`'s
+computed `mySeatNumber`/`isSpeaker`/`participantRole` had genuinely
+diverged from the server's own authoritative answer to the same
+question — not a rendering bug at all, a **data bug**: the client's own
+copy of "who holds which seat" was wrong.
+
+**Root cause, found by tracing every consumer of "do I own a seat" back
+to its actual source**: `mySeatNumber` (`EventRoom`, via
+`findMySeatNumber`) is derived from `useActiveSpeakers`' `speakers`
+array — `participantRole`/`isSpeaker`/the role routers/Speaker View
+routing all already correctly derive from that one value (this was
+already true before this round; there was no second, independently-
+computed role flag to find). `getActiveSeatForIdentity` (which
+`joinOpenSeat` uses for the "already speaking" check) is a completely
+different, always-fresh server-side read. `useActiveSpeakers` itself had
+no reconciliation mechanism at all: it seeds from `initialSpeakers`
+once, then only ever applies *incremental* `postgres_changes` deltas on
+top, with no path to notice or correct a missed one. Supabase Realtime's
+Postgres-CDC subscriptions are not guaranteed to replay events missed
+during a connection gap — a WebSocket drop and automatic reconnect
+(routine on mobile networks, this project's primary real-device target)
+can silently cause exactly one INSERT or UPDATE to never arrive, after
+which this hook's state is permanently wrong for the rest of that
+mounted session, with nothing to self-correct it. Self-preview being
+visible while `mySeatNumber` said null was never itself wrong — it
+correctly reflected "this tab is genuinely publishing," which is driven
+by LiveKit's own permission push (`syncPublishPermission`), an entirely
+separate channel from the Postgres Realtime subscription — it was a
+symptom of the same underlying cache staleness, not a second bug.
+
+**Decision — one canonical client representation, made trustworthy by
+resyncing rather than assuming**: rather than add a second,
+independently-checked role flag (explicitly rejected — see the
+project's own standing architectural principle,
+`lib/participant-role.ts`'s own doc comment on exactly this smell),
+`useActiveSpeakers` now performs a full, replace-not-patch resync from
+the same `event_speakers_active` view (migration 00000000000018)
+`getActiveSeatForIdentity`/`listActiveSpeakers` already use server-side,
+on every `SUBSCRIBED` callback from its Realtime channel — the initial
+subscription *and* every automatic reconnect after a drop, both moments
+its accumulated deltas could already be stale. It also now exposes a
+`refetch()` for an explicit, immediate trigger.
+
+**Defense in depth, at the one place a contradiction can be proven
+directly**: `joinOpenSeat`'s "already holds an active seat" branch now
+returns a distinct `{ reason: "already-speaking", seatNumber }` (not
+folded into the generic error-string case) instead of a dead-end "You're
+already speaking" message. `EventRoom`'s `handleTapEmptySeat` treats this
+as definitive proof of the exact contradiction captured on-device — logs
+it loudly (un-gated, inspectable via remote devtools on a real phone,
+naming `participantRole`/`isSpeaker`/`mySeatNumber` against the
+server's own `seatNumber`) and immediately calls `refetch()` to
+reconcile, rather than leaving the caller stuck. This is the "invariant/
+dev assertion for the contradiction" in this architecture's actual
+terms: the moment `getActiveSeatForIdentity` and this tab's own
+`participantRole` disagree is exactly the moment `joinOpenSeat` can
+return this reason, so that's where the check and the correction both
+live — a continuously-polled assertion would either duplicate the fix
+uselessly or add real server load for no benefit once the underlying
+staleness is fixed at the source.
+
+**Verification honesty**: automated (tsc, lint, full suite — 656/656
+across 55 files, +10 new tests, production build) all pass, and this
+round's fix is verified more directly than usual: a new fake-Realtime-
+channel test harness (the first in this codebase to mock a channel's
+subscribe-status callback at all) reproduces the *exact* failure mode —
+a seat `initialSpeakers` never had, standing in for a genuinely missed
+Realtime delta — and proves it appears the instant `SUBSCRIBED` fires a
+resync, and again proves `refetch()` performs the identical correction
+on demand. A dedicated `EventRoom` test reproduces the full
+contradiction end to end: `participantRole === "audience"`,
+`joinOpenSeat` returns `already-speaking`, and asserts the reconciliation
+trigger fires with no dead-end error text ever rendered — directly the
+invariant requested ("never a stable render with the identity rejected
+while participantRole is audience"). The split-layout diagnostics
+(fuchsia/cyan/instance-tracking) are unchanged this round, still kept
+per explicit instruction. `claimOpenSeat` (the automatic-promotion path)
+was not given the same distinct-reason treatment this round — its own
+"already holds an active seat" failure is caught generically today; the
+same root-cause fix (the resync) reduces how often *any* path can hit a
+contradiction at all, so this is noted as a smaller possible follow-up,
+not treated as still-broken. Issue #18 stays in Testing / Review — this
+resolves the specific captured evidence, but only a real-device retest
+can confirm the split-layout report itself doesn't reproduce again for
+an entirely different reason.
+
 ## 2026-08-26 — Split-layout instance diagnostics; real expiration enforcement (a stored deadline was never actually blocking a stale reconnect)
 
 **Context**: the user reproduced both remaining #18 bugs on the

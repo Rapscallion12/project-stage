@@ -4,6 +4,57 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 29: The "split-layout" bug was client data staleness, not a rendering bug — `useActiveSpeakers` now self-heals
+
+**Goal**: the previous round's instance-tracking diagnostics worked
+exactly as designed — a real-device capture showed `liveInstances=1`
+with a single, self-consistent `SpeakerStage` instance correctly
+rendering the audience/two-tile composition because `EventRoom`'s own
+`participantRole` said "audience." The same capture also showed "You're
+already speaking" and a live self-preview for the same identity — proof
+this was never a rendering bug, but an upstream ownership/role
+synchronization contradiction: the client's own idea of "do I own a
+seat" had diverged from the server's.
+
+**Root cause**: `mySeatNumber` (`EventRoom`) is the one canonical value
+`participantRole`/`isSpeaker`/Speaker View routing already all
+correctly derived from — there was no second, independently-computed
+role flag to find. The actual bug was upstream of all of that:
+`useActiveSpeakers` only ever applied incremental Realtime deltas on top
+of its initial state, with zero reconciliation mechanism. A routine
+WebSocket drop/reconnect (mobile networks, this project's real-device
+target) can silently cause one Postgres CDC event to never arrive,
+after which this hook's state stays wrong for the rest of the session —
+self-preview being visible while `mySeatNumber` said null was a symptom
+of that staleness, not a second bug (self-preview is driven by LiveKit's
+own permission push, an entirely separate channel).
+
+**Fix, not another role flag**: `useActiveSpeakers` now performs a full
+resync (replace, not patch) from the same `event_speakers_active` view
+the server already trusts, on every Realtime `SUBSCRIBED` callback —
+initial subscription and every reconnect — and exposes `refetch()` for
+an explicit trigger. `joinOpenSeat`'s "already holds an active seat"
+rejection is now a distinct, typed `already-speaking` result carrying
+the real seat number, instead of a dead-end error string; `EventRoom`
+treats it as definitive proof of the exact contradiction captured
+on-device, logs it loudly, and reconciles immediately via `refetch()`.
+
+See DECISIONS.md's "The split-layout bug was a client-state staleness
+bug" entry for the full design.
+
+lint/tsc/build/full suite all pass (656/656, 55 files, +10 new tests,
+including the first test in this codebase to mock a Realtime channel's
+subscribe-status callback — it reproduces the exact missed-delta
+failure mode and proves the resync catches it, and a dedicated
+`EventRoom` test reproduces the full contradiction end to end with no
+dead-end error ever rendered). Deployed a fresh `feature/social-stage-
+shell` preview.
+
+**Next task**: real-device confirmation that the original split-layout
+symptom doesn't reproduce (the diagnostics from the previous round stay
+in place either way, per explicit instruction). Do not move #18 to Done
+until confirmed.
+
 ## 2026-08-26 — Session 28: Split-layout instance diagnostics; found and fixed the real expiration-enforcement gap
 
 **Goal**: the user reproduced both remaining #18 bugs on the
