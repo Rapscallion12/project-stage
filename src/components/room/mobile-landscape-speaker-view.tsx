@@ -105,6 +105,7 @@ export function MobileLandscapeSpeakerView({
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
         soloMode
+        parentComposition="MobileLandscapeSpeakerView"
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />

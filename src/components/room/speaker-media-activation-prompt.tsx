@@ -75,6 +75,19 @@ import type { MediaError } from "@/hooks/use-live-room-connection";
  * (making this whole view unmount) is what actually reflects "gone,"
  * never this number by itself. `null` (not yet known, or genuinely not
  * inactive) shows either prompt without a countdown suffix.
+ *
+ * **At zero, a brief resolving state — never a stuck "· 0s"** (issue #18
+ * expiration-enforcement finding): once `remainingSeconds` hits 0,
+ * `useOwnSeatExpirationConfirmation` (`EventRoom`) is already asking the
+ * server to authoritatively confirm expiration from the same
+ * `inactiveSince` value this component reads — this branch just reflects
+ * that a decision is pending, not still-actionable. Neither
+ * "Tap to reconnect" nor "Resume speaking" renders at 0; both would
+ * imply the tap still means something, when the only real outcomes left
+ * are the seat surviving (this whole prompt stops rendering once
+ * `inactiveSince` clears) or being released (this whole view unmounts
+ * once the seat disappears from `speakers`) — this component never
+ * decides which.
  */
 export function SpeakerMediaActivationPrompt({
   needsMediaActivation,
@@ -112,7 +125,19 @@ export function SpeakerMediaActivationPrompt({
         raw={diag.raw} parsed={diag.parsed} deadline={diag.deadline} remain={String(diag.remainingSeconds)} active=
         {String(diag.active)} needsAct={String(needsMediaActivation)} bothMuted={String(bothMediaMuted)}
       </div>
-      {needsMediaActivation ? (
+      {remainingSeconds === 0 ? (
+        // Issue #18 expiration-enforcement finding: never render a stuck
+        // "· 0s" — at zero, authoritative expiration is being confirmed
+        // server-side (useOwnSeatExpirationConfirmation), and neither
+        // "Tap to reconnect" nor "Resume speaking" is still meaningfully
+        // actionable. Non-interactive on purpose.
+        <div
+          data-testid="speaker-resolving"
+          className="pointer-events-auto rounded-full border border-white/30 bg-black/50 px-4 py-2 text-sm font-medium text-white"
+        >
+          Checking…
+        </div>
+      ) : needsMediaActivation ? (
         <button
           type="button"
           data-testid="speaker-view-activate-media"

@@ -418,7 +418,42 @@ export async function checkAndEvictInactiveSpeaker(
   seatIdentity: SeatIdentity,
 ): Promise<CheckSpeakerReconnectResult> {
   const released = await releaseExpiredInactiveSpeaker(eventId, seatIdentity, SPEAKER_DISCONNECT_GRACE_SECONDS);
+  if (released) {
+    // Issue #18 expiration-enforcement finding: ARCHITECTURE.md's LiveKit
+    // authorization model is explicit that a speaker losing their seat
+    // needs publish rights revoked immediately, not left to their next
+    // token request — this is that live push, for the eviction path
+    // specifically (every other eviction path already had it). Best
+    // effort, matching syncPublishPermission's own contract: if this
+    // identity isn't currently connected, or the push fails, nothing is
+    // left wrong — getActiveSeatForIdentity (now expiration-aware, see
+    // migration 00000000000018) already makes their *next* token request
+    // self-correct to canPublish: false regardless.
+    await syncPublishPermission({ eventId, identity: seatIdentity, canPublish: false });
+  }
   return { evicted: released !== null };
+}
+
+/**
+ * Issue #18 expiration-enforcement finding: the returning speaker's own
+ * confirmation trigger — called by their own client the instant its
+ * local countdown reaches zero, so an identity that's otherwise alone in
+ * the room (no co-speaker or audience member around to schedule
+ * `checkAndEvictInactiveSpeaker` on their behalf — `useSpeakerReconnectGrace`
+ * deliberately never watches the viewer's own seat) still gets its
+ * expiration confirmed promptly instead of waiting on some other
+ * client's timer. Resolves the caller's own identity server-side, same
+ * self-service pattern as `leaveSpeakerSeat` — the client asserts
+ * nothing about *whether* it's expired, only *that it wants the current
+ * state confirmed*; `releaseExpiredInactiveSpeaker`'s own atomic
+ * re-derivation from Postgres's clock is what actually decides. Calling
+ * this before the real deadline, or after the seat is already released
+ * (or was never held), is a harmless no-op — same idempotency guarantee
+ * as `checkAndEvictInactiveSpeaker`.
+ */
+export async function confirmOwnSeatExpiration(eventId: string): Promise<CheckSpeakerReconnectResult> {
+  const identity = await resolveIdentity();
+  return checkAndEvictInactiveSpeaker(eventId, identity);
 }
 
 /**

@@ -3,6 +3,128 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-26 — Split-layout instance diagnostics; real expiration enforcement (a stored deadline was never actually blocking a stale reconnect)
+
+**Context**: the user reproduced both remaining #18 bugs on the
+instrumented build, with real evidence this time. (1) The fuchsia/cyan
+diagnostics agreed Speaker View/solo mode was active while the visible
+stage still showed the two-tile split layout — a combination that,
+given a single `SpeakerStage` instance, is structurally impossible from
+its own render function (one ternary, no path renders both). (2) The
+countdown correctly reached "Tap to reconnect · 0s," but the old
+occupant could still reconnect and keep the seat afterward — proving the
+countdown/render pipeline (fixed in prior rounds) was never the real
+problem; *enforcement* was.
+
+**Problem 1 — instance-level diagnostics, not another role-derivation
+guess**: per explicit instruction, no further participantRole
+speculation. Added a module-level, `useSyncExternalStore`-backed
+registry (`liveSpeakerStageInstances`) that every mounted `SpeakerStage`
+registers into on mount and removes on unmount — every instance's
+diagnostic strip now reports a `useId()`-based `id`, the caller-supplied
+`parentComposition` (all 5 real call sites now identify themselves:
+PortraitRoom, PortraitSpeakerView, MobileLandscapeRoom,
+MobileLandscapeSpeakerView, DesktopRoom), and a live `liveInstances`
+count read off the registry — genuinely live (via `useSyncExternalStore`
+subscription, not a value read once at each instance's own mount) so if
+a second instance is ever mounted, *every* existing instance's strip
+updates immediately, regardless of which one's `position: absolute`
+strip happens to paint on top of the other's. Also added `tiles`/`seats`
+fields computed directly from the same `renderSolo` value the JSX itself
+branches on — the diagnostic cannot disagree with what's actually
+rendered because it's the same value, not a separate description of it.
+New tests prove the structural half of the hard invariant directly:
+`renderSolo=true` renders exactly one `speaker-tile` and no divider,
+full stop — this was already true from a second from-scratch read of
+`speaker-stage.tsx`'s return statement (a single ternary, no path
+renders both), so nothing here is a "fix" for problem 1 — it's the
+instrumentation needed to catch it in the act next time it reproduces,
+per the user's own explicit request. **Not claimed fixed.**
+
+**Problem 2 — the actual root cause, confirmed by reading the code
+rather than assuming**: `getActiveSeatForIdentity` (drives LiveKit token
+minting's `canPublish`) and `listActiveSpeakers` (drives `findOpenSeat`'s
+"which seat is open" decision) both only ever checked the base table's
+`left_at is null` — with zero awareness that a row might already be
+*logically* expired (`disconnected_at`/`media_inactive_since` past the
+11s grace) but not yet physically released. `release_expired_inactive_speaker`
+only ever runs when some connected client's local timer estimates the
+deadline and asks the server to check — nothing guaranteed that
+happened at all, let alone before the next reconnect attempt. The old
+occupant's own "Tap to reconnect" mints a *fresh* token on a genuinely
+fresh page load, re-running exactly this vulnerable check.
+
+**Decision — one canonical predicate, applied everywhere ownership is
+decided** (migration `00000000000018`): `is_speaker_seat_active(left_at,
+disconnected_at, media_inactive_since, grace_seconds default 11)` — a
+single `stable` SQL function evaluated against Postgres's own `now()`.
+`event_speakers_active` (a `security_invoker` view) is the read-side:
+`listActiveSpeakers`/`getActiveSeatForIdentity`/`listEventIdsWithActiveSpeakers`
+now select from it instead of the base table, so a stale row simply
+doesn't exist from any of these callers' perspective, regardless of
+whether it's been physically cleaned up. `release_if_expired` is the
+write-side: releases an identity's *own* row first if it's only
+logically active, called at the top of `claim_speaker_seat` and
+`request_to_speak_internal` (both `create or replace`d, same
+signatures) — otherwise the active-identity unique index
+(`event_speakers_active_identity_uniq`) would still physically block a
+legitimate re-entry even after the read side stopped recognizing the
+stale row as owned. `release_expired_inactive_speaker` itself was
+refactored (same signature, same behavior) to delegate its threshold
+check to the same predicate — one rule, not three independently-
+maintained copies of "11 seconds." This directly implements "client may
+trigger cleanup; server decides expiration" — the client (a countdown
+reaching zero, or any connected viewer's scheduled check) only ever
+*asks*; every decision re-derives from Postgres's clock, atomically, in
+the same statement.
+
+**Immediate revocation, per ARCHITECTURE.md's own already-standing
+rule**: `checkAndEvictInactiveSpeaker` now pushes
+`syncPublishPermission({canPublish: false})` on a successful release —
+this was the one eviction path in the app that didn't already do this
+(every other seat-ending path did). Best-effort, matching that
+function's own existing contract: harmless if the identity isn't
+currently connected, since the next token request self-corrects via the
+now-expiration-aware `getActiveSeatForIdentity` regardless.
+
+**Own-seat expiration confirmation**: `useSpeakerReconnectGrace`
+deliberately never schedules a check for the viewer's *own* seat (never
+made sense for a disconnected client to check on itself) — but for the
+*media-inactive-while-still-connected* case, or a speaker alone in the
+room with no one else to trigger a check, nothing was left to confirm
+expiration promptly. New `confirmOwnSeatExpiration` server action
+(self-service, resolves identity server-side, delegates to the same
+`checkAndEvictInactiveSpeaker`) and `useOwnSeatExpirationConfirmation`
+hook (reuses `useReconnectCountdown` directly — never a second timer —
+and fires once per distinct deadline on the transition into 0) close
+this gap.
+
+**UI: no more stuck "· 0s."** Per explicit instruction, both the
+speaker's own prompt and the audience tile now show a brief,
+non-interactive resolving state ("Checking…" / "Speaker inactive —
+resolving…") once the countdown reaches exactly 0, instead of a
+tappable-looking button or a countdown that visually implies more time
+is left. The prompt/tile don't decide the outcome themselves — they stop
+rendering once the seat recovers (`inactiveSince` clears) or the whole
+view unmounts once the seat is actually released.
+
+**Verification honesty**: automated (tsc, lint, full suite — 650/650
+across 54 files, +30 new tests, production build) all pass. The
+expiration-enforcement fix is verified end-to-end against the real
+linked database (`event-speakers-expiration.test.ts`, 10 tests): a row
+past its deadline disappears from the active view even though `left_at`
+is still null; `claim_speaker_seat` correctly evicts a stale occupant
+and lets a new claimant in; the old identity's own reconnect signal
+finds nothing to touch afterward; the guard is idempotent; a genuinely
+active seat is still correctly protected from a duplicate claim; the
+same guard correctly extends to the mic-request path. This is real
+confidence in the mechanism, not a guess. **Problem 1 (split-layout) is
+explicitly NOT claimed fixed** — the diagnostics are instrumentation for
+next capture, not a change in behavior. Whether the *actual on-device*
+reconnect-after-expiry now correctly fails, and whether the resolving
+states read well, are still real-device-only. Issue #18 stays in
+Testing / Review.
+
 ## 2026-08-25 — Unified inactive-speaker model shipped: one product-level `speakerPresence`, reusing the existing 11s grace period for both a LiveKit disconnect and connected-but-both-media-off
 
 **Context**: the previous round's `isReconnecting`-precedence fix and

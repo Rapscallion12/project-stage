@@ -7,7 +7,55 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A late reconnect after the 11-second deadline could still keep the
+  seat** — the root cause of the countdown reaching "· 0s" without
+  actually releasing anything: `getActiveSeatForIdentity` (LiveKit token
+  minting's `canPublish` check) and `listActiveSpeakers` (`findOpenSeat`'s
+  "which seat is open" decision) only ever checked the base table's
+  `left_at is null`, with no awareness that a row could be *logically*
+  expired but not yet physically released — nothing guaranteed
+  `release_expired_inactive_speaker` actually ran at the exact moment a
+  deadline passed. New `is_speaker_seat_active()` predicate and
+  `event_speakers_active` view (migration `00000000000018`) make every
+  ownership-relevant read expiration-aware; `release_if_expired`, folded
+  into `claim_speaker_seat`/`request_to_speak_internal`, does the same
+  for the write side, so a logically-expired row can no longer block a
+  legitimate new claimant via the active-identity unique index either.
+  Verified end-to-end against the real database: a stale reconnect is
+  rejected, a new claimant can take the seat, the old identity can't
+  reclaim it afterward. See DECISIONS.md.
+
 ### Added
+
+- **Immediate publish-permission revocation on expiration** —
+  `checkAndEvictInactiveSpeaker` now pushes a live `canPublish: false`
+  to the evicted participant on a successful release, matching every
+  other seat-ending path in the app (this was the one that didn't).
+
+- **Own-seat expiration confirmation** — a speaker whose local countdown
+  reaches zero now asks the server to confirm expiration itself, closing
+  the gap where being alone in the room (no co-speaker/audience tab to
+  trigger the check) could leave a stale deadline unconfirmed
+  indefinitely. Client triggers; the server's own atomic re-check from
+  Postgres's clock still decides.
+
+- **No more stuck "· 0s"** — both the speaker's own prompt and the
+  audience tile now show a brief, non-interactive resolving state
+  ("Checking…" / "Speaker inactive — resolving…") once a countdown hits
+  exactly zero, instead of a countdown that implies more time is left or
+  a still-tappable-looking button.
+
+- **Split-layout instance diagnostics** — every mounted `SpeakerStage`
+  now reports a unique instance id, which composition mounted it, a
+  live cross-instance count (updates immediately if a second instance
+  is ever mounted, regardless of which one's diagnostic strip paints on
+  top of the other's), and the actual tile count/seat numbers it
+  rendered — computed from the same value its own JSX branches on, so
+  the diagnostic can't disagree with what's really on screen. Not a fix
+  — instrumentation for the next real-device capture, per explicit
+  instruction not to guess again without new evidence.
 
 - **Unified inactive-speaker model** — a speaker seat is now released
   after the same 11-second grace period for *either* of two causes: a
@@ -50,21 +98,19 @@ separate release cadence to track here.
 
 ### Not Yet Fixed
 
-- **Speaker View split-layout bug — still reproduces on real devices as
-  of the 2026-08-24 retest**, despite the hydration-race fix below. A
-  seated speaker can still land with speaker-specific state (Tap to
-  reconnect, Leave Stage, self-preview) alongside the ordinary two-seat
-  split composition instead of Speaker View. A second, from-scratch
-  static re-read of the whole render path (`EventRoom` →
-  `participant-role.ts` → the role routers → `SpeakerStage`) found no
-  mechanism by which the reported combination could occur — every prop
-  involved is derived from the same single `isSpeaker` value in the same
-  render, with no memoization anywhere in the chain. Temporary, un-gated
-  on-screen diagnostics (visible on the real preview, not hidden in
-  production the way normal dev tools are) were added to `EventRoom` and
-  `SpeakerStage` instead of another speculative fix, to capture what the
-  props actually are the next time this reproduces. See DECISIONS.md.
-  **Issue #18 stays open.**
+- **Speaker View split-layout bug — reproduced again on real devices
+  (2026-08-26), with the fuchsia/cyan diagnostics agreeing Speaker
+  View/solo mode was active while the visible stage still showed the
+  split layout.** A third, from-scratch static re-read of
+  `speaker-stage.tsx`'s own render function confirms this remains
+  structurally impossible from a single mounted instance (one ternary,
+  no path renders both) — the diagnostics were expanded this round with
+  per-instance ids, a live cross-instance mount count, and actual
+  rendered tile/seat counts (see "Added" above) specifically to catch
+  whether more than one instance is involved, since that's the only
+  explanation static analysis hasn't already ruled out. Not a fix — the
+  next real-device capture with these diagnostics is what's needed. See
+  DECISIONS.md. **Issue #18 stays open.**
 
 ### Fixed
 

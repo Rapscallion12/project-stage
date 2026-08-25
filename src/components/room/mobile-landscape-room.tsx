@@ -126,6 +126,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         // mechanism (issue #21), reused rather than a second dimming
         // layer. See PortraitRoom's identical comment.
         scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
+        parentComposition="MobileLandscapeRoom"
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />

@@ -11,6 +11,7 @@ import { useOrientation } from "@/hooks/use-orientation";
 import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
 import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
+import { useOwnSeatExpirationConfirmation } from "@/hooks/use-own-seat-expiration-confirmation";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -339,6 +340,15 @@ export function EventRoom({
     microphoneMuted: connection.microphoneMuted,
     cameraMuted: connection.cameraMuted,
   });
+
+  // Issue #18 expiration-enforcement finding: the returning speaker's
+  // own confirmation trigger — useSpeakerReconnectGrace above
+  // deliberately never schedules an eviction check for the viewer's own
+  // seat, so without this, an identity alone in the room (no co-speaker/
+  // audience tab to trigger it on their behalf) could sit at "· 0s"
+  // indefinitely. Reuses myInactiveSince — the same deadline the visible
+  // countdown itself is derived from — never a second timer.
+  useOwnSeatExpirationConfirmation(event.id, myInactiveSince);
 
   // Issue #22: "Withdraw" (waiting) and "Cancel" (mid-countdown) both route
   // through cancelPromotion — releasing any held-but-unpublished tracks

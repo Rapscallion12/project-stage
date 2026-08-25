@@ -44,6 +44,7 @@ const baseProps = {
   isJoiningSeat: false,
   localVideoTrack: null,
   reconnectingIdentities: new Set<string>(),
+  parentComposition: "TestHarness",
 };
 
 describe("SpeakerStage", () => {
@@ -522,6 +523,127 @@ describe("SpeakerStage", () => {
         />,
       );
       expect(screen.queryByTestId("speaker-inactive")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("hard invariant: renderSolo=true structurally cannot render the two-tile subtree (issue #18 real-device finding, 2026-08-26)", () => {
+    it("renders exactly one speaker-tile and no divider when renderSolo is true (soloMode + a resolved own seat)", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          isSpeaker={true}
+          mySeatNumber={1}
+          soloMode
+        />,
+      );
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+    });
+
+    it("renders exactly two speaker-tile wrappers and a divider when renderSolo is false (ordinary two-tile layout)", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          isSpeaker={false}
+          mySeatNumber={null}
+          soloMode={false}
+        />,
+      );
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+      expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
+    });
+
+    it("the diagnostic strip's tiles/seats fields match the actual DOM tile count exactly, in both modes — the diagnostic cannot lie about what's rendered because it's computed from the same renderSolo value the JSX branches on", () => {
+      const { rerender } = render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          isSpeaker={true}
+          mySeatNumber={1}
+          soloMode
+        />,
+      );
+      let diag = screen.getByTestId("diagnostic-speaker-stage");
+      expect(diag).toHaveTextContent("tiles=1");
+      expect(diag).toHaveTextContent("seats=2");
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+
+      rerender(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: "p1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: "p2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          isSpeaker={false}
+          mySeatNumber={null}
+          soloMode={false}
+        />,
+      );
+      diag = screen.getByTestId("diagnostic-speaker-stage");
+      expect(diag).toHaveTextContent("tiles=2");
+      expect(diag).toHaveTextContent("seats=1,2");
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+    });
+  });
+
+  describe("instance tracking diagnostics (issue #18 real-device finding, 2026-08-26: role/solo props agreed on Speaker View while the visible stage still showed the split layout)", () => {
+    it("the diagnostic strip reports the parentComposition the caller identified itself as", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1, profile_id: "p1" })]}
+          orientation="portrait"
+          {...baseProps}
+          parentComposition="PortraitSpeakerView"
+        />,
+      );
+      expect(screen.getByTestId("diagnostic-speaker-stage")).toHaveTextContent("parent=PortraitSpeakerView");
+    });
+
+    it("reports liveInstances=1 for a single mounted instance, and liveInstances=2 while a second instance is simultaneously mounted — proof independent of which strip is visually on top", () => {
+      const { unmount: unmountA } = render(
+        <SpeakerStage speakers={[]} orientation="portrait" {...baseProps} parentComposition="First" />,
+      );
+      expect(screen.getByTestId("diagnostic-speaker-stage")).toHaveTextContent("liveInstances=1");
+
+      const { unmount: unmountB } = render(
+        <SpeakerStage speakers={[]} orientation="portrait" {...baseProps} parentComposition="Second" />,
+      );
+      const strips = screen.getAllByTestId("diagnostic-speaker-stage");
+      expect(strips).toHaveLength(2);
+      // Both instances' own registry read reflects the same, current global count.
+      for (const strip of strips) expect(strip).toHaveTextContent("liveInstances=2");
+
+      unmountA();
+      expect(screen.getByTestId("diagnostic-speaker-stage")).toHaveTextContent("liveInstances=1");
+      unmountB();
+    });
+
+    it("reports a distinct instance id per mount, and a fresh id after unmount/remount", () => {
+      const { unmount } = render(
+        <SpeakerStage speakers={[]} orientation="portrait" {...baseProps} parentComposition="A" />,
+      );
+      const firstId = screen.getByTestId("diagnostic-speaker-stage").textContent;
+      unmount();
+
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} parentComposition="A" />);
+      const secondId = screen.getByTestId("diagnostic-speaker-stage").textContent;
+      expect(secondId).not.toBe(firstId);
     });
   });
 });

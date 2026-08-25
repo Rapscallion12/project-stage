@@ -4,6 +4,66 @@ Newest entry first.
 
 ---
 
+## 2026-08-26 — Session 28: Split-layout instance diagnostics; found and fixed the real expiration-enforcement gap
+
+**Goal**: the user reproduced both remaining #18 bugs on the
+instrumented build with real evidence for the first time. (1) The
+fuchsia/cyan diagnostics agreed Speaker View/solo mode was active while
+the visible stage still showed the two-tile split layout. (2) The
+countdown correctly reached "Tap to reconnect · 0s," but the old
+occupant could still reconnect and keep the seat — proving the
+countdown/render pipeline (already fixed) was never the actual problem;
+enforcement was.
+
+**Split-layout bug**: re-read `speaker-stage.tsx`'s render function a
+third time — confirmed again it's structurally impossible for a single
+mounted instance to render both layouts (one ternary, no shared path).
+Per explicit instruction, did not attempt another speculative fix.
+Instead added a `useSyncExternalStore`-backed module registry every
+mounted `SpeakerStage` joins on mount and leaves on unmount: each
+instance's diagnostic strip now shows a `useId()`-based instance id,
+which composition mounted it (all 5 real call sites now self-identify),
+a *live* cross-instance mount count (updates immediately on any
+instance's mount/unmount, not just at its own), and the actual rendered
+tile count/seat numbers, computed from the same `renderSolo` value the
+JSX itself branches on. New tests prove the structural half directly.
+**Not claimed fixed — instrumentation for the next capture.**
+
+**Expiration enforcement — the real bug, found by reading the actual
+code path**: `getActiveSeatForIdentity` (drives LiveKit token minting's
+`canPublish`) and `listActiveSpeakers` (drives `findOpenSeat`) both only
+ever checked `left_at is null` — with zero awareness that a row could be
+*logically* expired but not yet physically released, since nothing
+guaranteed `release_expired_inactive_speaker` ran at the exact deadline
+moment. New `is_speaker_seat_active()` predicate + `event_speakers_active`
+view (migration `00000000000018`) make every ownership-relevant read
+expiration-aware; `release_if_expired`, folded into `claim_speaker_seat`
+and `request_to_speak_internal`, does the same for the write side (an
+identity's own stale row no longer blocks the unique index from a
+legitimate re-entry). Also added: immediate `canPublish: false` push on
+a successful eviction (the one path in the app missing this, per
+ARCHITECTURE.md's own standing rule); a new
+`useOwnSeatExpirationConfirmation` hook so a speaker alone in the room
+(no one else to trigger the existing scheduled check) still gets their
+own expiration confirmed promptly; and a "resolving" state on both
+surfaces so the countdown never sits stuck at "· 0s."
+
+See DECISIONS.md's "Split-layout instance diagnostics; real expiration
+enforcement" entry for the full design.
+
+lint/tsc/build/full suite all pass (650/650, 54 files, +30 new tests,
+including 10 tests against the real linked database proving the
+expiration fix end-to-end: a stale reconnect is rejected, a new
+claimant can take the seat, the old identity can't reclaim it, the
+guard is idempotent and doesn't affect a genuinely active seat).
+Deployed a fresh `feature/social-stage-shell` preview.
+
+**Next task**: real-device confirmation of exactly the user's stated
+plan — reproduce Speaker View and check the expanded cyan diagnostics;
+let inactivity count to zero; try to reconnect after zero; confirm
+rejection/return to audience; confirm another participant can take the
+expired seat. Do not move #18 to Done until confirmed.
+
 ## 2026-08-25 — Session 27: Unified inactive-speaker model shipped, reusing the existing 11s grace period for both LiveKit disconnect and both-media-off
 
 **Goal**: continue #18 with a simplified product direction, explicitly

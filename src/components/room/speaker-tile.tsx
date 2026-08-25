@@ -280,7 +280,14 @@ export function SpeakerTile({
             {initials(speaker.display_name)}
           </div>
           <p className="text-xs" data-testid="audience-inactive-countdown">
-            Speaker inactive{reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}
+            {reconnectSecondsRemaining === 0
+              ? // Issue #18 expiration-enforcement finding: never a stuck
+                // "· 0s" here either — authoritative expiration is being
+                // confirmed (the seat's own occupant already triggers
+                // this; see useOwnSeatExpirationConfirmation), and this
+                // tile has nothing further to decide either way.
+                "Speaker inactive — resolving…"
+              : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
           </p>
         </div>
       ) : (

@@ -300,7 +300,63 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      event_speakers_active: {
+        Row: {
+          disconnected_at: string | null
+          display_name: string | null
+          event_id: string | null
+          guest_id: string | null
+          id: string | null
+          joined_at: string | null
+          left_at: string | null
+          left_reason: string | null
+          media_inactive_since: string | null
+          profile_id: string | null
+          seat_number: number | null
+        }
+        Insert: {
+          disconnected_at?: string | null
+          display_name?: string | null
+          event_id?: string | null
+          guest_id?: string | null
+          id?: string | null
+          joined_at?: string | null
+          left_at?: string | null
+          left_reason?: string | null
+          media_inactive_since?: string | null
+          profile_id?: string | null
+          seat_number?: number | null
+        }
+        Update: {
+          disconnected_at?: string | null
+          display_name?: string | null
+          event_id?: string | null
+          guest_id?: string | null
+          id?: string | null
+          joined_at?: string | null
+          left_at?: string | null
+          left_reason?: string | null
+          media_inactive_since?: string | null
+          profile_id?: string | null
+          seat_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "event_speakers_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "event_speakers_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       claim_speaker_seat: {
@@ -357,6 +413,15 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      is_speaker_seat_active: {
+        Args: {
+          p_disconnected_at: string
+          p_grace_seconds?: number
+          p_left_at: string
+          p_media_inactive_since: string
+        }
+        Returns: boolean
       }
       leave_speaker_seat: {
         Args: { p_event_id: string }
@@ -553,6 +618,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      release_if_expired: {
+        Args: { p_event_id: string; p_guest_id: string; p_profile_id: string }
+        Returns: undefined
       }
       request_to_speak: {
         Args: { p_body: string; p_event_id: string }

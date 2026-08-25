@@ -106,6 +106,7 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
   joinOpenSeat: vi.fn(),
   reportSpeakerMediaActive: vi.fn(),
   reportSpeakerMediaInactive: vi.fn(),
+  confirmOwnSeatExpiration: vi.fn(),
 }));
 
 vi.mock("@/components/room/portrait-room", () => ({

@@ -91,6 +91,7 @@ export function DesktopRoom({
             isJoiningSeat={isJoiningSeat}
             localVideoTrack={localVideoTrack}
             reconnectingIdentities={reconnectingIdentities}
+            parentComposition="DesktopRoom"
           />
         </div>
         {joinSeatMessage && (

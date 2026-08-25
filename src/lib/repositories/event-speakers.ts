@@ -76,18 +76,26 @@ export type EventSpeaker = {
 };
 
 /**
- * Currently-occupied seats for an event (left_at is null). Still a plain
- * read — the table itself has no insert/update grant (see migration
- * 00000000000005); every write goes through one of the functions below
- * instead, never a direct `.insert()`/`.update()` here.
+ * Currently-occupied seats for an event. Still a plain read — the table
+ * itself has no insert/update grant (see migration 00000000000005);
+ * every write goes through one of the functions below instead, never a
+ * direct `.insert()`/`.update()` here.
+ *
+ * Issue #18 expiration-enforcement finding: reads from
+ * `event_speakers_active` (migration 00000000000018), not the base
+ * table's own `left_at is null` — a row whose inactivity deadline has
+ * already passed no longer counts as active here, even if it hasn't
+ * been physically released yet. This is what `findOpenSeat`
+ * (`room/actions.ts`) actually decides "is this seat open" from, so an
+ * expired-but-not-yet-cleaned-up occupant no longer blocks a genuine new
+ * claimant from being offered that seat.
  */
 export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[]> {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("event_speakers")
+    .from("event_speakers_active")
     .select("*")
     .eq("event_id", eventId)
-    .is("left_at", null)
     .order("seat_number", { ascending: true });
   return (data ?? []) as EventSpeaker[];
 }
@@ -103,11 +111,13 @@ export async function listEventIdsWithActiveSpeakers(eventIds: string[]): Promis
   if (eventIds.length === 0) return new Set();
   const supabase = await createClient();
   const { data } = await supabase
-    .from("event_speakers")
+    .from("event_speakers_active")
     .select("event_id")
-    .in("event_id", eventIds)
-    .is("left_at", null);
-  return new Set((data ?? []).map((row) => row.event_id));
+    .in("event_id", eventIds);
+  // event_id is NOT NULL on the base table; Supabase's type generator
+  // just can't express that through a view — see this file's other view
+  // reads for the same cast pattern.
+  return new Set((data ?? []).map((row) => row.event_id as string));
 }
 
 /**
@@ -116,16 +126,26 @@ export async function listEventIdsWithActiveSpeakers(eventIds: string[]): Promis
  * token endpoint (issues #2/#16) to decide `canPublish`; a targeted query
  * rather than filtering `listActiveSpeakers()` client-side, since it
  * expresses the actual question being asked.
+ *
+ * Issue #18 expiration-enforcement finding: reads from
+ * `event_speakers_active` (migration 00000000000018), the same
+ * expiration-aware view `listActiveSpeakers` uses, not the base table's
+ * `left_at is null`. This is the exact check `mintLiveKitToken`'s
+ * `determineCanPublish` runs on every token request (including a
+ * returning speaker's "Tap to reconnect," which mints a fresh token on a
+ * genuinely fresh page/tab) — an identity whose inactivity deadline has
+ * already passed now correctly reads as having no active seat here, so
+ * a stale reconnect can no longer be granted `canPublish: true` just
+ * because the physical row hadn't been released yet.
  */
 export async function getActiveSeatForIdentity(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
   const supabase = await createClient();
   const column = identity.type === "profile" ? "profile_id" : "guest_id";
   const { data } = await supabase
-    .from("event_speakers")
+    .from("event_speakers_active")
     .select("*")
     .eq("event_id", eventId)
     .eq(column, identity.id)
-    .is("left_at", null)
     .maybeSingle();
   return (data as EventSpeaker | null) ?? null;
 }

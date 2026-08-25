@@ -214,7 +214,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       );
     });
 
-    it("never shows a negative countdown once past the deadline — clamped at 0", () => {
+    it("never shows a negative countdown, or a stuck '0s' — clamps at 0 and moves into the resolving state instead (issue #18 expiration-enforcement finding)", () => {
       const inactiveSince = new Date(Date.now() - (SPEAKER_DISCONNECT_GRACE_MS + 5000)).toISOString();
       render(
         <SpeakerMediaActivationPrompt
@@ -225,7 +225,9 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
           inactiveSince={inactiveSince}
         />,
       );
-      expect(screen.getByTestId("speaker-reconnect-countdown")).toHaveTextContent("0s");
+      expect(screen.getByTestId("speaker-resolving")).toHaveTextContent("Checking…");
+      expect(screen.queryByTestId("speaker-view-activate-media")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-reconnect-countdown")).not.toBeInTheDocument();
     });
 
     it("recovering (inactiveSince clearing to null) removes the countdown immediately", () => {
@@ -285,6 +287,38 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       expect(diag).toHaveTextContent("raw=null");
       expect(diag).toHaveTextContent("active=false");
       expect(diag).toHaveTextContent("remain=null");
+    });
+  });
+
+  describe("resolving state at zero (issue #18 expiration-enforcement finding: a countdown that reaches zero must not stay actionable forever)", () => {
+    it("bothMediaMuted at zero also resolves to 'Checking…', not a stuck 'Resume speaking · 0s'", () => {
+      const inactiveSince = new Date(Date.now() - (SPEAKER_DISCONNECT_GRACE_MS + 2000)).toISOString();
+      render(
+        <SpeakerMediaActivationPrompt
+          needsMediaActivation={false}
+          bothMediaMuted={true}
+          activateMedia={vi.fn(async () => {})}
+          mediaError={null}
+          inactiveSince={inactiveSince}
+        />,
+      );
+      expect(screen.getByTestId("speaker-resolving")).toHaveTextContent("Checking…");
+      expect(screen.queryByTestId("speaker-resume-speaking")).not.toBeInTheDocument();
+    });
+
+    it("still shows the actionable prompt at 1 second remaining — only exactly 0 triggers resolving", () => {
+      const inactiveSince = new Date(Date.now() - (SPEAKER_DISCONNECT_GRACE_MS - 1000)).toISOString();
+      render(
+        <SpeakerMediaActivationPrompt
+          needsMediaActivation={true}
+          bothMediaMuted={false}
+          activateMedia={vi.fn(async () => {})}
+          mediaError={null}
+          inactiveSince={inactiveSince}
+        />,
+      );
+      expect(screen.getByTestId("speaker-view-activate-media")).toHaveTextContent("1s");
+      expect(screen.queryByTestId("speaker-resolving")).not.toBeInTheDocument();
     });
   });
 });

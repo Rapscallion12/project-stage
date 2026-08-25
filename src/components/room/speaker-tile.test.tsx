@@ -401,6 +401,20 @@ describe("SpeakerTile", () => {
       );
     });
 
+    it("shows a resolving state, not a stuck '· 0s', once the countdown reaches zero (issue #18 expiration-enforcement finding)", () => {
+      const disconnectedAt = new Date(Date.now() - (SPEAKER_DISCONNECT_GRACE_SECONDS + 5) * 1000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("Speaker inactive — resolving…");
+      expect(screen.getByTestId("audience-inactive-countdown")).not.toHaveTextContent("0s");
+    });
+
     it("the countdown disappears the instant the seat is released — a null speaker renders the empty-seat state, not a stale countdown", () => {
       const disconnectedAt = new Date(Date.now() - 3000).toISOString();
       const { rerender } = render(
