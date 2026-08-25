@@ -4,6 +4,61 @@ Newest entry first.
 
 ---
 
+## 2026-08-24 — Session 25: Real-device retest of #18 — all three findings still reported; audience countdown shipped, split-layout bug explicitly not resolved
+
+**Goal**: pick up after the hydration-race fix and countdown work
+(previous entry) with a real-device retest. The user retested on a
+speaker phone and a separate audience/observer device and reported all
+three original findings still present: (1) the split-layout bug still
+occasionally reproduces alongside speaker-specific state; (2) the
+returning speaker's "Tap to reconnect" prompt showed no countdown; (3)
+the audience had no visibility into a disconnected speaker's remaining
+grace time. Explicit instructions: no new speculative boolean/test
+around `participantRole`; do not call the split-layout bug fixed on
+unit tests alone; add real on-screen diagnostics if needed.
+
+**Split-layout bug**: re-derived the entire render path from scratch a
+second time (`EventRoom`, `participant-role.ts`,
+`portrait-room.tsx`/`mobile-landscape-room.tsx`'s role routers,
+`portrait-speaker-view.tsx`, `speaker-stage.tsx`) rather than trust the
+previous pass's conclusion. Confirmed again that every prop in the
+chain — `isSpeaker`, `participantRole`, `mySeatNumber`, `soloMode`,
+`renderSolo` — is provably derived from the same single value in the
+same render, with no memoization anywhere that could make a stale prop
+plausible. No new mechanism found. Added two temporary, un-gated
+on-screen diagnostic strips (visible on the actual Vercel preview) to
+`EventRoom` and `SpeakerStage` showing the exact live values of every
+variable the user asked to trace, so a future reproduction can be
+screenshotted instead of guessed at again. **Not claimed fixed. Issue
+#18 stays open.**
+
+**Reconnect countdown**: ran a real verification script against the
+linked Supabase project confirming `disconnected_at` correctly reaches
+both a plain read and a live Realtime broadcast — ruling out the DB/
+Realtime pipeline as the cause of the missing speaker-side countdown.
+Implemented the audience-side countdown ("Speaker reconnecting · Ns")
+in `SpeakerTile`, reusing the exact same `useReconnectCountdown` hook
+and `disconnected_at` field the speaker's own prompt already used — one
+timer, two displays. Added `reconnect-countdown-full-path.test.tsx`,
+testing against the real linked database: a live disconnected row's
+`disconnected_at`, fetched fresh, drives matching countdown text on
+both the speaker and audience components; reopening ~5s in shows ~5s,
+not a fresh 11; reconnect and expiration both clear the countdown on
+both surfaces, with expiration additionally removing the row itself.
+
+See DECISIONS.md's "Real-device retest reproduced all three #18
+failures" entry for the full investigation detail.
+
+lint/tsc/build/full suite all pass (575/575, 50 files, +11 new tests: 7
+audience-countdown unit tests in `speaker-tile.test.tsx`, 4 real-DB
+full-path tests). Deployed a fresh `feature/social-stage-shell` preview.
+
+**Next task**: real-device confirmation only — the split-layout bug's
+diagnostic strips (screenshot both if it reproduces again), "Tap to
+reconnect · Ns" and "Speaker reconnecting · Ns" actually appearing with
+correct/matching numbers, reconnect-before-expiry, and expiry-after-11s.
+Do not move #18 to Done until confirmed.
+
 ## 2026-08-24 — Session 24: Speaker View (#18) designed and Phase 1 implemented
 
 **Goal**: Pick up where Session 23 left off — Watch Mode's Phase 3 (ambient

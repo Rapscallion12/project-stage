@@ -7,6 +7,24 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Not Yet Fixed
+
+- **Speaker View split-layout bug — still reproduces on real devices as
+  of the 2026-08-24 retest**, despite the hydration-race fix below. A
+  seated speaker can still land with speaker-specific state (Tap to
+  reconnect, Leave Stage, self-preview) alongside the ordinary two-seat
+  split composition instead of Speaker View. A second, from-scratch
+  static re-read of the whole render path (`EventRoom` →
+  `participant-role.ts` → the role routers → `SpeakerStage`) found no
+  mechanism by which the reported combination could occur — every prop
+  involved is derived from the same single `isSpeaker` value in the same
+  render, with no memoization anywhere in the chain. Temporary, un-gated
+  on-screen diagnostics (visible on the real preview, not hidden in
+  production the way normal dev tools are) were added to `EventRoom` and
+  `SpeakerStage` instead of another speculative fix, to capture what the
+  props actually are the next time this reproduces. See DECISIONS.md.
+  **Issue #18 stays open.**
+
 ### Fixed
 
 - **Intermittent Speaker View failure on first/fresh load** — a seated
@@ -23,9 +41,21 @@ separate release cadence to track here.
   state ("Reconnecting to stage…" when already known to be a speaker)
   shows until the client has genuinely settled, so a wrong composition
   is never even briefly committed to. Dev-only logging added around
-  this path. See DECISIONS.md.
+  this path. **This did not fully resolve the real-device report** — see
+  "Not Yet Fixed" above. See DECISIONS.md.
 
 ### Added
+
+- **Audience-visible reconnect countdown** — a disconnected speaker's
+  tile now reads "Speaker reconnecting · 8s" (ticking down) for both the
+  ordinary audience view and a co-speaker's view of the other seat in
+  Speaker View, using the *same* `disconnected_at`-derived deadline as
+  the returning speaker's own "Tap to reconnect · 8s" prompt — one
+  timer, two displays, never two independently-started countdowns.
+  Covered end-to-end against the real linked database (a live
+  `disconnected_at` row feeding matching rendered text on both
+  components, reopening mid-grace-period showing the true remainder,
+  reconnect/expiration clearing both displays). See DECISIONS.md.
 
 - **Reconnect prompt shows the real remaining grace time** — "Tap to
   reconnect" now reads "Tap to reconnect · 8s" (ticking down), derived

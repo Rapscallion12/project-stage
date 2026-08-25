@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
 import { cn } from "@/lib/utils";
+import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
@@ -74,7 +75,7 @@ export function SpeakerTile({
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
   isJoiningSeat?: boolean;
-  /** Real-device reconnect-grace-period finding (issue #18 UX finding: now server-authoritative): true while this seat's occupant has a `disconnected_at` set (the LiveKit webhook's `participant_left` signal) and the server-side grace period hasn't yet expired — see `useSpeakerReconnectGrace`'s own doc comment. Always false for the local viewer's own seat. Shown as "Speaker reconnecting…" instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
+  /** Real-device reconnect-grace-period finding (issue #18 UX finding: now server-authoritative): true while this seat's occupant has a `disconnected_at` set (the LiveKit webhook's `participant_left` signal) and the server-side grace period hasn't yet expired — see `useSpeakerReconnectGrace`'s own doc comment. Always false for the local viewer's own seat. Shown as "Speaker reconnecting…" (issue #18 audience-countdown finding: with the remaining seconds, once known) instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
   isReconnecting?: boolean;
   /**
    * Issue #21 (05 interaction model): portrait gets the new lightweight
@@ -96,6 +97,15 @@ export function SpeakerTile({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Issue #18 audience-countdown finding: the *same* authoritative
+  // disconnected_at this seat's own row already carries (already flowing
+  // through the same Realtime-subscribed `speakers` state the returning
+  // speaker's own "Tap to reconnect · Ns" prompt reads from) — never a
+  // second, independently-started timer. `useReconnectCountdown` returns
+  // null (no suffix) whenever there's nothing to count down, so passing
+  // it unconditionally here is safe regardless of `isReconnecting`.
+  const reconnectSecondsRemaining = useReconnectCountdown(speaker?.disconnected_at ?? null);
 
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
@@ -207,7 +217,9 @@ export function SpeakerTile({
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
             {initials(speaker.display_name)}
           </div>
-          <p className="text-xs">Speaker reconnecting…</p>
+          <p className="text-xs" data-testid="audience-reconnect-countdown">
+            Speaker reconnecting{reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}
+          </p>
         </div>
       ) : (
         <div

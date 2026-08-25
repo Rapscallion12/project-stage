@@ -399,6 +399,23 @@ export function EventRoom({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/*
+       * TEMPORARY on-device diagnostic (issue #18, real-device report of
+       * "speaker controls + split audience stage" surviving multiple
+       * fixes) — deliberately NOT gated by isDevToolsAvailable() (that
+       * gate hides in production/preview builds; this must be visible on
+       * the deployed preview itself). Remove once the real cause is
+       * confirmed from an actual on-device screenshot.
+       */}
+      <div
+        data-testid="diagnostic-event-room"
+        className="pointer-events-none relative z-50 bg-fuchsia-700/90 px-1.5 py-0.5 font-mono text-[9px] leading-tight break-all text-white"
+      >
+        mounted={String(hasMountedOnClient)} desktop={String(isDesktopViewport)} orient={orientation} phase={phase}{" "}
+        role={participantRole} isSpk={String(isSpeaker)} seat={String(mySeatNumber)} myDiscAt=
+        {myDisconnectedAt ?? "null"} canPub={String(connection.canPublish)} needsAct={String(connection.needsMediaActivation)}{" "}
+        connStatus={connection.status}
+      </div>
       <div className="min-h-0 flex-1">
         {!hasMountedOnClient ? (
           // Issue #18 first-load consistency finding: viewport/orientation

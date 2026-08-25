@@ -3,6 +3,133 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-24 — Real-device retest reproduced all three #18 failures; audience reconnect countdown shipped, issue 1 explicitly NOT resolved
+
+**Context**: after the hydration-race fix and countdown work below (the
+entry immediately following this one), the user retested on real devices
+(a speaker phone and a separate observer/audience device) and reported
+all three original findings still reproducing: (1) the split-layout bug
+still occasionally appears alongside speaker-specific state (Tap to
+reconnect, Leave Stage, self-preview) rather than Speaker View; (2) the
+returning speaker's "Tap to reconnect" prompt showed no countdown
+suffix; (3) the audience had no visibility into a disconnected speaker's
+remaining grace time. Explicit instruction: no new speculative
+boolean/test around `participantRole`, no claiming "fixed" from unit
+tests alone.
+
+**Problem 1 investigation (composition/role divergence) — re-derived
+from scratch, no new bug found**: re-read `event-room.tsx`,
+`participant-role.ts`, `portrait-room.tsx`, `mobile-landscape-room.tsx`,
+`portrait-speaker-view.tsx`, and `speaker-stage.tsx` end to end. Confirmed
+the invariant chain that would need to break for the reported combination
+to occur, and found no gap in it: `deriveParticipantRole` returns
+`"speaker"` if-and-only-if `isSpeaker` is true (a pure function of the
+same boolean, recomputed every render, never stored) —
+`participantRole` cannot disagree with `isSpeaker` within one `EventRoom`
+render. Both role routers (`PortraitRoom`, `MobileLandscapeRoom`) gate on
+`participantRole === "speaker"` specifically so they redirect to Speaker
+View in the exact same render `isSpeaker` says so — the audience
+composition's own `isSpeaker`-gated `RoomControls` block is provably
+unreachable in that render, since the role-router `if` returns first.
+Inside Speaker View, `isSpeaker`/`mySeatNumber` are the same two values
+`findMySeatNumber` produced together (never independently re-derived —
+see the previous consistency fix below), and `mySeatNumber !== null` is
+definitionally the same fact as `isSpeaker`, so `SpeakerStage`'s
+`renderSolo = soloMode && mySeatNumber !== null` cannot be false while
+`isSpeaker` is true and `soloMode` (always passed as a bare `true` by
+both `PortraitSpeakerView`/`MobileLandscapeSpeakerView`) is set. No
+`React.memo` exists anywhere in this chain to make a stale prop plausible
+either. Static analysis, a second time, cannot find a concrete mechanism
+— which is evidence the bug isn't in this pipeline's logic at all
+(perhaps a real LiveKit/webhook timing race, a genuinely stale Realtime
+delivery, or something environment-specific to the phone), not evidence
+it doesn't exist.
+
+**Decision — diagnostics over another guess**: per the user's own
+suggestion, added two temporary, un-gated (visible on the real Vercel
+preview, not hidden by `isDevToolsAvailable()`) on-screen overlays:
+`EventRoom` (`data-testid="diagnostic-event-room"`, fuchsia) showing
+`mounted`/`desktop`/`orient`/`phase`/`role`/`isSpk`/`seat`/`myDiscAt`/
+`canPub`/`needsAct`/`connStatus`, and `SpeakerStage`
+(`data-testid="diagnostic-speaker-stage"`, cyan) showing
+`solo`/`seat`/`isSpk`/`renderSolo`. These read already-computed values
+only — no new state, no new boolean, nothing that could itself introduce
+a divergence. If the bug reproduces again, a screenshot of both strips
+tells us directly whether the props genuinely disagree (a real bug in
+this chain, contradicting the static analysis above) or agree with each
+other but disagree with what's on screen (pointing outside this chain
+entirely — CSS, a LiveKit video-attach issue, or similar). **To be
+removed once a real-device screenshot has actually been captured with
+the bug reproducing** — not before.
+
+**Problem 2 investigation (missing speaker-side countdown) — DB/Realtime
+pipeline conclusively ruled out**: wrote and ran a standalone script
+against the real linked Supabase project (`@supabase/supabase-js`,
+anon + service-role clients) that seated a real guest speaker, opened a
+live `postgres_changes` Realtime subscription, called
+`mark_speaker_disconnected`, and logged the received payload. The
+Realtime UPDATE definitively included `disconnected_at` with the correct
+timestamp — the DB schema, RLS/grants, Realtime publication, and payload
+shape are not the cause. Script deleted after use; not committed.
+
+**New hypothesis (unverified without a device)**: `needsMediaActivation`
+(reset by any fresh `useLiveRoomConnection` mount — e.g. a page reload)
+and `disconnected_at` (set only once LiveKit's own server detects a real
+disconnect and fires `participant_left`, with its own detection +
+webhook latency) are independent signals. A reload can make "Tap to
+reconnect" appear before the server has actually started the grace-period
+clock, which would correctly show no suffix (nothing to count down yet)
+for a real but bounded window. Presented as a plausible explanation, not
+a fix — genuinely resolving this needs the same on-device diagnostics
+above, screenshotted at the moment "Tap to reconnect" appears with no
+countdown.
+
+**Problem 3 (audience countdown) — implemented, not just diagnosed**:
+`SpeakerTile` already received the full `speaker: EventSpeaker | null`
+prop (via `SpeakerStage`'s `renderTile()`), which already carries
+`disconnected_at` — no new plumbing. Added
+`useReconnectCountdown(speaker?.disconnected_at ?? null)` (the *same*
+hook already used by the speaker's own `SpeakerMediaActivationPrompt`,
+reading the *same* authoritative field) and changed the "Speaker
+reconnecting…" text to append `· Ns` once known. Because both the
+ordinary two-tile audience view and a co-speaker's view of the other
+seat in Speaker View's `soloMode` render through the same
+`renderTile()`, this covers both perspectives by construction, and
+because it's the same hook/same field as the speaker's own prompt, the
+two displays cannot independently drift out of sync — there is only one
+timer.
+
+**Full data/render path coverage added** (`reconnect-countdown-full-
+path.test.tsx`, real linked DB, `describe.skipIf(!hasServiceCredentials)`
+— same convention as `event-speakers-disconnect-grace.test.ts`): fetches
+a real row's `disconnected_at` from the live project (a direct
+service-client read shaped identically to `listActiveSpeakers`, for the
+same `next/headers` reason `event-speakers-transitions.test.ts` already
+documents) and feeds that *exact* fetched value into real renders of both
+`SpeakerMediaActivationPrompt` and `SpeakerTile`, asserting matching
+text. Covers: a disconnected row driving matching countdown text on both
+components; reopening ~5s in showing ~5s, not a fresh 11; reconnecting
+clearing both immediately (re-fetched row's `disconnected_at` back to
+null); and expiration releasing the seat so the row disappears from a
+fresh fetch entirely, removing both countdown states because there's no
+seat left to render them for, including a stale post-expiry reconnect
+attempt confirmed to still no-op. This is what closes the gap between
+"the hook is correct" and "the UI actually has the timestamp" — a
+synthetic fixture can't catch a real DB/type-shape mismatch; this can.
+
+**Verification honesty**: automated (tsc, lint, full suite — 575/575
+across 50 files including the 4 new real-DB full-path tests, production
+build) all pass. Problems 2 and 3's countdown *math and rendering* are
+now verified end-to-end against the real database, closing exactly the
+gap the user identified ("do not assume the hook being correct means the
+UI has the timestamp"). **Problem 1 (the split-layout bug) is explicitly
+NOT claimed fixed** — nothing shipped this round changes its behavior;
+the diagnostics exist to gather the evidence a fix requires. **Problem
+2's actual on-device behavior** (whether "Tap to reconnect · Ns" now
+genuinely appears, and whether the needsMediaActivation-vs-disconnected_at
+gap theory holds) remains real-device-only. Issue #18 stays in
+Testing / Review, not Done.
+
 ## 2026-08-24 — First-load composition-hydration race fixed; reconnect prompt shows the real remaining grace time (issue #18)
 
 **Problem 1 — intermittent Speaker View failure on first/fresh load**:

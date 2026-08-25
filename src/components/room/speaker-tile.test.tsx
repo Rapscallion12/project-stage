@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Participant, Track, TrackPublication } from "livekit-client";
 import { SpeakerTile } from "./speaker-tile";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -243,6 +244,117 @@ describe("SpeakerTile", () => {
       );
       expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
       expect(container.querySelector("video")).toBeInTheDocument();
+    });
+  });
+
+  describe("audience reconnect countdown (issue #18 real-device finding: the audience saw a disconnected speaker with no indication of when they'd be removed)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows no suffix when disconnected_at is null despite isReconnecting — there's no authoritative deadline yet to count down from", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: null })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent("Speaker reconnecting…");
+    });
+
+    it("renders the remaining seconds derived from the seat's own disconnected_at — the same deadline the returning speaker's own prompt reads from", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent(
+        `Speaker reconnecting · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 3}s`,
+      );
+    });
+
+    it("reopening partway through the grace period shows the actual remainder, not a fresh restart at the full grace period", () => {
+      const disconnectedAt = new Date(Date.now() - 6000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent(
+        `Speaker reconnecting · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 6}s`,
+      );
+    });
+
+    it("ticks down once a second, same as the speaker's own reconnect prompt", async () => {
+      vi.useFakeTimers();
+      const disconnectedAt = new Date().toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent(
+        `Speaker reconnecting · ${SPEAKER_DISCONNECT_GRACE_SECONDS}s`,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent(
+        `Speaker reconnecting · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 1}s`,
+      );
+    });
+
+    it("the countdown disappears the instant the seat is released — a null speaker renders the empty-seat state, not a stale countdown", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      const { rerender } = render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toBeInTheDocument();
+
+      rerender(<SpeakerTile speaker={null} participant={undefined} isLocal={false} isReconnecting={false} />);
+      expect(screen.queryByTestId("audience-reconnect-countdown")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+    });
+
+    it("clears immediately on reconnect — disconnected_at going back to null stops the countdown even while isReconnecting hasn't yet flipped", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      const { rerender } = render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent("·");
+
+      rerender(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: null })}
+          participant={undefined}
+          isLocal={false}
+          isReconnecting={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-reconnect-countdown")).toHaveTextContent("Speaker reconnecting…");
     });
   });
 });

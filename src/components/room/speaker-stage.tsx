@@ -219,6 +219,21 @@ export function SpeakerStage({
 
   return (
     <div data-testid="room-stage" className="relative z-0 h-full w-full overflow-hidden bg-black">
+      {/*
+       * TEMPORARY on-device diagnostic (issue #18, real-device report of
+       * "speaker controls + split audience stage" surviving multiple
+       * fixes) — shows exactly what this component received/computed, to
+       * confirm or rule out a prop-passing discrepancy between EventRoom
+       * and here. Not gated by isDevToolsAvailable() (that gate hides in
+       * production/preview builds). Remove once confirmed from an actual
+       * on-device screenshot.
+       */}
+      <div
+        data-testid="diagnostic-speaker-stage"
+        className="pointer-events-none absolute inset-x-0 top-4 z-50 bg-cyan-700/90 px-1.5 py-0.5 font-mono text-[9px] leading-tight break-all text-white"
+      >
+        solo={String(soloMode)} seat={String(mySeatNumber)} isSpk={String(isSpeaker)} renderSolo={String(renderSolo)}
+      </div>
       <div className={orientation === "landscape" ? "flex h-full w-full flex-row" : "flex h-full w-full flex-col"}>
         {renderSolo ? (
           renderTile(mySeatNumber === 1 ? 2 : 1)
