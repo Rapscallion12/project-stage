@@ -7,6 +7,33 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Added
+
+- **Unified inactive-speaker model** — a speaker seat is now released
+  after the same 11-second grace period for *either* of two causes: a
+  genuine LiveKit disconnect, or staying connected with both camera and
+  microphone off/muted (camera-off-alone and mic-muted-alone both remain
+  "active"). New `event_speakers.media_inactive_since` column and
+  `mark_speaker_media_inactive`/`mark_speaker_media_active`/
+  `release_expired_inactive_speaker` (migration `00000000000017`) extend
+  the existing disconnect-grace-period mechanism rather than building a
+  second one. The returning speaker sees "Tap to reconnect · Ns" (never
+  activated) or "Resume speaking · Ns" (already publishing, both muted);
+  the audience always sees "Speaker inactive · Ns," never which cause
+  applied. Recovery requires genuine media/connection state changing
+  (unmuting either track, or LiveKit reconnecting), never a meaningless
+  tap. Superseded the previously-shipped `isReconnecting`-precedence fix
+  below with a broader, single-source-of-truth fix. See DECISIONS.md.
+
+- **On-screen inactivity diagnostics on both surfaces** — temporary,
+  un-gated (visible on the deployed preview) strips on the speaker's own
+  reconnect/resume prompt and every occupied audience tile, showing the
+  raw `disconnected_at`/`media_inactive_since`, the collapsed deadline,
+  parsed timestamp, remaining seconds, and whether the countdown is
+  considered active — always in agreement with what's actually
+  rendered, never a separately-computed number. To be removed once
+  confirmed from a real-device screenshot.
+
 ### Fixed
 
 - **"Camera off" could override the reconnect indicator during an active
@@ -18,18 +45,8 @@ separate release cadence to track here.
   empty regardless of the actual disconnect. The seat's own
   `disconnected_at` field is now authoritative for this decision by
   construction — the prop can only ever add `true`, never suppress it.
-  See DECISIONS.md.
-
-### Added
-
-- **On-screen reconnect diagnostics on both surfaces** — temporary,
-  un-gated (visible on the deployed preview) strips on the speaker's own
-  "Tap to reconnect" prompt and every occupied audience tile, showing
-  the raw `disconnected_at`, its parsed timestamp, the computed
-  deadline, the remaining seconds, and whether the countdown is
-  considered active — always in agreement with what's actually
-  rendered, never a separately-computed number. To be removed once
-  confirmed from a real-device screenshot.
+  **Superseded by the unified inactive-speaker model above**, which
+  generalizes the same fix to `inactiveSince()`. See DECISIONS.md.
 
 ### Not Yet Fixed
 
@@ -48,17 +65,6 @@ separate release cadence to track here.
   `SpeakerStage` instead of another speculative fix, to capture what the
   props actually are the next time this reproduces. See DECISIONS.md.
   **Issue #18 stays open.**
-
-- **Inactive-speaker seat timeout — proposed, not built.** A new product
-  rule (a connected-but-unparticipating speaker shouldn't occupy a
-  scarce seat indefinitely, distinct from the existing 11s disconnect
-  grace period) needs a genuinely new schema/backend surface — mic/
-  camera mute state has no server-observable signal in this app the way
-  LiveKit's disconnect webhook does, so idle detection can only be
-  client-observed and server-recorded, the same authoritative-release
-  shape as the disconnect grace period. Per explicit instruction, this
-  stops at a proposed architecture rather than an unreviewed migration.
-  See DECISIONS.md.
 
 ### Fixed
 

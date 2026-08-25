@@ -9,7 +9,7 @@ import { createServiceClient } from "@/lib/supabase/service";
  * the one place that vocabulary is typed; keep it in sync with the
  * `left_reason` CHECK in migration 00000000000005.
  */
-export type LeftReason = "voluntary" | "replaced" | "moderator_removed" | "event_ended" | "disconnected";
+export type LeftReason = "voluntary" | "replaced" | "moderator_removed" | "event_ended" | "disconnected" | "inactive";
 
 /**
  * Minimal identity shape this repository needs — not imported from
@@ -53,13 +53,26 @@ export type EventSpeaker = {
    * last observed dropping (set by the webhook's `participant_left`
    * handler via `markSpeakerDisconnected`), or null while actively
    * connected / already released. The server-authoritative grace-period
-   * clock — see migration 00000000000016 and `checkAndEvictDisconnectedSpeaker`
+   * clock — see migration 00000000000016 and `checkAndEvictInactiveSpeaker`
    * (room/actions.ts). Flows through Realtime like every other column
    * here, so `useSpeakerReconnectGrace` can derive "who's currently in
    * a disconnect grace window" directly from already-subscribed
    * `speakers` state, no separate signal needed.
    */
   disconnected_at: string | null;
+  /**
+   * Issue #18 unified inactive-speaker finding: when this identity's own
+   * connected client last observed itself publishing no usable media at
+   * all (both camera and microphone off/muted — see
+   * `isLocalMediaInactive`, `lib/speaker-presence.ts`), or null while
+   * actively publishing something / already released. The server side of
+   * the *other* half of "inactive" — see migration 00000000000017 and
+   * this repository's `markSpeakerMediaInactive`. Never read directly by
+   * a component; `lib/speaker-presence.ts`'s `inactiveSince`/
+   * `deriveSpeakerPresence` are the one place this and `disconnected_at`
+   * collapse into the single `speakerPresence` concept the UI uses.
+   */
+  media_inactive_since: string | null;
 };
 
 /**
@@ -201,7 +214,7 @@ export async function claimSpeakerSeat(
  * reason: no anon/authenticated grant, service client only. Real
  * callers: the LiveKit webhook route handler (after it independently
  * verifies LiveKit's webhook signature) for an immediate eviction, and
- * `checkAndEvictDisconnectedSpeaker` (room/actions.ts, real-device
+ * `checkAndEvictInactiveSpeaker` (room/actions.ts, real-device
  * reconnect-grace-period finding) for the graced path — the latter is
  * reachable from an ordinary client call, but only ever actually reaches
  * this function after its own independent re-verification via LiveKit's
@@ -286,18 +299,20 @@ export async function markSpeakerReconnected(eventId: string, identity: SeatIden
 }
 
 /**
- * The actual, server-authoritative grace-period enforcement (issue #18
- * UX finding) — see migration 00000000000016's
- * `release_expired_disconnected_speaker` for the full race-safety
- * reasoning (a single atomic UPDATE, not a check-then-write). Called
- * from `checkAndEvictDisconnectedSpeaker` (room/actions.ts), itself
- * triggered by a connected client's local estimate of when the grace
- * period should have elapsed — but the actual release decision is
- * re-derived from Postgres's own clock and the row's own
- * `disconnected_at` every time, never trusted from the caller. Returns
- * `null` (not an error) whenever nothing was released: not yet expired,
- * already reconnected (`disconnected_at` cleared), already released, or
- * never seated.
+ * The disconnect-only grace-period enforcement (issue #18 UX finding) —
+ * see migration 00000000000016's `release_expired_disconnected_speaker`
+ * for the full race-safety reasoning (a single atomic UPDATE, not a
+ * check-then-write): the actual release decision is re-derived from
+ * Postgres's own clock and the row's own `disconnected_at` every time,
+ * never trusted from the caller. Returns `null` (not an error) whenever
+ * nothing was released: not yet expired, already reconnected
+ * (`disconnected_at` cleared), already released, or never seated.
+ *
+ * **Superseded for live app code** (issue #18 unified inactive-speaker
+ * finding) — `checkAndEvictInactiveSpeaker` (room/actions.ts) now calls
+ * `releaseExpiredInactiveSpeaker` below instead, which covers *either*
+ * cause via the same race-safety shape. This function is kept, unchanged,
+ * for tests/callers that specifically want the disconnect-only check.
  */
 export async function releaseExpiredDisconnectedSpeaker(
   eventId: string,
@@ -306,6 +321,82 @@ export async function releaseExpiredDisconnectedSpeaker(
 ): Promise<EventSpeaker | null> {
   const supabase = createServiceClient();
   const { data, error } = await supabase.rpc("release_expired_disconnected_speaker", {
+    p_event_id: eventId,
+    p_grace_seconds: graceSeconds,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * Starts the media-inactivity grace-period clock (issue #18 unified
+ * inactive-speaker finding) — see migration 00000000000017's
+ * `mark_speaker_media_inactive`. Unlike `markSpeakerDisconnected`, the
+ * intended caller here is the speaker's own connected client (via the
+ * `reportSpeakerMediaInactive` server action), not a webhook — there is
+ * no server-observable signal for mute state in this app to trust
+ * instead. Idempotent (a duplicate report never restarts the clock) and
+ * a safe no-op for an identity with no active seat.
+ */
+export async function markSpeakerMediaInactive(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("mark_speaker_media_inactive", {
+    p_event_id: eventId,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * Clears the media-inactivity clock (issue #18 unified inactive-speaker
+ * finding) — see migration 00000000000017's `mark_speaker_media_active`.
+ * Called the instant the speaker's own client observes either camera or
+ * microphone becoming active again (either alone is enough — see
+ * `isLocalMediaInactive`).
+ */
+export async function markSpeakerMediaActive(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("mark_speaker_media_active", {
+    p_event_id: eventId,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * The unified, server-authoritative expiration enforcement (issue #18
+ * unified inactive-speaker finding) — see migration 00000000000017's
+ * `release_expired_inactive_speaker`: a single atomic UPDATE covering
+ * *either* a genuine LiveKit disconnect or media inactivity, whichever
+ * (if either) has actually crossed the grace period right now. This is
+ * the function `checkAndEvictInactiveSpeaker` (room/actions.ts) calls —
+ * `releaseExpiredDisconnectedSpeaker` above is kept for the tests/callers
+ * that specifically want the disconnect-only check, but every live
+ * caller in the app now goes through this one instead, since a seat can
+ * become unavailable for either reason.
+ */
+export async function releaseExpiredInactiveSpeaker(
+  eventId: string,
+  identity: SeatIdentity,
+  graceSeconds: number,
+): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("release_expired_inactive_speaker", {
     p_event_id: eventId,
     p_grace_seconds: graceSeconds,
     p_profile_id: identity.type === "profile" ? identity.id : undefined,

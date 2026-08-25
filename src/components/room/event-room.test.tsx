@@ -104,6 +104,8 @@ vi.mock("@/lib/dev-demo", () => ({
 }));
 vi.mock("@/app/events/[id]/room/actions", () => ({
   joinOpenSeat: vi.fn(),
+  reportSpeakerMediaActive: vi.fn(),
+  reportSpeakerMediaInactive: vi.fn(),
 }));
 
 vi.mock("@/components/room/portrait-room", () => ({
@@ -146,6 +148,7 @@ function mySeat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_at: null,
     left_reason: null,
     disconnected_at: null,
+    media_inactive_since: null,
     ...overrides,
   };
 }

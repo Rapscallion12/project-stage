@@ -4,11 +4,11 @@ import { useSpeakerReconnectGrace } from "./use-speaker-reconnect-grace";
 import { SPEAKER_DISCONNECT_GRACE_MS } from "@/lib/speaker-reconnect";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
-const { checkAndEvictDisconnectedSpeaker } = vi.hoisted(() => ({
-  checkAndEvictDisconnectedSpeaker: vi.fn(),
+const { checkAndEvictInactiveSpeaker } = vi.hoisted(() => ({
+  checkAndEvictInactiveSpeaker: vi.fn(),
 }));
 
-vi.mock("@/app/events/[id]/room/actions", () => ({ checkAndEvictDisconnectedSpeaker }));
+vi.mock("@/app/events/[id]/room/actions", () => ({ checkAndEvictInactiveSpeaker }));
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -22,6 +22,7 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_at: null,
     left_reason: null,
     disconnected_at: null,
+    media_inactive_since: null,
     ...overrides,
   };
 }
@@ -80,8 +81,58 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
     expect(result.current.has("profile:p2")).toBe(true);
   });
 
+  describe("issue #18 unified inactive-speaker finding: media_inactive_since drives the same watch/schedule path as disconnected_at", () => {
+    it("marks another seat's occupant as inactive the instant their media_inactive_since is set, with no disconnected_at at all", () => {
+      const { result } = renderHook(() =>
+        useSpeakerReconnectGrace({
+          eventId: "e1",
+          speakers: [speaker({ profile_id: "p2", media_inactive_since: new Date().toISOString() })],
+          myIdentity: "profile:p1",
+          enabled: true,
+        }),
+      );
+      expect(result.current.has("profile:p2")).toBe(true);
+    });
+
+    it("schedules checkAndEvictInactiveSpeaker for a media-inactive seat, same as a disconnected one", async () => {
+      vi.useFakeTimers();
+      renderHook(() =>
+        useSpeakerReconnectGrace({
+          eventId: "e1",
+          speakers: [speaker({ profile_id: "p2", media_inactive_since: new Date().toISOString() })],
+          myIdentity: "profile:p1",
+          enabled: true,
+        }),
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SPEAKER_DISCONNECT_GRACE_MS);
+      });
+      expect(checkAndEvictInactiveSpeaker).toHaveBeenCalledWith("e1", { type: "profile", id: "p2" });
+    });
+
+    it("recovering (media_inactive_since clearing to null) cancels the pending check", async () => {
+      vi.useFakeTimers();
+      const { rerender } = renderHook(
+        ({ speakers }: { speakers: EventSpeaker[] }) =>
+          useSpeakerReconnectGrace({ eventId: "e1", speakers, myIdentity: "profile:p1", enabled: true }),
+        { initialProps: { speakers: [speaker({ profile_id: "p2", media_inactive_since: new Date().toISOString() })] } },
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SPEAKER_DISCONNECT_GRACE_MS / 2);
+      });
+      rerender({ speakers: [speaker({ profile_id: "p2", media_inactive_since: null })] });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SPEAKER_DISCONNECT_GRACE_MS);
+      });
+      expect(checkAndEvictInactiveSpeaker).not.toHaveBeenCalled();
+    });
+  });
+
   describe("disconnect → no return → release trigger at the grace boundary", () => {
-    it("does not call checkAndEvictDisconnectedSpeaker before the grace period has elapsed", async () => {
+    it("does not call checkAndEvictInactiveSpeaker before the grace period has elapsed", async () => {
       vi.useFakeTimers();
       renderHook(() =>
         useSpeakerReconnectGrace({
@@ -92,15 +143,15 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
         }),
       );
 
-      expect(checkAndEvictDisconnectedSpeaker).not.toHaveBeenCalled();
+      expect(checkAndEvictInactiveSpeaker).not.toHaveBeenCalled();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(SPEAKER_DISCONNECT_GRACE_MS - 1000);
       });
-      expect(checkAndEvictDisconnectedSpeaker).not.toHaveBeenCalled();
+      expect(checkAndEvictInactiveSpeaker).not.toHaveBeenCalled();
     });
 
-    it("calls checkAndEvictDisconnectedSpeaker once the grace period elapses, with the disconnected identity", async () => {
+    it("calls checkAndEvictInactiveSpeaker once the grace period elapses, with the disconnected identity", async () => {
       vi.useFakeTimers();
       renderHook(() =>
         useSpeakerReconnectGrace({
@@ -114,7 +165,7 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
       await act(async () => {
         await vi.advanceTimersByTimeAsync(SPEAKER_DISCONNECT_GRACE_MS);
       });
-      expect(checkAndEvictDisconnectedSpeaker).toHaveBeenCalledWith("e1", { type: "profile", id: "p2" });
+      expect(checkAndEvictInactiveSpeaker).toHaveBeenCalledWith("e1", { type: "profile", id: "p2" });
     });
 
     it("schedules from the actual disconnected_at timestamp, not from mount — a page loaded partway through an existing grace window fires correspondingly sooner", async () => {
@@ -132,12 +183,12 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
-      expect(checkAndEvictDisconnectedSpeaker).not.toHaveBeenCalled();
+      expect(checkAndEvictInactiveSpeaker).not.toHaveBeenCalled();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
-      expect(checkAndEvictDisconnectedSpeaker).toHaveBeenCalledWith("e1", { type: "profile", id: "p2" });
+      expect(checkAndEvictInactiveSpeaker).toHaveBeenCalledWith("e1", { type: "profile", id: "p2" });
     });
   });
 
@@ -161,7 +212,7 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
       await act(async () => {
         await vi.advanceTimersByTimeAsync(SPEAKER_DISCONNECT_GRACE_MS);
       });
-      expect(checkAndEvictDisconnectedSpeaker).not.toHaveBeenCalled();
+      expect(checkAndEvictInactiveSpeaker).not.toHaveBeenCalled();
     });
 
     it("reflects the reconnect in the returned set immediately", () => {
@@ -178,7 +229,7 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
   });
 
   describe("stale timeout after successful reconnection", () => {
-    it("a timer already scheduled before the reconnect is cleared, not just superseded — advancing well past the original deadline still never calls checkAndEvictDisconnectedSpeaker", async () => {
+    it("a timer already scheduled before the reconnect is cleared, not just superseded — advancing well past the original deadline still never calls checkAndEvictInactiveSpeaker", async () => {
       vi.useFakeTimers();
       const { rerender } = renderHook(
         ({ speakers }: { speakers: EventSpeaker[] }) =>
@@ -195,7 +246,7 @@ describe("useSpeakerReconnectGrace (issue #18 UX finding — server-authoritativ
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
       });
-      expect(checkAndEvictDisconnectedSpeaker).not.toHaveBeenCalled();
+      expect(checkAndEvictInactiveSpeaker).not.toHaveBeenCalled();
     });
   });
 

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
 import { cn } from "@/lib/utils";
 import { reconnectDiagnostics, useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { inactiveSince } from "@/lib/speaker-presence";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
@@ -60,7 +61,7 @@ export function SpeakerTile({
   mediaError = null,
   onTapEmptySeat,
   isJoiningSeat = false,
-  isReconnecting: isReconnectingProp = false,
+  isInactive: isInactiveProp = false,
   orientation = "landscape",
   clearTopChrome = false,
 }: {
@@ -76,36 +77,38 @@ export function SpeakerTile({
   onTapEmptySeat?: () => void;
   isJoiningSeat?: boolean;
   /**
-   * Real-device reconnect-grace-period finding (issue #18 UX finding: now
-   * server-authoritative): true while this seat's occupant has a
-   * `disconnected_at` set (the LiveKit webhook's `participant_left`
-   * signal) and the server-side grace period hasn't yet expired — see
-   * `useSpeakerReconnectGrace`'s own doc comment. Always false for the
-   * local viewer's own seat.
+   * Issue #18 unified inactive-speaker finding: true while this seat's
+   * occupant is inactive for *either* reason — a genuine LiveKit
+   * disconnect (`disconnected_at`) or still connected but publishing no
+   * usable media (`media_inactive_since`) — and the server-side grace
+   * period hasn't yet expired. See `useSpeakerReconnectGrace`'s own doc
+   * comment. Always false for the local viewer's own seat.
    *
    * **Not the sole source of truth** (issue #18 real-device finding,
-   * 2026-08-25): a real-device retest found "Camera off" still showing
-   * during an active grace period — traced to this prop being an
-   * *independently re-derived* signal (via `reconnectingIdentities`,
-   * itself gated by this tab's own `canConnect`) that could disagree
-   * with the seat's own `speaker.disconnected_at`, which this component
-   * already reads directly for the countdown itself. This component now
-   * ORs the two together (see `isReconnecting` below, the local const) so
-   * the seat's own authoritative field always wins regardless of whatever
-   * the caller's derived set says — "reconnect UI must take precedence
-   * over generic media-off UI" is now true by construction from a single
-   * field, not by keeping two independent derivations in sync by hand.
-   * Kept as a prop (not removed) since `SpeakerStage`'s existing
+   * 2026-08-25, generalized by the unified inactive-speaker finding): a
+   * real-device retest found "Camera off" still showing during an active
+   * grace period — traced to this prop being an *independently
+   * re-derived* signal (via `reconnectingIdentities`, itself gated by
+   * this tab's own `canConnect`) that could disagree with the seat's own
+   * `inactiveSince(speaker)`, which this component already reads
+   * directly for the countdown itself. This component now ORs the two
+   * together (see `isInactive` below, the local const) so the seat's own
+   * authoritative field always wins regardless of whatever the caller's
+   * derived set says — "inactivity UI must take precedence over generic
+   * media-off UI" is now true by construction from a single field, not
+   * by keeping two independent derivations in sync by hand. Kept as a
+   * prop (not removed) since `SpeakerStage`'s existing
    * `reconnectingIdentities` plumbing still does real scheduling work
    * (triggering the server-side eviction check) — only the *display*
    * decision no longer trusts it alone.
    *
-   * Shown as "Speaker reconnecting…" (issue #18 audience-countdown
-   * finding: with the remaining seconds, once known) instead of the
-   * generic "Camera off", since the seat isn't lost, just temporarily
-   * disconnected.
+   * Shown as "Speaker inactive…" (issue #18 audience-countdown finding:
+   * with the remaining seconds, once known) instead of the generic
+   * "Camera off", since the seat isn't lost, just temporarily inactive.
+   * The audience never needs to know which of the two causes applies —
+   * both read identically here, on purpose.
    */
-  isReconnecting?: boolean;
+  isInactive?: boolean;
   /**
    * Issue #21 (05 interaction model): portrait gets the new lightweight
    * top-anchored identity treatment (a small presence dot + name with a
@@ -127,21 +130,25 @@ export function SpeakerTile({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Issue #18 audience-countdown finding: the *same* authoritative
-  // disconnected_at this seat's own row already carries (already flowing
-  // through the same Realtime-subscribed `speakers` state the returning
-  // speaker's own "Tap to reconnect · Ns" prompt reads from) — never a
-  // second, independently-started timer. `useReconnectCountdown` returns
-  // null (no suffix) whenever there's nothing to count down, so passing
-  // it unconditionally here is safe regardless of `isReconnecting`.
-  const reconnectSecondsRemaining = useReconnectCountdown(speaker?.disconnected_at ?? null);
+  // Issue #18 audience-countdown finding, broadened by the unified
+  // inactive-speaker finding: the *same* authoritative deadline this
+  // seat's own row already carries (whichever of disconnected_at/
+  // media_inactive_since is set — already flowing through the same
+  // Realtime-subscribed `speakers` state the returning speaker's own
+  // "Tap to reconnect · Ns"/"Resume speaking · Ns" prompt reads from) —
+  // never a second, independently-started timer. `useReconnectCountdown`
+  // returns null (no suffix) whenever there's nothing to count down, so
+  // passing it unconditionally here is safe regardless of `isInactive`.
+  const mySeatInactiveSince = inactiveSince(speaker);
+  const reconnectSecondsRemaining = useReconnectCountdown(mySeatInactiveSince);
 
-  // Issue #18 real-device finding (2026-08-25): ORs the caller's own
-  // derived signal with the seat's own authoritative field directly —
-  // see the isReconnecting prop's own doc comment above for why the two
-  // could disagree and why this field must win. Only ever adds true,
-  // never suppresses a true the caller already passed.
-  const isReconnecting = isReconnectingProp || Boolean(speaker?.disconnected_at);
+  // Issue #18 real-device finding (2026-08-25), generalized by the
+  // unified inactive-speaker finding: ORs the caller's own derived
+  // signal with the seat's own authoritative field directly — see the
+  // isInactive prop's own doc comment above for why the two could
+  // disagree and why this field must win. Only ever adds true, never
+  // suppresses a true the caller already passed.
+  const isInactive = isInactiveProp || mySeatInactiveSince !== null;
 
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
@@ -209,7 +216,7 @@ export function SpeakerTile({
   // `reconnectSecondsRemaining` verbatim — the exact value already
   // driving the visible countdown text below, so the diagnostic can
   // never disagree with what's actually on screen.
-  const diag = reconnectDiagnostics(speaker?.disconnected_at ?? null, reconnectSecondsRemaining);
+  const diag = reconnectDiagnostics(mySeatInactiveSince, reconnectSecondsRemaining);
 
   return (
     <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
@@ -218,7 +225,8 @@ export function SpeakerTile({
         className="pointer-events-none absolute inset-x-0 bottom-0 z-50 bg-amber-700/90 px-1 py-0.5 font-mono text-[8px] leading-tight break-all text-white"
       >
         raw={diag.raw} parsed={diag.parsed} deadline={diag.deadline} remain={String(diag.remainingSeconds)} active=
-        {String(diag.active)} propFlag={String(isReconnectingProp)} effFlag={String(isReconnecting)}
+        {String(diag.active)} propFlag={String(isInactiveProp)} effFlag={String(isInactive)} discAt=
+        {speaker?.disconnected_at ?? "null"} mediaInactAt={speaker?.media_inactive_since ?? "null"}
       </div>
       {showBigVideo ? (
         // Only ever a remote participant's video now — the local
@@ -263,16 +271,16 @@ export function SpeakerTile({
           </div>
           <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
         </div>
-      ) : isReconnecting ? (
+      ) : isInactive ? (
         <div
-          data-testid="speaker-reconnecting"
+          data-testid="speaker-inactive"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
             {initials(speaker.display_name)}
           </div>
-          <p className="text-xs" data-testid="audience-reconnect-countdown">
-            Speaker reconnecting{reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}
+          <p className="text-xs" data-testid="audience-inactive-countdown">
+            Speaker inactive{reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}
           </p>
         </div>
       ) : (

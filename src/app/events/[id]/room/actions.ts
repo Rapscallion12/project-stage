@@ -10,7 +10,9 @@ import {
   leaveSpeakerSeat as leaveSpeakerSeatRow,
   leaveSpeakerSeatAsGuest,
   listActiveSpeakers,
-  releaseExpiredDisconnectedSpeaker,
+  markSpeakerMediaActive,
+  markSpeakerMediaInactive,
+  releaseExpiredInactiveSpeaker,
 } from "@/lib/repositories/event-speakers";
 import type { SeatIdentity } from "@/lib/repositories/event-speakers";
 import { findOpenSeat } from "@/lib/speaker-queue";
@@ -387,33 +389,60 @@ export async function submitSpeakerRequest(
 export type CheckSpeakerReconnectResult = { evicted: boolean };
 
 /**
- * Issue #18 UX finding: the server-authoritative half of the speaker
- * disconnect grace period. LiveKit's webhook
- * (api/livekit/webhook/route.ts) starts the clock (`disconnected_at`,
- * via `markSpeakerDisconnected`) the instant `participant_left` actually
- * fires, and clears it (via `markSpeakerReconnected`) on
- * `participant_joined` — this function is what actually *releases* the
- * seat, but only once `disconnected_at` genuinely clears
+ * Issue #18 unified inactive-speaker finding: the server-authoritative
+ * half of the speaker inactivity grace period — for *either* cause. The
+ * LiveKit webhook (api/livekit/webhook/route.ts) starts/clears the
+ * connection half of the clock (`disconnected_at`); the speaker's own
+ * client starts/clears the media half (`reportSpeakerMediaInactive`/
+ * `reportSpeakerMediaActive`, below) — this function is what actually
+ * *releases* the seat, once either clock genuinely clears
  * `SPEAKER_DISCONNECT_GRACE_SECONDS`.
  *
  * **Called by a connected client's local estimate, never trusted
  * directly**: `useSpeakerReconnectGrace` schedules this call once it
  * expects the grace period to have elapsed for a seat it's watching —
- * but the actual release decision is `release_expired_disconnected_speaker`'s
- * (migration 00000000000016), a single atomic `UPDATE ... WHERE ...`
- * that re-derives "has the grace period really elapsed" from Postgres's
- * own clock and the row's own `disconnected_at`, every time. A caller
- * invoking this early, repeatedly, or against a speaker who already
- * reconnected can never force an eviction — the WHERE clause simply
- * doesn't match, and this returns `{ evicted: false }`. Idempotent —
- * multiple viewers' independent timers firing around the same moment
- * just mean the first one to actually clear the threshold wins; every
- * later call finds the seat already vacated and no-ops too.
+ * but the actual release decision is `release_expired_inactive_speaker`'s
+ * (migration 00000000000017), a single atomic `UPDATE ... WHERE ...`
+ * that re-derives "has the grace period really elapsed, for either
+ * cause" from Postgres's own clock and the row's own `disconnected_at`/
+ * `media_inactive_since`, every time. A caller invoking this early,
+ * repeatedly, or against a speaker who already recovered (either way)
+ * can never force an eviction — the WHERE clause simply doesn't match,
+ * and this returns `{ evicted: false }`. Idempotent — multiple viewers'
+ * independent timers firing around the same moment just mean the first
+ * one to actually clear the threshold wins; every later call finds the
+ * seat already vacated and no-ops too.
  */
-export async function checkAndEvictDisconnectedSpeaker(
+export async function checkAndEvictInactiveSpeaker(
   eventId: string,
   seatIdentity: SeatIdentity,
 ): Promise<CheckSpeakerReconnectResult> {
-  const released = await releaseExpiredDisconnectedSpeaker(eventId, seatIdentity, SPEAKER_DISCONNECT_GRACE_SECONDS);
+  const released = await releaseExpiredInactiveSpeaker(eventId, seatIdentity, SPEAKER_DISCONNECT_GRACE_SECONDS);
   return { evicted: released !== null };
+}
+
+/**
+ * Issue #18 unified inactive-speaker finding: starts the media half of
+ * the inactivity grace period — called by the speaker's own connected
+ * client the instant it observes itself publishing no usable media at
+ * all (both camera and mic off/muted, or never activated — see
+ * `isLocalMediaInactive`, `lib/speaker-presence.ts`). Resolves the
+ * caller's identity server-side, same as every other action here — the
+ * client only asserts *that* it's currently media-inactive, never *whose*
+ * seat to touch. Idempotent (a duplicate report never restarts the
+ * clock) and a safe no-op for a caller with no active seat.
+ */
+export async function reportSpeakerMediaInactive(eventId: string): Promise<void> {
+  const identity = await resolveIdentity();
+  await markSpeakerMediaInactive(eventId, identity);
+}
+
+/**
+ * Clears the media half of the inactivity grace period — called by the
+ * speaker's own connected client the instant either camera or
+ * microphone becomes active again (either alone is enough).
+ */
+export async function reportSpeakerMediaActive(eventId: string): Promise<void> {
+  const identity = await resolveIdentity();
+  await markSpeakerMediaActive(eventId, identity);
 }

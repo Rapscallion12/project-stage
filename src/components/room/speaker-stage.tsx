@@ -207,7 +207,7 @@ export function SpeakerStage({
           mediaError={mediaError}
           onTapEmptySeat={isSpeaker ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
-          isReconnecting={identity !== null && reconnectingIdentities.has(identity)}
+          isInactive={identity !== null && reconnectingIdentities.has(identity)}
           orientation={orientation}
           clearTopChrome={seatNumber === 1}
         />

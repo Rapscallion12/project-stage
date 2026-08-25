@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.15"
+    PostgrestVersion: "14.17"
   }
   graphql_public: {
     Tables: {
@@ -139,6 +139,7 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -151,6 +152,7 @@ export type Database = {
           joined_at?: string
           left_at?: string | null
           left_reason?: string | null
+          media_inactive_since?: string | null
           profile_id?: string | null
           seat_number: number
         }
@@ -163,6 +165,7 @@ export type Database = {
           joined_at?: string
           left_at?: string | null
           left_reason?: string | null
+          media_inactive_since?: string | null
           profile_id?: string | null
           seat_number?: number
         }
@@ -317,6 +320,7 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -343,6 +347,7 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -364,6 +369,7 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -385,6 +391,7 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -406,6 +413,51 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      mark_speaker_media_active: {
+        Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
+        Returns: {
+          disconnected_at: string | null
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          media_inactive_since: string | null
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      mark_speaker_media_inactive: {
+        Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
+        Returns: {
+          disconnected_at: string | null
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -427,6 +479,7 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }
@@ -463,6 +516,34 @@ export type Database = {
           joined_at: string
           left_at: string | null
           left_reason: string | null
+          media_inactive_since: string | null
+          profile_id: string | null
+          seat_number: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      release_expired_inactive_speaker: {
+        Args: {
+          p_event_id: string
+          p_grace_seconds: number
+          p_guest_id?: string
+          p_profile_id?: string
+        }
+        Returns: {
+          disconnected_at: string | null
+          display_name: string
+          event_id: string
+          guest_id: string | null
+          id: string
+          joined_at: string
+          left_at: string | null
+          left_reason: string | null
+          media_inactive_since: string | null
           profile_id: string | null
           seat_number: number
         }

@@ -10,8 +10,10 @@ import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
 import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
+import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
+import { inactiveSince } from "@/lib/speaker-presence";
 import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
@@ -223,16 +225,17 @@ export function EventRoom({
   const mySeatNumber = findMySeatNumber(speakers, identity);
   const isSpeaker = mySeatNumber !== null;
   const participantRole = deriveParticipantRole({ isSpeaker, hasPendingRequest });
-  // Issue #18 reconnect-countdown finding: the viewer's own active-seat
-  // row (if any) carries their own `disconnected_at` — set by the
-  // webhook's `participant_left` handler and delivered here via the same
+  // Issue #18 unified inactive-speaker finding: the viewer's own
+  // active-seat row (if any) carries whichever of `disconnected_at`/
+  // `media_inactive_since` is set — both delivered here via the same
   // Realtime subscription `speakers` already flows through, independent
   // of this tab's own LiveKit connection state (a network drop the
   // LiveKit server detects reaches this tab over Realtime even if this
-  // tab's own UI is still rendering). `SpeakerMediaActivationPrompt`
-  // uses this to show the real remaining grace time instead of a fresh,
-  // client-invented countdown — see lib/speaker-reconnect.ts.
-  const myDisconnectedAt = speakers.find((s) => s.seat_number === mySeatNumber)?.disconnected_at ?? null;
+  // tab's own UI is still rendering). `inactiveSince` collapses both
+  // into the one deadline `SpeakerMediaActivationPrompt`/`SpeakerTile`
+  // show the real remaining grace time from — never a fresh,
+  // client-invented countdown. See lib/speaker-presence.ts.
+  const myInactiveSince = inactiveSince(speakers.find((s) => s.seat_number === mySeatNumber));
 
   // Issue #18 first-load consistency finding: dev-only trace of the
   // exact ordering that determines which composition renders, so a
@@ -322,6 +325,21 @@ export function EventRoom({
     enabled: canConnect,
   });
 
+  // Issue #18 unified inactive-speaker finding: the client-observed half
+  // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
+  // media-presence transitions to the server, which owns the actual
+  // grace-period clock/release the same way it already does for a
+  // genuine LiveKit disconnect. Only meaningful while this identity
+  // holds a seat; a no-op hook call otherwise.
+  useSpeakerMediaPresenceReporting({
+    eventId: event.id,
+    isSpeaker,
+    canPublish: connection.canPublish,
+    needsMediaActivation: connection.needsMediaActivation,
+    microphoneMuted: connection.microphoneMuted,
+    cameraMuted: connection.cameraMuted,
+  });
+
   // Issue #22: "Withdraw" (waiting) and "Cancel" (mid-countdown) both route
   // through cancelPromotion — releasing any held-but-unpublished tracks
   // here too, once, covers both the same way withdrawing already
@@ -369,7 +387,7 @@ export function EventRoom({
     isSpeaker,
     mySeatNumber,
     participantRole,
-    myDisconnectedAt,
+    myInactiveSince,
     hasPendingRequest,
     onHasPendingRequestChange: setHasPendingRequest,
     promotionCountdown,
@@ -412,9 +430,10 @@ export function EventRoom({
         className="pointer-events-none relative z-50 bg-fuchsia-700/90 px-1.5 py-0.5 font-mono text-[9px] leading-tight break-all text-white"
       >
         mounted={String(hasMountedOnClient)} desktop={String(isDesktopViewport)} orient={orientation} phase={phase}{" "}
-        role={participantRole} isSpk={String(isSpeaker)} seat={String(mySeatNumber)} myDiscAt=
-        {myDisconnectedAt ?? "null"} canPub={String(connection.canPublish)} needsAct={String(connection.needsMediaActivation)}{" "}
-        connStatus={connection.status}
+        role={participantRole} isSpk={String(isSpeaker)} seat={String(mySeatNumber)} myInactiveSince=
+        {myInactiveSince ?? "null"} canPub={String(connection.canPublish)} needsAct={String(connection.needsMediaActivation)}{" "}
+        micMuted={String(connection.microphoneMuted)} camMuted={String(connection.cameraMuted)} connStatus=
+        {connection.status}
       </div>
       <div className="min-h-0 flex-1">
         {!hasMountedOnClient ? (

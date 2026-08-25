@@ -21,6 +21,7 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_at: null,
     left_reason: null,
     disconnected_at: null,
+    media_inactive_since: null,
     ...overrides,
   };
 }
@@ -494,8 +495,8 @@ describe("SpeakerStage", () => {
     });
   });
 
-  describe("reconnect grace period (real-device finding)", () => {
-    it("passes isReconnecting through to the matching seat's tile only", () => {
+  describe("inactivity grace period (real-device finding)", () => {
+    it("passes isInactive through to the matching seat's tile only", () => {
       render(
         <SpeakerStage
           speakers={[
@@ -507,9 +508,9 @@ describe("SpeakerStage", () => {
           reconnectingIdentities={new Set(["profile:p2"])}
         />,
       );
-      expect(screen.getByTestId("speaker-reconnecting")).toBeInTheDocument();
+      expect(screen.getByTestId("speaker-inactive")).toBeInTheDocument();
       // Only one tile should show it — the other seat's occupant isn't in the set.
-      expect(screen.getAllByTestId("speaker-reconnecting")).toHaveLength(1);
+      expect(screen.getAllByTestId("speaker-inactive")).toHaveLength(1);
     });
 
     it("shows nothing special when the reconnecting set is empty", () => {
@@ -520,7 +521,7 @@ describe("SpeakerStage", () => {
           {...baseProps}
         />,
       );
-      expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-inactive")).not.toBeInTheDocument();
     });
   });
 });

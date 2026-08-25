@@ -3,6 +3,109 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-25 — Unified inactive-speaker model shipped: one product-level `speakerPresence`, reusing the existing 11s grace period for both a LiveKit disconnect and connected-but-both-media-off
+
+**Context**: the previous round's `isReconnecting`-precedence fix and
+diagnostics still hadn't been confirmed working on real devices when the
+user came back with a simplified product direction, explicitly
+superseding the 30s-idle + 10s-warning architecture proposed (but not
+built) at the end of the prior round: "Do NOT add the previously
+proposed 30-second idle period... reuse the existing 11-second grace
+period for both" causes of inactivity. The governing rule: "the
+important question is not whether someone is technically connected; it
+is whether they are meaningfully present on stage" — `speakerPresence =
+active | inactive`, derived from either (A) a genuine LiveKit disconnect
+or (B) still connected but both camera and mic off/muted, with camera-
+off-alone and mic-muted-alone both remaining "active."
+
+**Why this is smaller than the 30s/10s proposal**: cause A already had a
+complete, real, server-authoritative 11-second grace-period mechanism
+(migration 00000000000016) — this round's job was to *broaden* it to a
+second cause, not build a new timer system. Cause B (media inactivity)
+still needs its own authoritative clock, since mic/camera mute state has
+no server-observable signal in this app (this app's LiveKit webhook
+delivers no track-mute event) — but it can reuse the exact same
+deadline math, release mechanism, and UI countdown components cause A
+already has, rather than inventing a second, differently-shaped grace
+period. That's what made this tractable in one pass where the 30s/10s
+design wasn't.
+
+**Schema** (migration 00000000000017): `event_speakers.media_inactive_since
+timestamptz` — a second, independent clock, deliberately not a
+repurposing of `disconnected_at` ("continue distinguishing... where
+technically necessary" — the actual cause stays inspectable in storage).
+Mirrors migration 16's shape exactly: `mark_speaker_media_inactive`/
+`mark_speaker_media_active` (idempotent, `service_role`-only — but
+unlike the disconnect pair, whose only trusted caller is the LiveKit
+webhook, these are called by the *speaker's own connected client*, since
+there is no server-observable alternative; this is a real, deliberate
+difference in trust model, documented at the migration itself, not an
+oversight — there's no adversarial concern here, only an
+accidental-idle one, consistent with this prototype's threat model) and
+`release_expired_inactive_speaker` — one new, unified atomic UPDATE
+checking *either* clock, superseding `release_expired_disconnected_speaker`
+for live app code (kept, unchanged, for tests that specifically want the
+disconnect-only check). `left_reason` gained a new `'inactive'` value,
+recorded by whichever clock actually crossed the threshold. The original
+`left_reason` CHECK constraint (an unnamed inline constraint from
+migration 5) was looked up dynamically via `pg_constraint` rather than
+assumed by Postgres's default naming convention, safer against a real
+shared database.
+
+**Presentation layer — one collapsing point**: new `lib/speaker-presence.ts`
+is the *only* place `disconnected_at`/`media_inactive_since` are read
+together — `inactiveSince()` (the earlier of the two, if both are
+somehow set) feeds every countdown; `isLocalMediaInactive()` (pure:
+`needsMediaActivation || (microphoneMuted && cameraMuted)`, always false
+without `canPublish`) is the client-observable half of cause B. Every
+other component reads `inactiveSince(speaker)`, never `disconnected_at`
+or `media_inactive_since` individually — this is what makes "camera off
+alone remains active, mic muted alone remains active, both together is
+inactive" true by construction rather than a rule several components
+have to each remember.
+
+**Client reporting**: new `useSpeakerMediaPresenceReporting` (called
+unconditionally in `EventRoom`, a no-op for non-speakers) watches
+`isLocalMediaInactive`'s already-live inputs and calls
+`reportSpeakerMediaInactive`/`reportSpeakerMediaActive` (new server
+actions) only on genuine transitions — never on every render, never from
+a UI tap directly (per the explicit instruction "do not let meaningless
+button tapping reset the timer... recovery should correspond to actual
+speaker-presence/media state"). `useSpeakerReconnectGrace` (the existing
+scheduler that triggers the eventual eviction check) now derives its
+watch set from `inactiveSince()` too, so a media-inactive seat gets the
+same "any connected viewer's tab can trigger the check" robustness a
+disconnected one already had — extending an existing mechanism, not
+building a parallel one.
+
+**UI**: `SpeakerMediaActivationPrompt` now branches on cause —
+`needsMediaActivation` still gets the tappable "Tap to reconnect · Ns"
+(a real recovery action: `activateMedia()`); `bothMediaMuted` (already
+publishing, both tracks explicitly muted) gets non-interactive "Resume
+speaking · Ns" text instead — tapping `activateMedia()` in that state
+would be a no-op (tracks are already held), so the actual recovery
+action is the existing mic/camera toggle buttons already in the control
+row, not a new button. `SpeakerTile`'s audience-facing text changed from
+"Speaker reconnecting" to "Speaker inactive" (`isReconnecting`→
+`isInactive` throughout) — per explicit instruction, the audience never
+learns which cause applied. Diagnostics extended to show both raw fields
+(`discAt`/`mediaInactAt`) alongside the already-collapsed deadline.
+
+**Verification honesty**: automated (tsc, lint, full suite — 624/624
+across 52 files, +28 new tests: unit tests for `speaker-presence.ts`'s
+three pure functions and `useSpeakerMediaPresenceReporting`'s transition
+logic, extended `useSpeakerReconnectGrace` coverage for the media cause,
+and 11 tests in the real-linked-database full-path file covering both
+causes' countdown/recovery/release/reassignment-safety end to end,
+production build) all pass. The real-device confirmation this round
+specifically needs: whether "Tap to reconnect"/"Speaker inactive" now
+reliably carry a countdown at all (the underlying question from the
+prior two rounds, now answered by a broader, more robust trigger
+condition rather than just a display-precedence fix) is still
+real-device-only. The split-layout diagnostics (fuchsia/cyan) are
+unchanged this round, per explicit instruction — still no speculative
+fix attempted. Issue #18 stays in Testing / Review.
+
 ## 2026-08-25 — Reconnect-countdown precedence fixed at its actual root cause; on-screen diagnostics added to both surfaces; inactive-speaker timeout scoped but not built (stop-and-report)
 
 **Context**: a further real-device retest still showed "Tap to reconnect"

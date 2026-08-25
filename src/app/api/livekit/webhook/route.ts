@@ -23,7 +23,7 @@ import { markSpeakerDisconnected, markSpeakerReconnected } from "@/lib/repositor
  * same as someone who genuinely left. It now only starts the clock
  * (`disconnected_at`); the actual release, after the grace period
  * genuinely elapses, is `release_expired_disconnected_speaker`'s job
- * (`checkAndEvictDisconnectedSpeaker`, room/actions.ts) — see
+ * (`checkAndEvictInactiveSpeaker`, room/actions.ts) — see
  * DECISIONS.md. `participant_joined` is the symmetric authoritative
  * "they're back" signal, clearing the clock — not anything the
  * reconnecting client asserts about itself.
@@ -82,7 +82,7 @@ export async function POST(request: Request): Promise<Response> {
   // always has.
   if (event.event === "participant_left") {
     // Starts the grace-period clock — does not release the seat itself.
-    // See release_expired_disconnected_speaker (checkAndEvictDisconnectedSpeaker,
+    // See release_expired_inactive_speaker (checkAndEvictInactiveSpeaker,
     // room/actions.ts) for the actual, server-authoritative expiration.
     await markSpeakerDisconnected(eventId, identity);
   } else {

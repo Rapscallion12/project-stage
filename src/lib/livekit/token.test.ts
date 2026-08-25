@@ -27,6 +27,7 @@ const fakeActiveSeat: EventSpeaker = {
   left_at: null,
   left_reason: null,
   disconnected_at: null,
+  media_inactive_since: null,
 };
 
 describe("determineCanPublish", () => {

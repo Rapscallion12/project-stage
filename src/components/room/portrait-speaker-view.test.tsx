@@ -44,6 +44,7 @@ function seat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_at: null,
     left_reason: null,
     disconnected_at: null,
+    media_inactive_since: null,
     ...overrides,
   };
 }
@@ -59,7 +60,7 @@ const baseProps: RoomLayoutProps = {
   isSpeaker: true,
   mySeatNumber: 1,
   participantRole: "speaker",
-  myDisconnectedAt: null,
+  myInactiveSince: null,
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,

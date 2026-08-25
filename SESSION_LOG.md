@@ -4,6 +4,73 @@ Newest entry first.
 
 ---
 
+## 2026-08-25 — Session 27: Unified inactive-speaker model shipped, reusing the existing 11s grace period for both LiveKit disconnect and both-media-off
+
+**Goal**: continue #18 with a simplified product direction, explicitly
+superseding the 30s-idle + 10s-warning architecture proposed (not built)
+at the end of Session 26: "the important question is not whether
+someone is technically connected; it is whether they are meaningfully
+present on stage." One product-level `speakerPresence = active |
+inactive`, reusing the *existing* 11-second grace period for both
+causes — a genuine LiveKit disconnect, or staying connected with both
+camera and mic off/muted (either alone stays active). Also asked to
+trace the still-missing countdown once more with real evidence, and to
+leave the split-layout diagnostics untouched.
+
+**Schema** (migration `00000000000017`): `event_speakers.media_inactive_since`
+— a second, independent clock alongside `disconnected_at`, not a
+repurposing of it (the actual cause stays inspectable in storage, per
+"continue distinguishing... where technically necessary"). Three new
+`service_role`-only functions mirror migration 16's shape exactly:
+`mark_speaker_media_inactive`/`mark_speaker_media_active` (called by the
+speaker's own client, since mute state has no server-observable signal
+in this app — a deliberate, documented difference in trust model from
+the webhook-only disconnect pair) and `release_expired_inactive_speaker`
+— one unified atomic release checking either clock. `left_reason`
+gained a new `'inactive'` value. Applied via `supabase db push
+--linked`; types regenerated.
+
+**One collapsing point**: new `lib/speaker-presence.ts` — `inactiveSince()`
+(the earlier of `disconnected_at`/`media_inactive_since`, whichever is
+set) is the only value any countdown reads; `isLocalMediaInactive()` is
+the pure client-side rule (`needsMediaActivation || (micMuted &&
+camMuted)`, always false without `canPublish`). Every component reads
+`inactiveSince(speaker)`, never either raw field — "camera off alone
+stays active" is true by construction, not a rule to remember.
+
+**New reporting hook**: `useSpeakerMediaPresenceReporting` (speaker-only,
+no-op for audience) reports genuine transitions only — never on every
+render, never from a meaningless tap. `useSpeakerReconnectGrace`'s
+existing eviction-check scheduler now watches `inactiveSince()` too, so
+a media-inactive seat gets the same "any connected viewer can trigger
+the check" robustness a disconnected one already had.
+
+**UI**: the speaker's own prompt branches — "Tap to reconnect · Ns"
+(never activated, tappable) vs. "Resume speaking · Ns" (already
+publishing but both muted, non-interactive — the real recovery action is
+the existing mic/camera toggle buttons). The audience always sees
+"Speaker inactive · Ns," never which cause applied. Diagnostics extended
+to show both raw fields alongside the collapsed deadline.
+
+Split-layout diagnostics (fuchsia/cyan): left exactly as they were, per
+explicit instruction.
+
+See DECISIONS.md's "Unified inactive-speaker model shipped" entry for
+the full design.
+
+lint/tsc/build/full suite all pass (624/624, 52 files, +28 new tests:
+unit tests for the three `speaker-presence.ts` functions and the
+reporting hook's transition logic, extended `useSpeakerReconnectGrace`
+coverage, and 11 real-linked-database tests covering both causes'
+countdown/recovery/release/reassignment-safety end to end). Deployed a
+fresh `feature/social-stage-shell` preview.
+
+**Next task**: real-device confirmation — whether the countdown now
+reliably shows on both surfaces for a genuine disconnect and for
+explicit both-media-mute, whether "Resume speaking" reads sensibly,
+recovery via either camera or mic alone, and continued watch for the
+split-layout bug. Do not move #18 to Done until confirmed.
+
 ## 2026-08-25 — Session 26: Reconnect-countdown root cause fixed; inactive-speaker timeout scoped and stopped per explicit instruction
 
 **Goal**: continue #18 from Session 25's diagnostics-first pass. The user

@@ -31,8 +31,8 @@ export type RoomLayoutProps = {
   mySeatNumber: 1 | 2 | null;
   /** Issue #18 consistency fix: the single derived value the role routers (PortraitRoom/MobileLandscapeRoom) key off, folding isSpeaker/hasPendingRequest into one named state — see lib/participant-role.ts. */
   participantRole: ParticipantRole;
-  /** Issue #18 reconnect-countdown finding: the viewer's own active-seat `disconnected_at`, or null while connected/not seated — see EventRoom's own doc comment. Drives SpeakerMediaActivationPrompt's remaining-grace-time display. */
-  myDisconnectedAt: string | null;
+  /** Issue #18 unified inactive-speaker finding: the viewer's own active-seat inactivity deadline (whichever of `disconnected_at`/`media_inactive_since` is set — see `lib/speaker-presence.ts`'s `inactiveSince`), or null while actively present/not seated. Drives SpeakerMediaActivationPrompt's remaining-grace-time display. */
+  myInactiveSince: string | null;
   /**
    * Issue #14, lifted to EventRoom by issue #27 (was RoomControls' own
    * local state) — both RoomControls (Claim your seat/Withdraw for the
