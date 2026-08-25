@@ -318,36 +318,6 @@ describe("SpeakerTile", () => {
       );
     });
 
-    it("the on-screen diagnostic strip reports raw/parsed/deadline/remaining/active for an inactive seat", () => {
-      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
-      render(
-        <SpeakerTile
-          speaker={speaker({ disconnected_at: disconnectedAt })}
-          participant={undefined}
-          isLocal={false}
-          isInactive={true}
-        />,
-      );
-      const diag = screen.getByTestId("diagnostic-audience-reconnect");
-      expect(diag).toHaveTextContent(`raw=${disconnectedAt}`);
-      expect(diag).toHaveTextContent("active=true");
-      expect(diag).toHaveTextContent(`remain=${SPEAKER_DISCONNECT_GRACE_SECONDS - 3}`);
-    });
-
-    it("the diagnostic strip reports active=false and no seconds when the seat isn't inactive at all", () => {
-      render(
-        <SpeakerTile
-          speaker={speaker({ disconnected_at: null, media_inactive_since: null })}
-          participant={undefined}
-          isLocal={false}
-        />,
-      );
-      const diag = screen.getByTestId("diagnostic-audience-reconnect");
-      expect(diag).toHaveTextContent("raw=null");
-      expect(diag).toHaveTextContent("active=false");
-      expect(diag).toHaveTextContent("remain=null");
-    });
-
     it("renders the remaining seconds derived from the seat's own deadline — the same deadline the returning speaker's own prompt reads from", () => {
       const disconnectedAt = new Date(Date.now() - 3000).toISOString();
       render(

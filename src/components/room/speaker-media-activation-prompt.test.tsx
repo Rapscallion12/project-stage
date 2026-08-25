@@ -255,41 +255,6 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
     });
   });
 
-  describe("on-screen diagnostics (issue #18 real-device finding, 2026-08-25: 'Tap to reconnect' still showed with no countdown on real devices)", () => {
-    it("reports raw/parsed/deadline/remaining/active for a genuine inactivity deadline", () => {
-      const inactiveSince = new Date(Date.now() - 4000).toISOString();
-      render(
-        <SpeakerMediaActivationPrompt
-          needsMediaActivation={true}
-          bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
-          mediaError={null}
-          inactiveSince={inactiveSince}
-        />,
-      );
-      const diag = screen.getByTestId("diagnostic-speaker-reconnect");
-      expect(diag).toHaveTextContent(`raw=${inactiveSince}`);
-      expect(diag).toHaveTextContent("active=true");
-      expect(diag).toHaveTextContent(`remain=${SPEAKER_DISCONNECT_GRACE_SECONDS - 4}`);
-    });
-
-    it("reports active=false and no remaining seconds when inactiveSince is null, even while the prompt itself is showing", () => {
-      render(
-        <SpeakerMediaActivationPrompt
-          needsMediaActivation={true}
-          bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
-          mediaError={null}
-          inactiveSince={null}
-        />,
-      );
-      const diag = screen.getByTestId("diagnostic-speaker-reconnect");
-      expect(diag).toHaveTextContent("raw=null");
-      expect(diag).toHaveTextContent("active=false");
-      expect(diag).toHaveTextContent("remain=null");
-    });
-  });
-
   describe("resolving state at zero (issue #18 expiration-enforcement finding: a countdown that reaches zero must not stay actionable forever)", () => {
     it("bothMediaMuted at zero also resolves to 'Checking…', not a stuck 'Resume speaking · 0s'", () => {
       const inactiveSince = new Date(Date.now() - (SPEAKER_DISCONNECT_GRACE_MS + 2000)).toISOString();

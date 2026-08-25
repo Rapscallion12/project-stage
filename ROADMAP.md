@@ -232,11 +232,14 @@ PRODUCT.md's testing-phase guest-participation exception.
       a seat stays server-enforced to `ready` only (see DECISIONS.md) so
       the scheduled start time still means something now that
       `RoomControls` is reachable earlier.
-- [ ] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
+- [x] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
       gets a purpose-built layout (other speaker prioritized, own preview
       small, controls immediately reachable), not the audience UI with
       their own video added. Preserves the `featuredSlot`/reply-thread
-      seams without implementing them.
+      seams without implementing them. Full design/implementation/
+      real-device investigation chain in the "Social Stage (05)
+      interaction shell (issue #21)" entry below and DECISIONS.md;
+      confirmed clean on real-device retest and closed.
 
 ### Video-first participation redesign (issues #19–#27)
 
@@ -616,8 +619,26 @@ different dependencies. Current order:
       needed a real countdown (now derived from the viewer's own
       `disconnected_at` plus the existing 11-second grace period, never
       a fresh client timer). See DECISIONS.md's eighteenth 2026-08-24
-      entry. **Not checked off** — #18 stays open, pending the user's
-      own real-device re-test.
+      entry. Three further real-device retest rounds followed: a
+      reconnect-countdown precedence bug (an independently re-derived
+      display flag could disagree with the seat's own authoritative
+      field — fixed by deriving from one field only), a genuine
+      expiration-enforcement gap (a stale, past-deadline seat could
+      still be reconnected into, since ownership reads never checked
+      logical expiration — fixed with `event_speakers_active` and
+      `release_if_expired`, migration 00000000000018), and finally the
+      actual "split-layout" root cause: `useActiveSpeakers` had no
+      reconciliation mechanism for a missed Realtime delta, so a
+      client's own seat-ownership state could silently diverge from the
+      server's — fixed with a full resync on every Realtime
+      (re)subscription. Unified inactive-speaker model shipped alongside
+      (LiveKit disconnect and connected-but-both-media-off both use the
+      same 11-second grace period). See DECISIONS.md's 2026-08-25
+      through 2026-08-27 entries for the full investigation chain.
+      **Confirmed clean on real-device retest — #18 closed.** Temporary
+      diagnostics added during the investigation (fuchsia/cyan/amber
+      strips, the SpeakerStage instance registry) removed once
+      confirmed.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

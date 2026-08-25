@@ -3,6 +3,62 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — Issue #18 confirmed clean on real-device retest; final diagnostic cleanup, issue closed
+
+**Context**: the user's real-device retest of commit `9e9309e` (the
+`useActiveSpeakers` resync fix) reported no complaints and no
+reproduced issues — the whole #18 investigation chain (split-layout
+composition bug, missing reconnect countdown, expiration enforcement,
+unified inactive-speaker model, the ownership-contradiction bug) is now
+verified working. This entry is the cleanup pass only: no behavior
+changed.
+
+**Removed, all temporary and specific to this investigation**:
+- The fuchsia `EventRoom` diagnostic strip and the cyan `SpeakerStage`
+  diagnostic strip (both added mid-investigation, explicitly marked
+  "TEMPORARY... remove once confirmed from an actual on-device
+  screenshot" in their own doc comments at the time).
+- `SpeakerStage`'s instance-tracking registry (`useId`,
+  `useSyncExternalStore`-backed live cross-instance count, the
+  `parentComposition` prop and its five call-site wires) — built
+  specifically to rule out a double-mounted `SpeakerStage` as the
+  split-layout cause; that theory is conclusively ruled out (see the
+  2026-08-27 entry above), so the instrumentation has no further job.
+- The amber diagnostic strips in `SpeakerMediaActivationPrompt` and
+  `SpeakerTile`, and the now-unused `reconnectDiagnostics` pure function
+  and its dedicated unit tests — the reconnect-countdown data/render
+  path they were built to inspect is now independently confirmed
+  correct by both the automated suite and this real-device retest.
+- Test coverage that existed only to assert on the removed diagnostic
+  strips' own text content (instance ids, `parentComposition`,
+  `liveInstances`, `raw=`/`parsed=`/`deadline=`/`remain=`/`active=`
+  fields). The *behavioral* tests those diagnostics sat alongside —
+  tile/seat counts asserted directly against the DOM, countdown text,
+  resolving-state, expiration-enforcement, and the ownership-
+  reconciliation tests — are untouched, since they test real behavior,
+  not the diagnostic UI.
+
+**Explicitly kept, not diagnostics**: the dev-only (`NODE_ENV`-gated)
+`console.debug` composition-inputs trace in `EventRoom` (ongoing dev
+tooling, not something added to capture evidence for this specific
+investigation, and not visible in production either way); the
+`console.error` assertions in `SpeakerStage` (`soloMode` without
+`isSpeaker`) and `EventRoom`'s `handleTapEmptySeat` (the
+already-speaking ownership contradiction) — both are permanent,
+low-cost "this should be impossible" invariant checks in the same style
+already established elsewhere in this codebase, not throwaway
+diagnostics, and both are part of the actual fix/reconciliation logic
+rather than separate from it.
+
+**Verification**: automated (tsc, lint, full suite — 644/644 across 55
+files, down from 656 by exactly the removed diagnostic-only tests,
+production build) all pass. No underlying fix or behavior touched —
+`useActiveSpeakers`' resync-on-(re)subscribe, the canonical
+`mySeatNumber`-derived role chain, the `already-speaking` reconciliation,
+`event_speakers_active`/`release_if_expired` expiration enforcement, the
+unified 11-second inactive-speaker model, and every previously-approved
+UI/layout/behavior are all unchanged by this pass. **Issue #18 is closed.**
+
 ## 2026-08-27 — The "split-layout" bug was a client-state staleness bug, not a rendering bug: `useActiveSpeakers` now self-heals instead of trusting Realtime deltas forever
 
 **Context**: the instance-tracking diagnostics from the previous round

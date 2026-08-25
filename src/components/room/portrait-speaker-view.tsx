@@ -122,7 +122,6 @@ export function PortraitSpeakerView({
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
         soloMode
-        parentComposition="PortraitSpeakerView"
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />

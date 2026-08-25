@@ -1,4 +1,3 @@
-import { useEffect, useId, useSyncExternalStore } from "react";
 import type { LocalVideoTrack, Participant } from "livekit-client";
 import { SpeakerTile } from "@/components/room/speaker-tile";
 import { SelfPreview } from "@/components/room/self-preview";
@@ -7,78 +6,6 @@ import { cn } from "@/lib/utils";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
-
-/**
- * Issue #18 real-device finding (2026-08-26): the fuchsia/cyan
- * diagnostics could agree that Speaker View/solo mode is active while
- * the visible stage still showed the two-tile audience layout — a
- * combination static analysis of `SpeakerStage`'s own render function
- * (below) cannot explain from a single instance: the JSX return has
- * exactly one ternary picking solo-vs-two-tile, with no path that
- * renders both. The remaining explanations are all "more than one
- * instance is mounted" — this module-level registry makes that
- * countable and visible on-device, independent of which instance's
- * diagnostic strip happens to paint on top of another's (both are
- * `position: absolute` at the same offset, so a second instance's strip
- * could be entirely hidden behind the first's without this).
- *
- * `useSyncExternalStore` (the same idiom `useNow`/`useOrientation`/
- * `useIsDesktopViewport` already use in this codebase — see their own
- * doc comments), not a plain module-level counter read once per render:
- * a bare mutable Set read directly during render would leave every
- * *already-mounted* instance's own displayed count stale the instant a
- * *different* instance registers or unregisters, since nothing would
- * tell React to re-render them. Subscribing means every mounted
- * instance's diagnostic strip updates immediately when *any* instance
- * (including itself) mounts or unmounts — genuinely live, not just
- * accurate at each instance's own mount moment.
- */
-const liveSpeakerStageInstances = new Set<string>();
-const liveSpeakerStageListeners = new Set<() => void>();
-
-function notifyLiveSpeakerStageListeners() {
-  for (const listener of liveSpeakerStageListeners) listener();
-}
-
-function registerSpeakerStageInstance(instanceId: string) {
-  liveSpeakerStageInstances.add(instanceId);
-  notifyLiveSpeakerStageListeners();
-}
-
-function unregisterSpeakerStageInstance(instanceId: string) {
-  liveSpeakerStageInstances.delete(instanceId);
-  notifyLiveSpeakerStageListeners();
-}
-
-function subscribeToLiveSpeakerStageCount(callback: () => void) {
-  liveSpeakerStageListeners.add(callback);
-  return () => {
-    liveSpeakerStageListeners.delete(callback);
-  };
-}
-
-function getLiveSpeakerStageCount(): number {
-  return liveSpeakerStageInstances.size;
-}
-
-function getServerLiveSpeakerStageCount(): number {
-  return 0;
-}
-
-/** Registers this instance for the lifetime of the mounted component and returns the current, always-live count of every SpeakerStage instance mounted anywhere in the app — see this module's own doc comment. */
-function useLiveSpeakerStageCount(instanceId: string): number {
-  useEffect(() => {
-    registerSpeakerStageInstance(instanceId);
-    return () => {
-      unregisterSpeakerStageInstance(instanceId);
-    };
-  }, [instanceId]);
-  return useSyncExternalStore(
-    subscribeToLiveSpeakerStageCount,
-    getLiveSpeakerStageCount,
-    getServerLiveSpeakerStageCount,
-  );
-}
 
 /**
  * The video-first stage (issue #20) — both seats, full-bleed, filling
@@ -204,7 +131,6 @@ export function SpeakerStage({
   scrimInstant = false,
   reconnectingIdentities,
   soloMode = false,
-  parentComposition,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -230,18 +156,7 @@ export function SpeakerStage({
   reconnectingIdentities: ReadonlySet<string>;
   /** Issue #18, Speaker View Phase 1 — see this component's own doc comment above. Defaults to false: every existing caller (MobileLandscapeRoom, DesktopRoom, PortraitRoom's Audience/Candidate path) is completely unaffected. */
   soloMode?: boolean;
-  /** Issue #18 real-device finding (2026-08-26): which composition file mounted this instance — a literal string each of the 5 real call sites (PortraitRoom, PortraitSpeakerView, MobileLandscapeRoom, MobileLandscapeSpeakerView, DesktopRoom) passes about itself, surfaced in the cyan diagnostic strip so a captured screenshot says which composition is actually responsible for what's on screen. */
-  parentComposition: string;
 }) {
-  // Issue #18 real-device finding (2026-08-26): registers this specific
-  // mounted instance and subscribes to the always-live, cross-instance
-  // count — see this file's own module-level doc comment. useId() (not a
-  // ref/counter) because it's stable across this instance's own
-  // re-renders but genuinely distinct from any other concurrently-
-  // mounted instance's id, without needing any coordination.
-  const instanceId = useId();
-  const liveInstances = useLiveSpeakerStageCount(instanceId);
-
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
     // Issue #18 consistency fix: soloMode and isSpeaker are two props
     // from the same caller that must agree — only PortraitSpeakerView/
@@ -301,38 +216,9 @@ export function SpeakerStage({
   }
 
   const renderSolo = soloMode && mySeatNumber !== null;
-  // Issue #18 real-device finding (2026-08-26): computed directly from
-  // the same renderSolo value the JSX below actually branches on — this
-  // is not a guess about what will render, it IS what will render,
-  // structurally, from this instance. If a screenshot ever shows a
-  // tileCount/seatsRendered that disagrees with what's visibly on
-  // screen, that's proof the visible layout is coming from a DIFFERENT
-  // instance, not this one — see liveInstances below.
-  const renderedSeatNumbers = renderSolo ? [mySeatNumber === 1 ? 2 : 1] : [1, 2];
-  const tileCount = renderedSeatNumbers.length;
 
   return (
     <div data-testid="room-stage" className="relative z-0 h-full w-full overflow-hidden bg-black">
-      {/*
-       * TEMPORARY on-device diagnostic (issue #18, real-device report of
-       * "speaker controls + split audience stage" surviving multiple
-       * fixes) — shows exactly what this component received/computed, to
-       * confirm or rule out a prop-passing discrepancy between EventRoom
-       * and here. Not gated by isDevToolsAvailable() (that gate hides in
-       * production/preview builds). Remove once confirmed from an actual
-       * on-device screenshot. Expanded (2026-08-26) with per-instance
-       * identity and actual-render-tree data — see this file's own
-       * module-level doc comment and the parentComposition prop's doc
-       * comment for why.
-       */}
-      <div
-        data-testid="diagnostic-speaker-stage"
-        className="pointer-events-none absolute inset-x-0 top-4 z-50 bg-cyan-700/90 px-1.5 py-0.5 font-mono text-[9px] leading-tight break-all text-white"
-      >
-        id={instanceId} parent={parentComposition} liveInstances={liveInstances} solo={String(soloMode)} seat=
-        {String(mySeatNumber)} isSpk={String(isSpeaker)} renderSolo={String(renderSolo)} tiles={tileCount} seats=
-        {renderedSeatNumbers.join(",")}
-      </div>
       <div className={orientation === "landscape" ? "flex h-full w-full flex-row" : "flex h-full w-full flex-col"}>
         {renderSolo ? (
           renderTile(mySeatNumber === 1 ? 2 : 1)

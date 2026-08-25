@@ -116,22 +116,27 @@ separate release cadence to track here.
   **Superseded by the unified inactive-speaker model above**, which
   generalizes the same fix to `inactiveSince()`. See DECISIONS.md.
 
-### Not Yet Fixed
+- **Speaker View "split-layout" report — confirmed fixed on real-device
+  retest (2026-08-27).** The instance diagnostics from an earlier round
+  ruled out a double-mounted `SpeakerStage` outright — the same
+  on-device capture that ruled it out also showed "You're already
+  speaking" and a live self-preview, proving this was never a rendering
+  bug: `EventRoom`'s own `participantRole`/`mySeatNumber` had genuinely
+  diverged from the server's authoritative answer (see the
+  `useActiveSpeakers` resync fix above). **Issue #18 closed** — no
+  further complaints or reproductions on the retest. See DECISIONS.md.
 
-- **Speaker View "split-layout" report — root cause found and fixed
-  this round, pending real-device reconfirmation.** The instance
-  diagnostics added in the previous round ruled out a double-mounted
-  `SpeakerStage` outright (`liveInstances=1`, and the single instance's
-  own `role`/`renderSolo`/`tiles`/`seats` all self-consistently said
-  "audience, two-tile") — the same on-device capture also showed
-  "You're already speaking" and a live self-preview, proving this was
-  never a rendering bug: `EventRoom`'s own `participantRole`/
-  `mySeatNumber` had genuinely diverged from the server's authoritative
-  answer. See the "Fixed" entry above (`useActiveSpeakers` resync) for
-  the actual fix. Left here, not moved to a plain "Fixed" claim, because
-  only a real device can confirm the original split-layout symptom
-  doesn't reproduce again for a different reason. See DECISIONS.md.
-  **Issue #18 stays open.**
+### Removed
+
+- **Temporary #18 investigation diagnostics** — now that real-device
+  verification is clean, removed everything that existed solely to
+  capture on-device evidence during the investigation: the fuchsia
+  `EventRoom` and cyan `SpeakerStage` diagnostic strips, `SpeakerStage`'s
+  instance-tracking registry (`parentComposition` prop and all), and the
+  amber reconnect-countdown diagnostic strips (and their now-unused
+  `reconnectDiagnostics` helper) on the speaker's own prompt and the
+  audience tile. No underlying fix or behavior changed — this is
+  cleanup only. See DECISIONS.md.
 
 ### Fixed
 

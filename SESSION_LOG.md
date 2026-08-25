@@ -4,6 +4,44 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 30: Issue #18 confirmed clean on real-device retest — final diagnostic cleanup, issue closed
+
+**Goal**: the user's real-device retest of commit `9e9309e` reported no
+complaints and no reproduced issues — final cleanup only, no behavior
+changes, per explicit instruction not to touch the underlying fixes.
+
+**Removed** (all temporary, all specific to the #18 investigation): the
+fuchsia `EventRoom` diagnostic strip; the cyan `SpeakerStage` diagnostic
+strip; `SpeakerStage`'s instance-tracking registry (`useId`,
+`useSyncExternalStore`-backed live cross-instance count, the
+`parentComposition` prop and its five call-site wires) — built
+specifically to rule out a double-mounted `SpeakerStage`, a theory now
+conclusively ruled out; the amber diagnostic strips on the speaker's own
+prompt and the audience tile, and the now-dead `reconnectDiagnostics`
+helper plus its dedicated unit tests. Test coverage that existed only to
+assert on the removed strips' own text went with them; the behavioral
+tests underneath (tile/seat counts against the real DOM, countdown text,
+resolving states, expiration enforcement, ownership reconciliation) are
+untouched.
+
+**Explicitly kept**: the dev-only `console.debug` composition trace in
+`EventRoom` (ongoing dev tooling, not investigation-specific); the
+`console.error` invariant assertions in `SpeakerStage` and `EventRoom`'s
+ownership-contradiction handler (permanent "this should be impossible"
+checks in this codebase's existing style, and part of the actual fix
+logic, not throwaway diagnostics).
+
+**ROADMAP.md**: both the original #18 tracking bullet and the #21
+mega-entry's #18 status note updated to reflect the confirmed, closed
+state.
+
+lint/tsc/build/full suite all pass (644/644, 55 files — down from 656 by
+exactly the removed diagnostic-only tests). Deployed a fresh
+`feature/social-stage-shell` preview.
+
+**Issue #18 closed.** No new issue started this pass, per explicit
+instruction.
+
 ## 2026-08-27 — Session 29: The "split-layout" bug was client data staleness, not a rendering bug — `useActiveSpeakers` now self-heals
 
 **Goal**: the previous round's instance-tracking diagnostics worked

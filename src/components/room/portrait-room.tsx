@@ -157,7 +157,6 @@ export function PortraitRoom(props: RoomLayoutProps) {
         // mechanism (issue #21), reused rather than a second dimming
         // layer. 0 the rest of the time, same as every other caller.
         scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
-        parentComposition="PortraitRoom"
       />
 
       {/* Minimal top chrome — status pill (left) + guest identity chip (right), both floating over the video, neither reserving space from it. */}

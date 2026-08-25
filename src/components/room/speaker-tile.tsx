@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
 import { cn } from "@/lib/utils";
-import { reconnectDiagnostics, useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import { inactiveSince } from "@/lib/speaker-presence";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -207,27 +207,8 @@ export function SpeakerTile({
     );
   }
 
-  // Issue #18 real-device finding (2026-08-25): un-gated (visible on the
-  // real preview) diagnostic showing exactly what this tile received for
-  // the seat this occupant holds — see reconnectDiagnostics' own doc
-  // comment. Rendered regardless of which branch below actually shows,
-  // specifically so it's visible even in the "Camera off" branch, the
-  // one the bug report says shows when it shouldn't. Reuses
-  // `reconnectSecondsRemaining` verbatim — the exact value already
-  // driving the visible countdown text below, so the diagnostic can
-  // never disagree with what's actually on screen.
-  const diag = reconnectDiagnostics(mySeatInactiveSince, reconnectSecondsRemaining);
-
   return (
     <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
-      <div
-        data-testid="diagnostic-audience-reconnect"
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-50 bg-amber-700/90 px-1 py-0.5 font-mono text-[8px] leading-tight break-all text-white"
-      >
-        raw={diag.raw} parsed={diag.parsed} deadline={diag.deadline} remain={String(diag.remainingSeconds)} active=
-        {String(diag.active)} propFlag={String(isInactiveProp)} effFlag={String(isInactive)} discAt=
-        {speaker?.disconnected_at ?? "null"} mediaInactAt={speaker?.media_inactive_since ?? "null"}
-      </div>
       {showBigVideo ? (
         // Only ever a remote participant's video now — the local
         // speaker's own feed lives in SelfPreview instead (see this
