@@ -7,6 +7,20 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+Development continues on feature branches; nothing here ships to
+production until it's previewed and approved on real devices, then
+merged to `main`.
+
+## [public-beta-v1] - 2026-08-26
+
+First production release of Virtual Stage to the live site
+(https://project-stage-weld.vercel.app), after real-device approval of
+`feature/social-stage-shell` HEAD. Tagged `public-beta-v1-stable` at
+commit `c647cf6` as the rollback checkpoint. Everything below this
+heading — all prior "Unreleased" entries — is what shipped. Issue #18
+closed; issue #21 (Social Stage voting/gifting/full comment system)
+remains open and continues on future feature branches.
+
 ### Added
 
 - **Self-healing seat-role reconciliation** — the split-layout bug

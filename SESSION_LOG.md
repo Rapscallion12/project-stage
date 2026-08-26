@@ -4,6 +4,48 @@ Newest entry first.
 
 ---
 
+## 2026-08-26 — Session 32: Production release — public-beta-v1
+
+**Goal**: the user confirmed real-device testing of
+`feature/social-stage-shell` HEAD (`c647cf6`, Session 31's self-healing
+seat-reconciliation fix) passed with no complaints, and asked to put
+that build live on the actual production Virtual Stage site for other
+people to use/test.
+
+**Release process**: clean working tree and exact approved HEAD
+confirmed; lint/tsc/661 tests/build all re-run clean; confirmed all 18
+migrations already applied on the linked Supabase project and
+Production's Vercel env vars match Preview's (same Supabase/LiveKit
+backends); tagged `public-beta-v1-stable` at `c647cf6` (existing
+rollback checkpoints untouched); merged `feature/social-stage-shell`
+into `main` with an explicit `--no-ff` merge commit (`4c43ff3`, no
+history rewrite); pushed `main`, confirmed the Vercel Production
+deployment's recorded SHA matched exactly.
+
+**Production smoke test** (real browser automation against
+https://project-stage-weld.vercel.app, not curl-only): homepage,
+events list, and `/join` fast path all guest-accessible with no login
+wall; landed in the Always-On Test Room as a guest ("Cheerful Raven");
+claimed an open seat and Speaker View activated (Leave the stage,
+mic/camera controls present — disabled only because the test
+environment has no camera hardware); watched the 11-second inactivity
+countdown run to completion and the seat release authoritatively back
+to two open seats, confirming the expiration architecture is live in
+production end-to-end; sent a comment and saw it render as an ambient
+comment. Zero console errors/warnings throughout. Real-device (actual
+phone) testing of the *production* URL specifically remains
+unverified — the smoke test used browser automation, not a physical
+touchscreen.
+
+**Outcome**: issue #18 closed (acceptance criteria satisfied, real-device
+confirmed) and its board card moved to Done. Issue #21 (remaining
+Social Stage scope — voting, gifting, full comment/reaction system)
+stays open; `main` is now the stable public-testing baseline, and
+future work continues on feature branches with preview + real-device
+approval before merging back.
+
+---
+
 ## 2026-08-28 — Session 31: Issue #18 reopened — seat-role reconciliation made self-healing (the fix already existed, nothing triggered it automatically)
 
 **Goal**: the split-layout bug reproduced again on the build confirmed

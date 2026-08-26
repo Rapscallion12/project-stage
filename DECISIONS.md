@@ -3,6 +3,45 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-26 — First production release (public-beta-v1)
+
+**Context**: `feature/social-stage-shell` HEAD (`c647cf6`) passed the
+user's own real-device testing with no complaints. The user wants this
+version live on the real production Virtual Stage site so other people
+can use/test it, while development continues separately.
+
+**Decision**: merged `feature/social-stage-shell` into `main` via an
+explicit `--no-ff` merge commit (`4c43ff3`) — no history rewrite, no
+squash — after re-running the full verification suite and confirming
+Production's Vercel env vars and the linked Supabase project's applied
+migrations both match what Preview had already been running against.
+Tagged the pre-merge commit `public-beta-v1-stable` as the rollback
+checkpoint, alongside (not replacing) every earlier `prototype-*-stable`
+checkpoint. Pushed `main`, letting Vercel's existing main-branch
+Production deployment hook do the actual deploy, and confirmed the
+deployed SHA matched exactly.
+
+**Reason**: this is the project's first genuine public release, not
+another prototype checkpoint — `main` had accumulated 30 commits of
+verified work (Watch Mode/Comments Mode split, ambient comments, full
+Speaker View, server-authoritative seat expiration and self-healing
+reconciliation) with no unverified or in-progress feature mixed in, so
+there was nothing to cherry-pick or defer.
+
+**Tradeoffs / what this is not**: this does not mean the product is
+finished — issue #21's remaining Social Stage scope (voting, gifting,
+full comment/reaction system) is substantial and deliberately stayed on
+a feature branch, not on `main`. `main` is now the stable
+public-testing baseline; it does not become a place to develop
+directly — future features still go through preview deployments and
+the user's real-device approval before merging back, exactly as
+before. The production smoke test after this release used real browser
+automation against the live URL (seat claim, Speaker View activation,
+the full 11-second inactivity-expiration cycle, comment
+send-and-render — all confirmed with zero console errors) but not an
+actual phone; real-device confirmation of the *production* URL
+specifically is still open, same as any other change.
+
 ## 2026-08-28 — Seat-role reconciliation made self-healing (issue #18 reopened): the fix already existed, nothing triggered it automatically
 
 **Context**: the split-layout bug reproduced again on the build

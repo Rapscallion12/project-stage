@@ -232,13 +232,18 @@ PRODUCT.md's testing-phase guest-participation exception.
       a seat stays server-enforced to `ready` only (see DECISIONS.md) so
       the scheduled start time still means something now that
       `RoomControls` is reachable earlier.
-- [ ] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
+- [x] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
       gets a purpose-built layout (other speaker prioritized, own preview
       small, controls immediately reachable), not the audience UI with
       their own video added. Preserves the `featuredSlot`/reply-thread
       seams without implementing them. Full design/implementation/
       real-device investigation chain in the "Social Stage (05)
       interaction shell (issue #21)" entry below and DECISIONS.md.
+      **Closed 2026-08-26**: confirmed via real-device testing with no
+      complaints, merged to `main`, and deployed to production
+      (public-beta-v1, tag `public-beta-v1-stable`). This closes #18's
+      own scope only — issue #21 remains open for the rest of Social
+      Stage (voting, gifting, full comment/reaction system).
       **Reopened 2026-08-28**: the split-layout report reproduced again
       after being confirmed clean — a second manual Join tap fixed it,
       revealing the reconciliation mechanism worked but nothing
@@ -652,9 +657,11 @@ different dependencies. Current order:
       visibility/focus resync) and explicit refetch triggers on both
       seat-claim success paths — reusing the existing canonical
       `mySeatNumber`-derived role chain throughout, no new role flag.
-      See DECISIONS.md's 2026-08-28 entry. **Not checked off** — pending
-      real-device confirmation this automatic recovery survives repeated
-      testing.
+      See DECISIONS.md's 2026-08-28 entry. **Confirmed via real-device
+      testing 2026-08-26** with no complaints — this specific #18 fix is
+      done and shipped in public-beta-v1. The outer checkbox above stays
+      unchecked because it belongs to #21's still-open mega-entry, not to
+      this sub-item.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
