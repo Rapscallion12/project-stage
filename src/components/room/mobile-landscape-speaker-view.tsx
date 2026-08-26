@@ -84,6 +84,7 @@ export function MobileLandscapeSpeakerView({
   reconnectingIdentities,
   messages,
   reactions,
+  pendingRequests,
   onPrepareMedia,
   microphoneMuted,
   cameraMuted,
@@ -162,6 +163,8 @@ export function MobileLandscapeSpeakerView({
         onClose={() => setCommentsOpen(false)}
         eventId={event.id}
         messages={messages}
+        reactions={reactions}
+        pendingRequests={pendingRequests}
         micRequestMode={false}
         onMicRequestModeChange={() => {}}
         onHasPendingRequestChange={() => {}}

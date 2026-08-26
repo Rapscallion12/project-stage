@@ -11,6 +11,21 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Added
+
+- **Discussion Expanded** (issue #21) — a tap-opened bottom sheet for
+  intentionally browsing the live comment stream, opened from an
+  ambient comment bubble's tap. Refined after real-device confirmation
+  of the foundation: `AmbientComments` rebuilt from a self-expiring
+  bubble stack into a small always-scrollable live-stream feed (auto-
+  follows the live edge, preserves position while reading history,
+  resumes on scroll-back); Expanded Comments now shows a frozen
+  newest→oldest snapshot with a "↻ N new comments" refresh control
+  instead of live-following; a new "Top Speaker Requests" section (up
+  to 3, live); double-tap-to-like on comment rows (reuses the existing
+  reactions schema/action, no new backend); grabber-handle
+  swipe-to-close. See DECISIONS.md.
+
 ## [public-beta-v1] - 2026-08-26
 
 First production release of Virtual Stage to the live site

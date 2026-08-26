@@ -7,9 +7,10 @@ import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
-const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
+const { leaveSpeakerSeat, sendMessage, addReaction } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
   sendMessage: vi.fn(),
+  addReaction: vi.fn(),
 }));
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
@@ -19,6 +20,7 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({
   sendMessage,
+  addReaction,
 }));
 
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
@@ -83,6 +85,7 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  pendingRequests: [],
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -381,6 +384,75 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       render(<PortraitSpeakerView {...baseProps} messages={[message()]} />);
       fireEvent.click(screen.getByTestId("ambient-comment"));
       expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
+    });
+
+    it("double-tapping a comment to like it has no role/media/LiveKit side effects for a seated speaker", () => {
+      const activateMedia = vi.fn(async () => {});
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message()]}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+
+      expect(addReaction).toHaveBeenCalledWith("m1");
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it("dragging the grabber to close has no role/media/LiveKit side effects for a seated speaker", () => {
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message()]}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const handle = screen.getByTestId("expanded-comments-handle");
+      fireEvent.pointerDown(handle, { clientY: 0, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientY: 150, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientY: 150, pointerId: 1 });
+
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it("Top Speaker Requests renders for a seated speaker too", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message({ id: "m1", author_display_name: "Jordan", is_speaker_request: true })]}
+          pendingRequests={[
+            {
+              id: "r1",
+              event_id: "e1",
+              profile_id: "p2",
+              guest_id: null,
+              message_id: "m1",
+              status: "pending",
+              created_at: new Date().toISOString(),
+              resolved_at: null,
+            },
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-top-requests")).toHaveTextContent("Jordan");
     });
   });
 });

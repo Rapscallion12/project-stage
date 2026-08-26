@@ -73,6 +73,7 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  pendingRequests: [],
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -346,7 +347,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(bubble).toHaveTextContent("great show");
       const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bpointer-events-none\b/);
-      expect(bubble.className).toMatch(/\bpointer-events-auto\b/);
+      // The scrollable feed area itself opts back into pointer events (not
+      // just each bubble individually) — issue #21's live-stream-feed
+      // rebuild needs the whole area touch-scrollable, not just tappable
+      // per-bubble.
+      expect(screen.getByTestId("ambient-comments").className).toMatch(/\bpointer-events-auto\b/);
     });
 
     it("positions the ambient overlay clear of the persistent bottom composer row", () => {

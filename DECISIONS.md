@@ -3,6 +3,81 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-26 — Live-stream regular feed, frozen Expanded snapshot, Top Speaker Requests, double-tap likes, swipe-to-close (issue #21, refinement pass)
+
+**Context**: real-device testing confirmed the Discussion Expanded
+foundation (open/close, scroll, send, Speaker View compatibility)
+works. This pass refines the interaction model per explicit product
+direction: regular Watch Mode is a *live* feed, Expanded Comments is a
+*deliberate, frozen* reading surface — not a bigger version of the same
+thing.
+
+**Regular comments rebuilt as a small live-stream feed**: the original
+Phase 3 design (self-expiring 3-bubble stack, 7s fade-out) directly
+conflicted with the new requirement to scroll back through older
+ambient comments — a permanently-removed bubble can't be revisited.
+Replaced with a small (`max-h-32`), always-scrollable feed: new
+comments enter at the bottom and auto-scroll into view while the
+viewer is at/near the live edge; scrolling up disables auto-scroll
+without touching position, exactly the way a mature livestream chat
+behaves. No cap beyond `useLobbyRealtime`'s existing 300-message
+memory limit — the small fixed height is what keeps this from
+becoming "a large permanent chat panel," not a message-count cap.
+
+**Expanded Comments frozen-snapshot rebuild**: `snapshot` (newest→
+oldest) is captured once, on open or on an explicit "↻ N new comments"
+refresh tap — never mutated by background arrivals. This *replaces*
+the previous round's live-follow/jump-to-latest design outright, per
+explicit instruction, not alongside it. `newCount` is a derived value
+(`messages` not in `snapshotIds`), not tracked state — simpler and
+correct under any arrival ordering.
+
+**Top Speaker Requests — ranking signal, investigated first**: no
+vote/like/score column exists on `speaker_requests`. The one real
+ranking signal, `rank_pending_speaker_requests` (reputation-weighted),
+is a trusted-server-only RPC already explicitly decided *not* to be a
+public leaderboard when issue #23 built it — reusing it here would
+silently reverse that decision. Used FIFO by `created_at` instead
+(documented in `listPendingSpeakerRequests`'s own doc comment), and
+isolated the top-3 selection to one `.slice(0, 3)` on an
+already-ordered array so a future like-based signal can replace just
+that line.
+
+**Top Speaker Requests stays live while Recent Comments freezes**:
+deliberate, reported per instruction — a pending request represents a
+current stage candidate, not historical chat, so there's no "reading
+in peace" concern to protect by freezing it. New hook
+`useActiveSpeakerRequests`, same on-`SUBSCRIBED`-resync discipline
+`useActiveSpeakers` already established for issue #18's missed-delta
+lesson, and a new public repository read (`speaker_requests` already
+has a "publicly viewable" RLS policy — no migration needed).
+
+**Double-tap-to-like — investigated first, nothing new needed**:
+`event_chat_message_reactions` already has public select/self-insert
+RLS, a `(message_id, emoji, identity)` uniqueness constraint (free
+server-side dedup), is already in the Realtime publication, and
+already has a working action (`addReaction`) and consumer
+(`MessageItem`'s own 👍 button in the lobby view). This is a UI-only
+addition — a double-tap gesture on `CommentRow` that calls the exact
+same action, with the same optimistic-then-realtime-confirmed pattern
+`MessageItem` already uses. No schema/backend expansion, so nothing to
+stop and report on that front. Deliberately *not* added to
+`AmbientComments`' bubbles: they already have a claimed single-tap
+gesture (open Expanded), and once a first tap opens the sheet it
+visually covers the bubble (z-20 over z-10), making a reliable second
+tap on the same element impossible — scoped to Expanded Comments only,
+where no competing gesture exists.
+
+**Swipe-to-close scoped to the handle, not the list**: pointer handlers
+live only on the grabber/header region (`expanded-comments-handle`);
+`expanded-comments-scroll` (the actual comment list) has none. This is
+what keeps ordinary scrolling from ever being mistaken for a dismiss
+gesture — not a scroll-vs-drag disambiguation algorithm, just two
+different DOM regions owning two different gestures.
+
+**Rollback**: work continues on `feature/expanded-comments`, still not
+merged — `main`/production untouched by this pass.
+
 ## 2026-08-26 — Discussion Expanded (issue #21): opened from the ambient bubble, not the composer
 
 **Context**: post-public-beta continuation of #21 — an intentional,

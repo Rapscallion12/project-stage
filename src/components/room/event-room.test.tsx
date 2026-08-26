@@ -181,6 +181,7 @@ function renderEventRoom(initialSpeakers: EventSpeaker[]) {
       initialMessages={[]}
       initialReactions={{}}
       initialHasPendingRequest={false}
+      initialPendingRequests={[]}
     />,
   );
 }
@@ -264,6 +265,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
         />,
       );
 
@@ -288,6 +290,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -312,6 +315,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
         />,
       );
       expect(screen.queryByTestId("portrait-room")).not.toBeInTheDocument();
@@ -328,6 +332,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -426,6 +431,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
         />,
       );
 
@@ -465,6 +471,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");

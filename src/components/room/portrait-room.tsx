@@ -150,6 +150,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
     reconnectingIdentities,
     messages,
     reactions,
+    pendingRequests,
   } = props;
 
   return (
@@ -288,6 +289,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
             onClose={() => setCommentsOpen(false)}
             eventId={event.id}
             messages={messages}
+            reactions={reactions}
+            pendingRequests={pendingRequests}
             micRequestMode={micRequestMode}
             onMicRequestModeChange={onMicRequestModeChange}
             onHasPendingRequestChange={onHasPendingRequestChange}

@@ -55,6 +55,37 @@ export async function getPendingRequestForIdentity(
 }
 
 /**
+ * Every currently-pending request for an event, oldest first (FIFO) —
+ * issue #21's "Top Speaker Requests" section. `speaker_requests` has a
+ * public "publicly viewable" select policy (migration 00000000000011),
+ * so this is a plain ordinary-client read, not a service-role query —
+ * same tier as `listRecentMessages`/`listActiveSpeakers`.
+ *
+ * **Ordering, documented per explicit instruction**: this is FIFO by
+ * `created_at`, a deliberately temporary signal — there is no vote/like/
+ * score column on this table today, and the one real ranking signal
+ * that exists (`rank_pending_speaker_requests`, reputation-weighted) is
+ * a trusted-server-only RPC that reads `profiles.reputation_score`
+ * directly, and was already explicitly decided *not* to be exposed as a
+ * public leaderboard when issue #23 built it (see this file's own
+ * `rankPendingSpeakerRequests` doc comment and DECISIONS.md) — reusing
+ * it here would silently reverse that decision, not extend it. FIFO
+ * order needs no new column and reverses cleanly once a real audience
+ * signal (likes on the request's own chat message, e.g.) exists to
+ * order by instead.
+ */
+export async function listPendingSpeakerRequests(eventId: string): Promise<SpeakerRequest[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("speaker_requests")
+    .select("*")
+    .eq("event_id", eventId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+  return (data as SpeakerRequest[] | null) ?? [];
+}
+
+/**
  * Atomically creates the request's chat message and its
  * speaker_requests row for an account holder (issue #14's explicit
  * atomicity requirement — see migration 00000000000011's

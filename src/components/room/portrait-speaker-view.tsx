@@ -108,6 +108,7 @@ export function PortraitSpeakerView({
   reconnectingIdentities,
   messages,
   reactions,
+  pendingRequests,
   onPrepareMedia,
   microphoneMuted,
   cameraMuted,
@@ -186,6 +187,8 @@ export function PortraitSpeakerView({
         onClose={() => setCommentsOpen(false)}
         eventId={event.id}
         messages={messages}
+        reactions={reactions}
+        pendingRequests={pendingRequests}
         micRequestMode={false}
         onMicRequestModeChange={() => {}}
         onHasPendingRequestChange={() => {}}

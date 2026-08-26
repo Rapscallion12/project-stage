@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useActiveSpeakers } from "@/hooks/use-active-speakers";
+import { useActiveSpeakerRequests } from "@/hooks/use-active-speaker-requests";
 import { useAutomaticPromotion } from "@/hooks/use-automatic-promotion";
 import { useIsDesktopViewport } from "@/hooks/use-desktop-viewport";
 import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
@@ -28,6 +29,7 @@ import { joinOpenSeat } from "@/app/events/[id]/room/actions";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { SpeakerRequest } from "@/lib/repositories/speaker-requests";
 
 const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
 
@@ -94,6 +96,7 @@ export function EventRoom({
   initialMessages,
   initialReactions,
   initialHasPendingRequest,
+  initialPendingRequests,
 }: {
   event: Event;
   identity: Identity;
@@ -105,9 +108,12 @@ export function EventRoom({
   initialReactions: Record<string, ReactionState>;
   /** Issue #14: whether the caller already has a pending speaker request, fetched server-side. */
   initialHasPendingRequest: boolean;
+  /** Issue #21: every currently-pending speaker request, for "Top Speaker Requests" — see useActiveSpeakerRequests' own doc comment. */
+  initialPendingRequests: SpeakerRequest[];
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
   const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
+  const { pendingRequests } = useActiveSpeakerRequests(event.id, initialPendingRequests);
 
   // Issue #27: lifted above the orientation branch — like every other
   // piece of state here, this must survive a rotation, and RoomControls/
@@ -478,6 +484,7 @@ export function EventRoom({
     reconnectingIdentities,
     messages,
     reactions,
+    pendingRequests,
     microphoneMuted: connection.microphoneMuted,
     cameraMuted: connection.cameraMuted,
     toggleMicrophone: connection.toggleMicrophone,

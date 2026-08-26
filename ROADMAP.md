@@ -671,11 +671,10 @@ different dependencies. Current order:
       `AmbientComments` carried since Phase 3 specifically for this;
       an earlier version tried opening from the composer's own
       focus/tap instead and that broke the already-approved "tap,
-      type, send" flow, so it was reverted. Live-follow vs.
-      reading-history: auto-scrolls while at/near the newest comment;
-      scrolling up preserves position and shows a "new comments · jump
-      to latest" indicator instead of yanking back down; scrolling back
-      near the bottom (or tapping the indicator) resumes following.
+      type, send" flow, so it was reverted. **Its original live-follow/
+      jump-to-latest scroll design was replaced outright the same day**
+      — see the refinement entry immediately below; this paragraph's
+      "jump to latest" description is superseded, kept only for history.
       Reuses the same `messages`/`ChatPanel` compact composer every
       collapsed composition already has — no new backend, no duplicated
       send path. `commentsOpen` is local `useState` in each of the four
@@ -689,6 +688,23 @@ different dependencies. Current order:
       future `repliesByParentId` grouping can slot in without a
       rewrite. Desktop untouched (existing persistent sidebar, out of
       scope per instruction). See DECISIONS.md.
+      **Refinement pass (issue #21, 2026-08-26, same branch)**, after
+      real-device confirmation of the foundation above: `AmbientComments`
+      rebuilt from a self-expiring 3-bubble stack into a small
+      always-scrollable live-stream feed (no more hard 7s removal — it
+      conflicted with being able to scroll back through older ambient
+      comments). `ExpandedComments` rebuilt around a frozen
+      newest→oldest snapshot (captured on open/refresh only, never
+      mutated by background arrivals) with a "↻ N new comments" refresh
+      control, replacing the live-follow/jump-to-latest design entirely.
+      New "Top Speaker Requests" section (up to 3, FIFO-ordered —
+      documented temporary signal, see DECISIONS.md — kept live rather
+      than frozen, a deliberate, reported choice). Double-tap-to-like on
+      comment rows, reusing the fully-existing `event_chat_message_reactions`
+      schema/RLS/`addReaction` action verbatim — investigated first, no
+      schema or backend expansion needed. Grabber-handle swipe-to-close,
+      scoped to the handle only so list scrolling can never trigger a
+      dismiss. See DECISIONS.md's matching entry for the full reasoning.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

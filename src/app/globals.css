@@ -119,29 +119,21 @@ body {
 }
 
 /*
- * Issue #21, "05 — Social Stage" Phase 3: one bubble's whole lifecycle
- * (enter, hold, expire) as a single CSS animation, applied per-bubble by
- * `AmbientComments` — see its own doc comment for why the fade timing
- * lives in CSS while mount/unmount timing lives in JS (the `setTimeout`
- * there is tuned to this animation's own duration, not a coincidence).
- * A small upward drift on entry (not just an opacity fade) reads as
- * "arriving," matching a live feed rather than a static list item
- * quietly appearing.
+ * Issue #21, "Regular comments as a live-stream feed": a bubble's entry
+ * only — no expiry, since `AmbientComments` is now a small persistent
+ * scrollable feed (older comments stay reachable by scrolling) rather
+ * than a self-expiring stack. A small upward drift on entry (not just an
+ * opacity fade) reads as "arriving," matching a live feed rather than a
+ * static list item quietly appearing.
  */
-@keyframes ambient-comment-fade {
+@keyframes ambient-comment-enter {
   0% {
     opacity: 0;
     transform: translateY(6px);
   }
-  8% {
+  100% {
     opacity: 1;
     transform: translateY(0);
-  }
-  78% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
   }
 }
 

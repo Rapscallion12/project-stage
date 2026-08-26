@@ -4,6 +4,45 @@ Newest entry first.
 
 ---
 
+## 2026-08-26 — Session 34: Live-stream feed, frozen Expanded snapshot, Top Speaker Requests, likes, swipe-to-close (issue #21)
+
+**Goal**: real-device testing confirmed Discussion Expanded's foundation
+works. This session refines the interaction model per explicit
+direction — regular Watch Mode as a genuine live feed, Expanded
+Comments as a deliberate, frozen reading surface, not a bigger version
+of the live feed.
+
+**Regular feed rebuilt**: `AmbientComments`' old self-expiring 3-bubble
+stack (7s fade-out) replaced with a small, always-scrollable live-stream
+feed — no more permanent removal (it conflicted with the requirement to
+scroll back through history), same lightweight visual style/footprint,
+same live-follow-vs-reading-history behavior a mature livestream chat
+has (auto-scroll while at the edge, preserved position while reading,
+auto-resume on scroll-back).
+
+**Expanded Comments rebuilt**: newest→oldest, frozen `snapshot` taken on
+open/refresh (replaces the previous round's live-follow/jump-to-latest
+design outright), a compact "↻ N new comments" refresh control, a new
+"Top Speaker Requests" section (up to 3, live not frozen — reasoning
+reported in DECISIONS.md), double-tap-to-like (reuses the fully
+existing `event_chat_message_reactions` schema/RLS/action — nothing new
+needed, confirmed by inspection first), and grabber-handle
+swipe-to-close (pointer handlers scoped to the handle only, so list
+scrolling can never trigger a dismiss).
+
+**Investigated before implementing, per instruction**: `speaker_requests`
+has no ranking column — used documented temporary FIFO ordering, not
+the existing (deliberately non-public) reputation RPC. Reactions schema
+already fully supports likes — no schema/backend expansion proposal
+needed.
+
+**Verification**: lint/tsc/full suite (706/706, 58 files, +40ish new/
+updated tests across ambient-comments, expanded-comments, and Speaker
+View compatibility)/build all clean. Fresh feature-branch preview
+deployed for real-device review — not merged, production untouched.
+
+---
+
 ## 2026-08-26 — Session 33: Discussion Expanded (issue #21), post-public-beta
 
 **Goal**: continue #21 on a feature branch after the public-beta-v1

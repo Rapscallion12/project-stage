@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AmbientComments } from "./ambient-comments";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
@@ -16,9 +16,15 @@ function makeMessage(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
   };
 }
 
-describe("AmbientComments (issue #21, '05 — Social Stage' Phase 3)", () => {
+function setScrollGeometry(el: HTMLElement, { scrollTop, scrollHeight, clientHeight }: { scrollTop: number; scrollHeight: number; clientHeight: number }) {
+  Object.defineProperty(el, "scrollTop", { configurable: true, writable: true, value: scrollTop });
+  Object.defineProperty(el, "scrollHeight", { configurable: true, value: scrollHeight });
+  Object.defineProperty(el, "clientHeight", { configurable: true, value: clientHeight });
+}
+
+describe("AmbientComments (issue #21) — live-stream-style feed, not a self-expiring stack", () => {
   afterEach(() => {
-    vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
   it("renders nothing when there are no messages", () => {
@@ -50,23 +56,17 @@ describe("AmbientComments (issue #21, '05 — Social Stage' Phase 3)", () => {
 
   it("carries a stable data-message-id per bubble — the Discussion Expanded click-target seam", () => {
     render(<AmbientComments messages={[makeMessage({ id: "abc123" })]} />);
-    const bubble = screen.getByTestId("ambient-comment");
-    expect(bubble).toHaveAttribute("data-message-id", "abc123");
+    expect(screen.getByTestId("ambient-comment")).toHaveAttribute("data-message-id", "abc123");
   });
 
-  it("does not throw when tapped without an onExpand handler (every existing caller before issue #21's Discussion Expanded)", () => {
-    render(<AmbientComments messages={[makeMessage({ id: "m1" })]} />);
-    expect(() => fireEvent.click(screen.getByTestId("ambient-comment"))).not.toThrow();
-  });
-
-  it("calls onExpand when a bubble is tapped — the Discussion Expanded entry point", () => {
+  it("calls onExpand when a bubble is tapped", () => {
     const onExpand = vi.fn();
     render(<AmbientComments messages={[makeMessage({ id: "m1" })]} onExpand={onExpand} />);
     fireEvent.click(screen.getByTestId("ambient-comment"));
     expect(onExpand).toHaveBeenCalledTimes(1);
   });
 
-  it("never shows more than 3 at once — a burst evicts the oldest immediately rather than stacking the feed taller", () => {
+  it("does not evict or expire older messages — all remain rendered, reachable by scrolling", () => {
     render(
       <AmbientComments
         messages={[
@@ -74,44 +74,62 @@ describe("AmbientComments (issue #21, '05 — Social Stage' Phase 3)", () => {
           makeMessage({ id: "m2", body: "second" }),
           makeMessage({ id: "m3", body: "third" }),
           makeMessage({ id: "m4", body: "fourth" }),
+          makeMessage({ id: "m5", body: "fifth" }),
         ]}
       />,
     );
-    expect(screen.getAllByTestId("ambient-comment")).toHaveLength(3);
-    expect(screen.queryByText(/first/)).not.toBeInTheDocument();
-    expect(screen.getByText(/fourth/)).toBeInTheDocument();
+    // Every message is still in the document — no MAX_VISIBLE cap, no timer removal.
+    expect(screen.getAllByTestId("ambient-comment")).toHaveLength(5);
+    expect(screen.getByText(/first/)).toBeInTheDocument();
+    expect(screen.getByText(/fifth/)).toBeInTheDocument();
   });
 
-  it("does not re-add a message id it has already shown and expired — each message gets exactly one lifecycle", () => {
-    vi.useFakeTimers();
-    const { rerender } = render(<AmbientComments messages={[makeMessage({ id: "m1", body: "once" })]} />);
-    expect(screen.getByText(/once/)).toBeInTheDocument();
+  it("auto-scrolls to the newest comment while following (the default)", () => {
+    const { rerender } = render(<AmbientComments messages={[makeMessage({ id: "m1" })]} />);
+    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
+    scrollToSpy.mockClear();
 
-    act(() => {
-      vi.advanceTimersByTime(7000);
-    });
-    expect(screen.queryByText(/once/)).not.toBeInTheDocument();
+    rerender(<AmbientComments messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" })]} />);
 
-    // Same message id still present in the underlying stream (as it always
-    // would be — messages never disappear from the real data) must not
-    // resurrect the bubble.
-    rerender(<AmbientComments messages={[makeMessage({ id: "m1", body: "once" })]} />);
-    expect(screen.queryByText(/once/)).not.toBeInTheDocument();
+    expect(scrollToSpy).toHaveBeenCalled();
   });
 
-  it("expires a bubble after its lifetime elapses", () => {
-    vi.useFakeTimers();
-    render(<AmbientComments messages={[makeMessage({ id: "m1", body: "fading" })]} />);
-    expect(screen.getByText(/fading/)).toBeInTheDocument();
+  it("does not steal scroll position from a viewer reading older comments", () => {
+    const { rerender } = render(<AmbientComments messages={[makeMessage({ id: "m1" })]} />);
+    const list = screen.getByTestId("ambient-comments");
 
-    act(() => {
-      vi.advanceTimersByTime(6999);
-    });
-    expect(screen.getByText(/fading/)).toBeInTheDocument();
+    setScrollGeometry(list, { scrollTop: 0, scrollHeight: 2000, clientHeight: 100 });
+    fireEvent.scroll(list);
 
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(screen.queryByText(/fading/)).not.toBeInTheDocument();
+    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
+    scrollToSpy.mockClear();
+
+    rerender(
+      <AmbientComments
+        messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2", body: "arrived while reading" })]}
+      />,
+    );
+
+    expect(scrollToSpy).not.toHaveBeenCalled();
+    expect(list.scrollTop).toBe(0);
+    // The new comment is still appended — it's live, just not force-scrolled into view.
+    expect(screen.getByText(/arrived while reading/)).toBeInTheDocument();
+  });
+
+  it("resumes auto-follow once the viewer scrolls back to the live edge", () => {
+    const { rerender } = render(<AmbientComments messages={[makeMessage({ id: "m1" })]} />);
+    const list = screen.getByTestId("ambient-comments");
+
+    setScrollGeometry(list, { scrollTop: 0, scrollHeight: 2000, clientHeight: 100 });
+    fireEvent.scroll(list);
+
+    setScrollGeometry(list, { scrollTop: 1980, scrollHeight: 2000, clientHeight: 100 });
+    fireEvent.scroll(list);
+
+    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
+    scrollToSpy.mockClear();
+
+    rerender(<AmbientComments messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" })]} />);
+    expect(scrollToSpy).toHaveBeenCalled();
   });
 });

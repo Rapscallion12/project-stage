@@ -6,6 +6,7 @@ import type { Identity } from "@/lib/identity";
 import type { ParticipantRole } from "@/lib/participant-role";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { SpeakerRequest } from "@/lib/repositories/speaker-requests";
 import type { RoomStatus } from "@/lib/room-status";
 
 /**
@@ -90,6 +91,8 @@ export type RoomLayoutProps = {
   reconnectingIdentities: ReadonlySet<string>;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /** Issue #21: every currently-pending speaker request, oldest first — the live (never frozen) source for Expanded Comments' "Top Speaker Requests" section. See useActiveSpeakerRequests' own doc comment for why this stays live while Recent Comments freezes. */
+  pendingRequests: SpeakerRequest[];
   /** Issue #18, Speaker View Phase 2: whether the local participant's own published microphone/camera are currently muted — see useLiveRoomConnection's own doc comment. */
   microphoneMuted: boolean;
   cameraMuted: boolean;

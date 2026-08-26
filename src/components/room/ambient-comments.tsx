@@ -1,56 +1,68 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
-const MAX_VISIBLE = 3;
-/** Total lifetime of one bubble, including its CSS fade-in/fade-out — see the `ambient-comment-fade` keyframe in globals.css. Tunable, not validated against a real device yet. */
-const VISIBLE_DURATION_MS = 7000;
-
-type VisibleEntry = { message: LobbyMessage };
+/** Distance (px) from the bottom still counted as "at the live edge" — matches ExpandedComments' own near-bottom threshold. */
+const NEAR_BOTTOM_PX = 24;
 
 /**
- * Issue #21, "05 — Social Stage" Phase 3: the room's live chat stream
- * (the *same* `messages` array `useLobbyRealtime` already feeds into
- * every room composition — no second backend, no duplicated message
- * state) rendered as a small, self-expiring stack of translucent
- * bubbles in Watch Mode's lower-left, instead of the historical
- * scrollable list. Purely presentational: this component reads
- * `messages`, it never sends, never subscribes to anything of its own.
+ * Issue #21: the room's live chat stream (the *same* `messages` array
+ * `useLobbyRealtime` already feeds into every room composition — no
+ * second backend, no duplicated message state) as a small, lightweight
+ * live-stream-style feed in Watch Mode's lower-left. Purely
+ * presentational: this component reads `messages`, it never sends,
+ * never subscribes to anything of its own.
  *
- * **Why local state at all, if `messages` is already the source of
- * truth**: the *ambient* lifecycle (when a bubble fades in, how long it
- * stays, when it's removed) is deliberately different from the
- * underlying data's own lifecycle (a message never disappears from
- * `messages` once posted). This component tracks which message ids it
- * has already shown (`shownIds`) and assigns each one its own
- * fade/expire timer *once*, the first time it's seen — reusing the
- * data, not the data's own permanence.
+ * **Rebuilt from the original self-expiring bubble stack** (see git
+ * history / DECISIONS.md for the earlier Phase 3 design): comments used
+ * to fade in, hold ~7s, then vanish permanently, capped at 3 visible at
+ * once. That directly conflicted with the later, explicit product
+ * requirement that a viewer be able to scroll back through older
+ * ambient comments to inspect something — a permanently-removed bubble
+ * can't be scrolled back to. Comments now enter at the bottom and push
+ * older ones up through a small, fixed-height (`max-h-32`) scrollable
+ * window instead of disappearing — same lightweight visual style (small
+ * translucent pills, request-to-speak badge treatment, lower-left
+ * corner, no stage reflow), same conservative footprint (roughly the
+ * same height the old 3-bubble stack occupied), just no more hard
+ * timed removal.
  *
- * **Seeded on mount, not empty**: a viewer arriving mid-conversation
- * should see the room already feels inhabited, not a blank corner until
- * the next live message happens to arrive — the last `MAX_VISIBLE`
- * messages already in `messages` at mount are shown immediately, each
- * given a fresh expiry timer starting from *now* (not their original
- * `created_at`), since that's when this viewer is first seeing them.
+ * **Live-stream feel, not a chat panel**: still capped at a small fixed
+ * height via `overflow-y-auto` — this deliberately does not grow to fit
+ * its content, so it can never become "a large permanent chat panel."
+ * `messages` itself is already capped at 300 in memory
+ * (`useLobbyRealtime`), which is the only cap this component needs;
+ * older-than-that history remains reachable through Expanded Comments'
+ * own (differently-sourced) view instead.
  *
- * **Never more than `MAX_VISIBLE` at once**: a burst of rapid messages
- * evicts the oldest *visible* entry immediately rather than waiting for
- * its timer — this is the "conservative ambient feed size" the approved
- * design calls for, and the seam later phases can tighten further (e.g.
- * shrinking further while a React/Vote/Gift tray is open) without
- * restructuring this component.
+ * **Follow vs. reading — the live-stream-comparable behavior**: while
+ * scrolled at/near the bottom (`following`), a new arrival auto-scrolls
+ * the window down to reveal it, matching "enter naturally, push
+ * previous comments through." The moment the viewer scrolls up past
+ * `NEAR_BOTTOM_PX`, `following` goes false and new arrivals are simply
+ * appended without moving the scroll position at all — no snapping the
+ * view away from what they're reading, and no "new comments" indicator
+ * here (that affordance belongs to Expanded Comments' frozen-snapshot
+ * model; this view is never frozen, so there's nothing to "catch up"
+ * on — scrolling back down reveals whatever arrived in the meantime
+ * exactly where it naturally landed). Scrolling back near the bottom
+ * resumes following automatically. This is the same follow/threshold
+ * shape as a mature livestream comment feed (chat auto-scrolls unless
+ * you've scrolled up to read), applied at this component's own small
+ * scale rather than Expanded Comments' full-sheet scale.
  *
  * **No stage reflow**: the caller positions this as an absolutely
  * positioned overlay (a sibling of `SpeakerStage`, never a document-flow
  * ancestor) — this component itself has no opinion on where it sits,
- * only what it shows and for how long.
+ * only what it shows.
  *
- * **Discussion Expanded's tap target, now wired**: `onExpand`, when
- * provided, is called on tap of any bubble — this is the seam the doc
- * comment above used to describe as "not built yet." Each bubble already
- * carried `data-message-id` for exactly this; no rewrite of how bubbles
- * render was needed, only this one prop and its `onClick`.
+ * **Discussion Expanded's tap target**: `onExpand`, when provided, is
+ * called on tap of any bubble — the same `data-message-id` seam this
+ * component has carried since Phase 3. Native tap-vs-drag distinction
+ * (a browser doesn't fire `click` after a real scroll gesture) is what
+ * keeps this from fighting the container's own new scrollability; no
+ * extra gesture-disambiguation code was needed for that.
  */
 export function AmbientComments({
   messages,
@@ -59,62 +71,53 @@ export function AmbientComments({
   messages: LobbyMessage[];
   onExpand?: () => void;
 }) {
-  const [visible, setVisible] = useState<VisibleEntry[]>([]);
-  const shownIds = useRef(new Set<string>());
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const listRef = useRef<HTMLDivElement>(null);
+  const followingRef = useRef(true);
+  const prevLengthRef = useRef(messages.length);
 
+  // Seeded scroll position on mount: land at the live edge, same as a
+  // livestream chat panel opening already caught up.
   useEffect(() => {
-    const newOnes = messages.filter((m) => !shownIds.current.has(m.id));
-    if (newOnes.length === 0) return;
-
-    for (const message of newOnes) {
-      shownIds.current.add(message.id);
-      const timer = setTimeout(() => {
-        setVisible((prev) => prev.filter((entry) => entry.message.id !== message.id));
-        timers.current.delete(message.id);
-      }, VISIBLE_DURATION_MS);
-      timers.current.set(message.id, timer);
-    }
-
-    setVisible((prev) => {
-      const next = [...prev, ...newOnes.map((message) => ({ message }))];
-      // Never show more than MAX_VISIBLE — evict the oldest immediately
-      // (clearing its now-pointless timer) rather than waiting for its
-      // own expiry, so a rapid burst can't stack the ambient feed taller
-      // than the "conservative size" this phase calls for.
-      while (next.length > MAX_VISIBLE) {
-        const evicted = next.shift()!;
-        const t = timers.current.get(evicted.message.id);
-        if (t) clearTimeout(t);
-        timers.current.delete(evicted.message.id);
-      }
-      return next;
-    });
-  }, [messages]);
-
-  useEffect(() => {
-    const timersAtMount = timers.current;
-    return () => {
-      for (const t of timersAtMount.values()) clearTimeout(t);
-    };
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+    // Mount-only — see the arrival effect below for ongoing updates.
   }, []);
 
-  if (visible.length === 0) return null;
+  useEffect(() => {
+    const delta = messages.length - prevLengthRef.current;
+    prevLengthRef.current = messages.length;
+    if (delta <= 0) return;
+    if (followingRef.current) {
+      listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+    }
+    // Not following: append happens via the normal messages.map render
+    // below with no scroll call at all — position stays exactly where
+    // the viewer left it.
+  }, [messages.length]);
+
+  function handleScroll() {
+    const el = listRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    followingRef.current = distanceFromBottom < NEAR_BOTTOM_PX;
+  }
+
+  if (messages.length === 0) return null;
 
   return (
-    <div data-testid="ambient-comments" className="flex flex-col gap-1.5">
-      {visible.map(({ message }) => (
+    <div
+      ref={listRef}
+      onScroll={handleScroll}
+      data-testid="ambient-comments"
+      className="pointer-events-auto flex max-h-32 flex-col gap-1.5 overflow-y-auto"
+    >
+      {messages.map((message) => (
         <button
           key={message.id}
           type="button"
           data-testid="ambient-comment"
           data-message-id={message.id}
           onClick={onExpand}
-          // pointer-events-auto so a tap actually reaches this button —
-          // the caller wraps the whole component in a pointer-events-none
-          // margin, same click-through pattern used everywhere else in
-          // this room; each bubble opts back in.
-          className="animate-[ambient-comment-fade_7s_ease-out_forwards] pointer-events-auto max-w-[220px] truncate rounded-full px-3 py-1.5 text-left text-xs text-white"
+          className="max-w-[220px] shrink-0 animate-[ambient-comment-enter_250ms_ease-out] truncate rounded-full px-3 py-1.5 text-left text-xs text-white"
           style={{
             backgroundColor: message.is_speaker_request ? "rgb(251 146 60 / 0.22)" : "rgb(0 0 0 / 0.32)",
             border: message.is_speaker_request ? "1px solid rgb(251 146 60 / 0.5)" : undefined,

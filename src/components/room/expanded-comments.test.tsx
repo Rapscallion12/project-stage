@@ -1,14 +1,16 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExpandedComments } from "./expanded-comments";
-import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
+import type { SpeakerRequest } from "@/lib/repositories/speaker-requests";
 
-const { sendMessage, submitSpeakerRequest } = vi.hoisted(() => ({
+const { sendMessage, submitSpeakerRequest, addReaction } = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   submitSpeakerRequest: vi.fn(),
+  addReaction: vi.fn(),
 }));
 
-vi.mock("@/app/events/[id]/lobby/actions", () => ({ sendMessage }));
+vi.mock("@/app/events/[id]/lobby/actions", () => ({ sendMessage, addReaction }));
 vi.mock("@/app/events/[id]/room/actions", () => ({ submitSpeakerRequest }));
 
 function makeMessage(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
@@ -24,21 +26,30 @@ function makeMessage(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
   };
 }
 
+function makeRequest(overrides: Partial<SpeakerRequest> = {}): SpeakerRequest {
+  return {
+    id: "r1",
+    event_id: "e1",
+    profile_id: "p1",
+    guest_id: null,
+    message_id: "m1",
+    status: "pending",
+    created_at: new Date().toISOString(),
+    resolved_at: null,
+    ...overrides,
+  };
+}
+
 const baseProps = {
   eventId: "e1",
   onClose: vi.fn(),
+  reactions: {} as Record<string, ReactionState>,
+  pendingRequests: [] as SpeakerRequest[],
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
   onHasPendingRequestChange: vi.fn(),
   onPrepareMedia: vi.fn(async () => {}),
 };
-
-/** Configures the scroll container's geometry so the follow/scrolled-up threshold logic has something real to compute against — jsdom never computes layout on its own. */
-function setScrollGeometry(el: HTMLElement, { scrollTop, scrollHeight, clientHeight }: { scrollTop: number; scrollHeight: number; clientHeight: number }) {
-  Object.defineProperty(el, "scrollTop", { configurable: true, writable: true, value: scrollTop });
-  Object.defineProperty(el, "scrollHeight", { configurable: true, value: scrollHeight });
-  Object.defineProperty(el, "clientHeight", { configurable: true, value: clientHeight });
-}
 
 describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
   afterEach(() => {
@@ -62,138 +73,292 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("renders comments in chronological order", () => {
+  describe("Recent Comments — newest to oldest, frozen snapshot", () => {
     const messages = [
       makeMessage({ id: "m1", body: "first", created_at: "2026-01-01T00:00:00.000Z" }),
       makeMessage({ id: "m2", body: "second", created_at: "2026-01-01T00:00:01.000Z" }),
       makeMessage({ id: "m3", body: "third", created_at: "2026-01-01T00:00:02.000Z" }),
     ];
-    render(<ExpandedComments {...baseProps} open messages={messages} />);
-    const rows = screen.getAllByTestId("expanded-comment-row");
-    expect(rows).toHaveLength(3);
-    expect(rows[0]).toHaveTextContent("first");
-    expect(rows[1]).toHaveTextContent("second");
-    expect(rows[2]).toHaveTextContent("third");
+
+    it("opens with the newest comment at the top", () => {
+      render(<ExpandedComments {...baseProps} open messages={messages} />);
+      const rows = screen.getAllByTestId("expanded-comment-row");
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toHaveTextContent("third");
+      expect(rows[1]).toHaveTextContent("second");
+      expect(rows[2]).toHaveTextContent("first");
+    });
+
+    it("shows guest/profile identity, comment text, and the request-to-speak badge where applicable", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[
+            makeMessage({ id: "m1", author_display_name: "Jamie", body: "hey everyone" }),
+            makeMessage({ id: "m2", author_display_name: "Alex", body: "can I speak?", is_speaker_request: true }),
+          ]}
+        />,
+      );
+      expect(screen.getByText("Jamie")).toBeInTheDocument();
+      expect(screen.getByText(/hey everyone/)).toBeInTheDocument();
+      expect(screen.getByTitle("Requested the mic")).toBeInTheDocument();
+    });
+
+    it("does not insert a new arrival into the visible list — it stays frozen at the moment of opening", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      expect(screen.getAllByTestId("expanded-comment-row")).toHaveLength(3);
+
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4", body: "arrived after opening" })]}
+        />,
+      );
+
+      // Still 3 rows — the new arrival did not get inserted automatically.
+      expect(screen.getAllByTestId("expanded-comment-row")).toHaveLength(3);
+      expect(screen.queryByText(/arrived after opening/)).not.toBeInTheDocument();
+    });
+
+    it("increments the new-comments counter as arrivals accumulate in the background", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      expect(screen.queryByTestId("expanded-comments-refresh")).not.toBeInTheDocument();
+
+      rerender(
+        <ExpandedComments {...baseProps} open messages={[...messages, makeMessage({ id: "m4" })]} />,
+      );
+      expect(screen.getByTestId("expanded-comments-refresh")).toHaveTextContent("1 new comment");
+
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4" }), makeMessage({ id: "m5" })]}
+        />,
+      );
+      expect(screen.getByTestId("expanded-comments-refresh")).toHaveTextContent("2 new comments");
+    });
+
+    it("tapping refresh incorporates the waiting comments at the top, newest first, and resets the counter", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4", body: "brand new", created_at: "2026-01-01T00:00:03.000Z" })]}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("expanded-comments-refresh"));
+
+      const rows = screen.getAllByTestId("expanded-comment-row");
+      expect(rows).toHaveLength(4);
+      expect(rows[0]).toHaveTextContent("brand new");
+      expect(screen.queryByTestId("expanded-comments-refresh")).not.toBeInTheDocument();
+    });
+
+    it("re-opening after being closed takes a fresh snapshot", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open={false} messages={messages} />);
+      rerender(<ExpandedComments {...baseProps} open messages={messages} />);
+      expect(screen.getAllByTestId("expanded-comment-row")).toHaveLength(3);
+
+      rerender(<ExpandedComments {...baseProps} open={false} messages={messages} />);
+      const withNewOne = [...messages, makeMessage({ id: "m4", body: "landed while closed" })];
+      rerender(<ExpandedComments {...baseProps} open messages={withNewOne} />);
+
+      const rows = screen.getAllByTestId("expanded-comment-row");
+      expect(rows).toHaveLength(4);
+      expect(rows[0]).toHaveTextContent("landed while closed");
+      expect(screen.queryByTestId("expanded-comments-refresh")).not.toBeInTheDocument();
+    });
   });
 
-  it("shows the guest/profile identity, comment text, and the request-to-speak badge where applicable", () => {
-    render(
-      <ExpandedComments
-        {...baseProps}
-        open
-        messages={[
-          makeMessage({ id: "m1", author_display_name: "Jamie", body: "hey everyone", is_speaker_request: false }),
-          makeMessage({ id: "m2", author_display_name: "Alex", body: "can I speak?", is_speaker_request: true }),
-        ]}
-      />,
-    );
-    const rows = screen.getAllByTestId("expanded-comment-row");
-    expect(rows[0]).toHaveTextContent("Jamie");
-    expect(rows[0]).toHaveTextContent("hey everyone");
-    expect(rows[1]).toHaveTextContent("Alex");
-    expect(screen.getByTitle("Requested the mic")).toBeInTheDocument();
+  describe("Top Speaker Requests — separate section, live, not frozen", () => {
+    it("renders nothing for the section when there are no pending requests", () => {
+      render(<ExpandedComments {...baseProps} open messages={[]} pendingRequests={[]} />);
+      expect(screen.queryByTestId("expanded-top-requests")).not.toBeInTheDocument();
+    });
+
+    it("renders up to 3 pending requests, separate from Recent Comments", () => {
+      const messages = [
+        makeMessage({ id: "m1", author_display_name: "Alex", body: "let me on", is_speaker_request: true }),
+        makeMessage({ id: "m2", author_display_name: "Sam", body: "me too", is_speaker_request: true }),
+      ];
+      const pendingRequests = [
+        makeRequest({ id: "r1", message_id: "m1", created_at: "2026-01-01T00:00:00.000Z" }),
+        makeRequest({ id: "r2", message_id: "m2", created_at: "2026-01-01T00:00:01.000Z" }),
+      ];
+      render(<ExpandedComments {...baseProps} open messages={messages} pendingRequests={pendingRequests} />);
+
+      const section = screen.getByTestId("expanded-top-requests");
+      expect(section).toHaveTextContent("Alex");
+      expect(section).toHaveTextContent("Sam");
+      expect(screen.getAllByTestId("expanded-top-request-row")).toHaveLength(2);
+    });
+
+    it("caps at 3 even with more pending requests", () => {
+      const messages = [1, 2, 3, 4].map((n) =>
+        makeMessage({ id: `m${n}`, author_display_name: `User${n}`, is_speaker_request: true }),
+      );
+      const pendingRequests = [1, 2, 3, 4].map((n) =>
+        makeRequest({ id: `r${n}`, message_id: `m${n}`, created_at: `2026-01-01T00:00:0${n}.000Z` }),
+      );
+      render(<ExpandedComments {...baseProps} open messages={messages} pendingRequests={pendingRequests} />);
+      expect(screen.getAllByTestId("expanded-top-request-row")).toHaveLength(3);
+    });
+
+    it("stays live — a new pending request appears immediately, even while Recent Comments is frozen", () => {
+      const messages = [makeMessage({ id: "m1", is_speaker_request: false, body: "ordinary comment" })];
+      const { rerender } = render(
+        <ExpandedComments {...baseProps} open messages={messages} pendingRequests={[]} />,
+      );
+      expect(screen.queryByTestId("expanded-top-requests")).not.toBeInTheDocument();
+
+      const withRequest = [
+        ...messages,
+        makeMessage({ id: "m2", author_display_name: "Jordan", is_speaker_request: true }),
+      ];
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={withRequest}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m2" })]}
+        />,
+      );
+
+      // The section appears live immediately, without needing a refresh
+      // tap — unlike Recent Comments, which (correctly, separately) still
+      // counts m2 as a new arrival against its own frozen snapshot.
+      expect(screen.getByTestId("expanded-top-requests")).toHaveTextContent("Jordan");
+    });
   });
 
-  it("auto-scrolls to the newest comment while following (the default on open)", () => {
-    const { rerender } = render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
-    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
-    scrollToSpy.mockClear();
+  describe("Double-tap to like", () => {
+    it("a single tap does not like", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
+      fireEvent.click(screen.getByTestId("expanded-comment-row"));
+      expect(addReaction).not.toHaveBeenCalled();
+    });
 
-    rerender(
-      <ExpandedComments
-        {...baseProps}
-        open
-        messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2", body: "new one" })]}
-      />,
-    );
+    it("a double-tap within the window calls the existing addReaction action", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(addReaction).toHaveBeenCalledTimes(1);
+      expect(addReaction).toHaveBeenCalledWith("m1");
+    });
 
-    expect(scrollToSpy).toHaveBeenCalled();
-    expect(screen.queryByTestId("expanded-comments-jump-latest")).not.toBeInTheDocument();
+    it("shows a lightweight visual acknowledgment (a liked indicator) after double-tapping", async () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      await waitFor(() => expect(screen.getByTestId("expanded-comment-like")).toBeInTheDocument());
+    });
+
+    it("shows the real reaction count from the reactions prop (persisted/realtime data, not local-only)", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1" })]}
+          reactions={{ m1: { count: 4, reactedByMe: true } }}
+        />,
+      );
+      expect(screen.getByTestId("expanded-comment-like")).toHaveTextContent("4");
+    });
+
+    it("a fast triple-tap only fires one like, not two", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(addReaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-like a message the viewer already liked", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1" })]}
+          reactions={{ m1: { count: 1, reactedByMe: true } }}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(addReaction).not.toHaveBeenCalled();
+    });
+
+    it("works the same way on a Top Speaker Requests row", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1" })]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-top-request-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(addReaction).toHaveBeenCalledWith("m1");
+    });
   });
 
-  it("does not steal scroll position when a comment arrives while scrolled up, and shows a jump-to-latest indicator instead", () => {
-    const { rerender } = render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
-    const list = screen.getByTestId("expanded-comments-list");
+  describe("Grabber drag-to-close", () => {
+    it("dragging the handle past the threshold and releasing closes the sheet", () => {
+      const onClose = vi.fn();
+      render(<ExpandedComments {...baseProps} open onClose={onClose} messages={[]} />);
+      const handle = screen.getByTestId("expanded-comments-handle");
+      fireEvent.pointerDown(handle, { clientY: 0, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientY: 150, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientY: 150, pointerId: 1 });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
 
-    // Scroll well away from the bottom — past the near-bottom threshold.
-    setScrollGeometry(list, { scrollTop: 0, scrollHeight: 2000, clientHeight: 400 });
-    fireEvent.scroll(list);
+    it("an incomplete drag (below the threshold) does not close the sheet", () => {
+      const onClose = vi.fn();
+      render(<ExpandedComments {...baseProps} open onClose={onClose} messages={[]} />);
+      const handle = screen.getByTestId("expanded-comments-handle");
+      fireEvent.pointerDown(handle, { clientY: 0, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientY: 20, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientY: 20, pointerId: 1 });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
 
-    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
-    scrollToSpy.mockClear();
+    it("dragging upward never closes the sheet", () => {
+      const onClose = vi.fn();
+      render(<ExpandedComments {...baseProps} open onClose={onClose} messages={[]} />);
+      const handle = screen.getByTestId("expanded-comments-handle");
+      fireEvent.pointerDown(handle, { clientY: 200, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientY: 0, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientY: 0, pointerId: 1 });
+      expect(onClose).not.toHaveBeenCalled();
+    });
 
-    rerender(
-      <ExpandedComments
-        {...baseProps}
-        open
-        messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2", body: "arrived while scrolled up" })]}
-      />,
-    );
-
-    // Position untouched — no scroll-to-bottom call for this arrival.
-    expect(scrollToSpy).not.toHaveBeenCalled();
-    expect(list.scrollTop).toBe(0);
-    expect(screen.getByTestId("expanded-comments-jump-latest")).toHaveTextContent("1 new comment");
-  });
-
-  it("jump-to-latest scrolls to the bottom, clears the indicator, and resumes live-follow behavior", () => {
-    const { rerender } = render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
-    const list = screen.getByTestId("expanded-comments-list");
-    setScrollGeometry(list, { scrollTop: 0, scrollHeight: 2000, clientHeight: 400 });
-    fireEvent.scroll(list);
-
-    rerender(
-      <ExpandedComments
-        {...baseProps}
-        open
-        messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" })]}
-      />,
-    );
-    expect(screen.getByTestId("expanded-comments-jump-latest")).toBeInTheDocument();
-
-    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
-    scrollToSpy.mockClear();
-    fireEvent.click(screen.getByTestId("expanded-comments-jump-latest"));
-
-    expect(scrollToSpy).toHaveBeenCalled();
-    expect(screen.queryByTestId("expanded-comments-jump-latest")).not.toBeInTheDocument();
-
-    // Resumed following — the next arrival auto-scrolls again, no indicator.
-    scrollToSpy.mockClear();
-    rerender(
-      <ExpandedComments
-        {...baseProps}
-        open
-        messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" }), makeMessage({ id: "m3" })]}
-      />,
-    );
-    expect(scrollToSpy).toHaveBeenCalled();
-    expect(screen.queryByTestId("expanded-comments-jump-latest")).not.toBeInTheDocument();
-  });
-
-  it("resumes following automatically once the viewer scrolls back near the bottom themselves", () => {
-    render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
-    const list = screen.getByTestId("expanded-comments-list");
-
-    setScrollGeometry(list, { scrollTop: 0, scrollHeight: 2000, clientHeight: 400 });
-    fireEvent.scroll(list);
-
-    // Scrolls back near the bottom manually.
-    setScrollGeometry(list, { scrollTop: 1580, scrollHeight: 2000, clientHeight: 400 });
-    fireEvent.scroll(list);
-
-    const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo");
-    scrollToSpy.mockClear();
-
-    const { rerender } = render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
-    rerender(
-      <ExpandedComments
-        {...baseProps}
-        open
-        messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" })]}
-      />,
-    );
-    expect(screen.queryByTestId("expanded-comments-jump-latest")).not.toBeInTheDocument();
+    it("scrolling inside the comment list does not close or dismiss the sheet", () => {
+      const onClose = vi.fn();
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          onClose={onClose}
+          messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" })]}
+        />,
+      );
+      const list = screen.getByTestId("expanded-comments-scroll");
+      fireEvent.scroll(list, { target: { scrollTop: 40 } });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
   });
 
   it("sends a comment from the expanded composer via the existing sendMessage action", async () => {
@@ -205,9 +370,6 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
 
     await waitFor(() => expect(sendMessage).toHaveBeenCalled());
-    // sendMessage.bind(null, eventId) prepends eventId ahead of
-    // useActionState's own (prevState, formData) — same call shape
-    // ChatPanel's own tests rely on.
     const formData = sendMessage.mock.calls[0][2] as FormData;
     expect(formData.get("body")).toBe("hello from the sheet");
   });

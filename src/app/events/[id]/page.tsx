@@ -5,7 +5,7 @@ import { resolveIdentity } from "@/lib/identity";
 import { getEventById } from "@/lib/repositories/events";
 import { listActiveSpeakers } from "@/lib/repositories/event-speakers";
 import { listRecentMessages, listReactionsForMessages } from "@/lib/repositories/chat";
-import { getPendingRequestForIdentity } from "@/lib/repositories/speaker-requests";
+import { getPendingRequestForIdentity, listPendingSpeakerRequests } from "@/lib/repositories/speaker-requests";
 import { getLiveKitToken } from "./room/actions";
 import type { ReactionState } from "@/hooks/use-lobby-realtime";
 
@@ -31,11 +31,12 @@ export default async function EventPage(props: PageProps<"/events/[id]">) {
   }
 
   const identity = await resolveIdentity();
-  const [speakers, messages, tokenResult, myPendingRequest] = await Promise.all([
+  const [speakers, messages, tokenResult, myPendingRequest, pendingRequests] = await Promise.all([
     listActiveSpeakers(id),
     listRecentMessages(id, HISTORY_LIMIT),
     getLiveKitToken(id),
     getPendingRequestForIdentity(id, identity),
+    listPendingSpeakerRequests(id),
   ]);
   const reactionRows = await listReactionsForMessages(messages.map((m) => m.id));
 
@@ -63,6 +64,7 @@ export default async function EventPage(props: PageProps<"/events/[id]">) {
         initialMessages={messages.slice().reverse()}
         initialReactions={initialReactions}
         initialHasPendingRequest={myPendingRequest !== null}
+        initialPendingRequests={pendingRequests}
       />
     </div>
   );
