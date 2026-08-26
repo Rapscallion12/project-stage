@@ -9,7 +9,7 @@ import { createServiceClient } from "@/lib/supabase/service";
  * the one place that vocabulary is typed; keep it in sync with the
  * `left_reason` CHECK in migration 00000000000005.
  */
-export type LeftReason = "voluntary" | "replaced" | "moderator_removed" | "event_ended" | "disconnected";
+export type LeftReason = "voluntary" | "replaced" | "moderator_removed" | "event_ended" | "disconnected" | "inactive";
 
 /**
  * Minimal identity shape this repository needs — not imported from
@@ -48,21 +48,54 @@ export type EventSpeaker = {
   joined_at: string;
   left_at: string | null;
   left_reason: LeftReason | null;
+  /**
+   * Issue #18 UX finding: when this identity's LiveKit connection was
+   * last observed dropping (set by the webhook's `participant_left`
+   * handler via `markSpeakerDisconnected`), or null while actively
+   * connected / already released. The server-authoritative grace-period
+   * clock — see migration 00000000000016 and `checkAndEvictInactiveSpeaker`
+   * (room/actions.ts). Flows through Realtime like every other column
+   * here, so `useSpeakerReconnectGrace` can derive "who's currently in
+   * a disconnect grace window" directly from already-subscribed
+   * `speakers` state, no separate signal needed.
+   */
+  disconnected_at: string | null;
+  /**
+   * Issue #18 unified inactive-speaker finding: when this identity's own
+   * connected client last observed itself publishing no usable media at
+   * all (both camera and microphone off/muted — see
+   * `isLocalMediaInactive`, `lib/speaker-presence.ts`), or null while
+   * actively publishing something / already released. The server side of
+   * the *other* half of "inactive" — see migration 00000000000017 and
+   * this repository's `markSpeakerMediaInactive`. Never read directly by
+   * a component; `lib/speaker-presence.ts`'s `inactiveSince`/
+   * `deriveSpeakerPresence` are the one place this and `disconnected_at`
+   * collapse into the single `speakerPresence` concept the UI uses.
+   */
+  media_inactive_since: string | null;
 };
 
 /**
- * Currently-occupied seats for an event (left_at is null). Still a plain
- * read — the table itself has no insert/update grant (see migration
- * 00000000000005); every write goes through one of the functions below
- * instead, never a direct `.insert()`/`.update()` here.
+ * Currently-occupied seats for an event. Still a plain read — the table
+ * itself has no insert/update grant (see migration 00000000000005);
+ * every write goes through one of the functions below instead, never a
+ * direct `.insert()`/`.update()` here.
+ *
+ * Issue #18 expiration-enforcement finding: reads from
+ * `event_speakers_active` (migration 00000000000018), not the base
+ * table's own `left_at is null` — a row whose inactivity deadline has
+ * already passed no longer counts as active here, even if it hasn't
+ * been physically released yet. This is what `findOpenSeat`
+ * (`room/actions.ts`) actually decides "is this seat open" from, so an
+ * expired-but-not-yet-cleaned-up occupant no longer blocks a genuine new
+ * claimant from being offered that seat.
  */
 export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[]> {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("event_speakers")
+    .from("event_speakers_active")
     .select("*")
     .eq("event_id", eventId)
-    .is("left_at", null)
     .order("seat_number", { ascending: true });
   return (data ?? []) as EventSpeaker[];
 }
@@ -78,11 +111,13 @@ export async function listEventIdsWithActiveSpeakers(eventIds: string[]): Promis
   if (eventIds.length === 0) return new Set();
   const supabase = await createClient();
   const { data } = await supabase
-    .from("event_speakers")
+    .from("event_speakers_active")
     .select("event_id")
-    .in("event_id", eventIds)
-    .is("left_at", null);
-  return new Set((data ?? []).map((row) => row.event_id));
+    .in("event_id", eventIds);
+  // event_id is NOT NULL on the base table; Supabase's type generator
+  // just can't express that through a view — see this file's other view
+  // reads for the same cast pattern.
+  return new Set((data ?? []).map((row) => row.event_id as string));
 }
 
 /**
@@ -91,16 +126,26 @@ export async function listEventIdsWithActiveSpeakers(eventIds: string[]): Promis
  * token endpoint (issues #2/#16) to decide `canPublish`; a targeted query
  * rather than filtering `listActiveSpeakers()` client-side, since it
  * expresses the actual question being asked.
+ *
+ * Issue #18 expiration-enforcement finding: reads from
+ * `event_speakers_active` (migration 00000000000018), the same
+ * expiration-aware view `listActiveSpeakers` uses, not the base table's
+ * `left_at is null`. This is the exact check `mintLiveKitToken`'s
+ * `determineCanPublish` runs on every token request (including a
+ * returning speaker's "Tap to reconnect," which mints a fresh token on a
+ * genuinely fresh page/tab) — an identity whose inactivity deadline has
+ * already passed now correctly reads as having no active seat here, so
+ * a stale reconnect can no longer be granted `canPublish: true` just
+ * because the physical row hadn't been released yet.
  */
 export async function getActiveSeatForIdentity(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
   const supabase = await createClient();
   const column = identity.type === "profile" ? "profile_id" : "guest_id";
   const { data } = await supabase
-    .from("event_speakers")
+    .from("event_speakers_active")
     .select("*")
     .eq("event_id", eventId)
     .eq(column, identity.id)
-    .is("left_at", null)
     .maybeSingle();
   return (data as EventSpeaker | null) ?? null;
 }
@@ -189,7 +234,7 @@ export async function claimSpeakerSeat(
  * reason: no anon/authenticated grant, service client only. Real
  * callers: the LiveKit webhook route handler (after it independently
  * verifies LiveKit's webhook signature) for an immediate eviction, and
- * `checkAndEvictDisconnectedSpeaker` (room/actions.ts, real-device
+ * `checkAndEvictInactiveSpeaker` (room/actions.ts, real-device
  * reconnect-grace-period finding) for the graced path — the latter is
  * reachable from an ordinary client call, but only ever actually reaches
  * this function after its own independent re-verification via LiveKit's
@@ -222,6 +267,164 @@ export async function endSpeakerSeat(
   // exactly one row, so this comes back as `{id: null, ...}` — a real
   // object with every field null, not JSON `null`. Checking `id` is what
   // actually distinguishes "no matching row" from a genuine result here.
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * Starts the server-authoritative disconnect grace period (issue #18 UX
+ * finding) — see migration 00000000000016's `mark_speaker_disconnected`.
+ * The only real caller is the LiveKit webhook route's `participant_left`
+ * handler, after it independently verifies LiveKit's webhook signature —
+ * same trusted-server-only tier as `endSpeakerSeat`. Idempotent (a
+ * duplicate/retried webhook delivery never restarts the clock) and a
+ * safe no-op for an identity with no active seat.
+ */
+export async function markSpeakerDisconnected(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("mark_speaker_disconnected", {
+    p_event_id: eventId,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * Clears the disconnect grace-period clock (issue #18 UX finding) — see
+ * migration 00000000000016's `mark_speaker_reconnected`. The only real
+ * caller is the LiveKit webhook route's `participant_joined` handler —
+ * the same authoritative, server-to-server signal disconnection uses.
+ * Scoped to this identity's own active seat row only, never by seat
+ * number, which is what makes a stale reconnect signal for an
+ * already-released/reclaimed seat a harmless no-op — see the migration's
+ * own comment.
+ */
+export async function markSpeakerReconnected(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("mark_speaker_reconnected", {
+    p_event_id: eventId,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * The disconnect-only grace-period enforcement (issue #18 UX finding) —
+ * see migration 00000000000016's `release_expired_disconnected_speaker`
+ * for the full race-safety reasoning (a single atomic UPDATE, not a
+ * check-then-write): the actual release decision is re-derived from
+ * Postgres's own clock and the row's own `disconnected_at` every time,
+ * never trusted from the caller. Returns `null` (not an error) whenever
+ * nothing was released: not yet expired, already reconnected
+ * (`disconnected_at` cleared), already released, or never seated.
+ *
+ * **Superseded for live app code** (issue #18 unified inactive-speaker
+ * finding) — `checkAndEvictInactiveSpeaker` (room/actions.ts) now calls
+ * `releaseExpiredInactiveSpeaker` below instead, which covers *either*
+ * cause via the same race-safety shape. This function is kept, unchanged,
+ * for tests/callers that specifically want the disconnect-only check.
+ */
+export async function releaseExpiredDisconnectedSpeaker(
+  eventId: string,
+  identity: SeatIdentity,
+  graceSeconds: number,
+): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("release_expired_disconnected_speaker", {
+    p_event_id: eventId,
+    p_grace_seconds: graceSeconds,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * Starts the media-inactivity grace-period clock (issue #18 unified
+ * inactive-speaker finding) — see migration 00000000000017's
+ * `mark_speaker_media_inactive`. Unlike `markSpeakerDisconnected`, the
+ * intended caller here is the speaker's own connected client (via the
+ * `reportSpeakerMediaInactive` server action), not a webhook — there is
+ * no server-observable signal for mute state in this app to trust
+ * instead. Idempotent (a duplicate report never restarts the clock) and
+ * a safe no-op for an identity with no active seat.
+ */
+export async function markSpeakerMediaInactive(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("mark_speaker_media_inactive", {
+    p_event_id: eventId,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * Clears the media-inactivity clock (issue #18 unified inactive-speaker
+ * finding) — see migration 00000000000017's `mark_speaker_media_active`.
+ * Called the instant the speaker's own client observes either camera or
+ * microphone becoming active again (either alone is enough — see
+ * `isLocalMediaInactive`).
+ */
+export async function markSpeakerMediaActive(eventId: string, identity: SeatIdentity): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("mark_speaker_media_active", {
+    p_event_id: eventId,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data as EventSpeaker | null;
+  return row?.id ? row : null;
+}
+
+/**
+ * The unified, server-authoritative expiration enforcement (issue #18
+ * unified inactive-speaker finding) — see migration 00000000000017's
+ * `release_expired_inactive_speaker`: a single atomic UPDATE covering
+ * *either* a genuine LiveKit disconnect or media inactivity, whichever
+ * (if either) has actually crossed the grace period right now. This is
+ * the function `checkAndEvictInactiveSpeaker` (room/actions.ts) calls —
+ * `releaseExpiredDisconnectedSpeaker` above is kept for the tests/callers
+ * that specifically want the disconnect-only check, but every live
+ * caller in the app now goes through this one instead, since a seat can
+ * become unavailable for either reason.
+ */
+export async function releaseExpiredInactiveSpeaker(
+  eventId: string,
+  identity: SeatIdentity,
+  graceSeconds: number,
+): Promise<EventSpeaker | null> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("release_expired_inactive_speaker", {
+    p_event_id: eventId,
+    p_grace_seconds: graceSeconds,
+    p_profile_id: identity.type === "profile" ? identity.id : undefined,
+    p_guest_id: identity.type === "guest" ? identity.id : undefined,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
   const row = data as EventSpeaker | null;
   return row?.id ? row : null;
 }

@@ -103,27 +103,48 @@ export async function requestToSpeakAsGuest(
   return { messageId: row.message_id, requestId: row.request_id };
 }
 
-/** Self-service withdrawal of an account holder's own pending request — same shape as `leaveSpeakerSeat`. */
-export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRequest> {
+/**
+ * Self-service withdrawal of an account holder's own pending request —
+ * same shape as `leaveSpeakerSeat`. Returns `null` (not a thrown error)
+ * when there's no matching *pending* row for this identity — the RPC
+ * itself (migration 00000000000011) `raise exception`s
+ * `'no pending request found for this caller in event %'` in that case,
+ * which this catches specifically and converts to `null`.
+ *
+ * Real-device finding (2026-08-23): a request that's already been
+ * granted (see `markSpeakerRequestGranted`) has no pending row left for
+ * this RPC to find — that used to surface as a generic thrown error,
+ * which the action layer turned into a UI error message and, critically,
+ * never cleared the caller's stale `hasPendingRequest` flag, leaving a
+ * "Withdraw" button that appeared to do nothing. "Nothing left to
+ * withdraw" and "successfully withdrew" both mean the same thing from
+ * the caller's perspective (no pending request remains either way), so
+ * this is a `null` result, not a failure — see `room/actions.ts`'s
+ * `withdrawSpeakerRequest` for how that distinction is used. Any *other*
+ * error (a real RPC/connection failure) still throws normally.
+ */
+export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRequest | null> {
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("withdraw_speaker_request", { p_event_id: eventId });
-  if (error || !data) {
-    throw new Error(error?.message ?? "withdraw_speaker_request returned no row");
+  if (error) {
+    if (error.message.includes("no pending request found")) return null;
+    throw new Error(error.message);
   }
-  return data as SpeakerRequest;
+  return (data as SpeakerRequest | null) ?? null;
 }
 
-/** A guest's own withdrawal (issue #16) — same service-role-only tier as `requestToSpeakAsGuest`, for the same reason. */
-export async function withdrawSpeakerRequestAsGuest(eventId: string, guestId: string): Promise<SpeakerRequest> {
+/** A guest's own withdrawal (issue #16) — same service-role-only tier as `requestToSpeakAsGuest`, and the same `null`-means-nothing-to-withdraw contract as the account-holder version above (the guest RPC, migration 00000000000012, raises the equivalent `'no pending request found for this guest in event %'`). */
+export async function withdrawSpeakerRequestAsGuest(eventId: string, guestId: string): Promise<SpeakerRequest | null> {
   const supabase = createServiceClient();
   const { data, error } = await supabase.rpc("withdraw_speaker_request_as_guest", {
     p_event_id: eventId,
     p_guest_id: guestId,
   });
-  if (error || !data) {
-    throw new Error(error?.message ?? "withdraw_speaker_request_as_guest returned no row");
+  if (error) {
+    if (error.message.includes("no pending request found")) return null;
+    throw new Error(error.message);
   }
-  return data as SpeakerRequest;
+  return (data as SpeakerRequest | null) ?? null;
 }
 
 /**

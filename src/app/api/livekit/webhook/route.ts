@@ -1,18 +1,32 @@
 import { WebhookReceiver, authorizeHeader } from "livekit-server-sdk";
 import { NextResponse } from "next/server";
 import { parseParticipantIdentity, parseRoomName } from "@/lib/livekit/token";
-import { endSpeakerSeat } from "@/lib/repositories/event-speakers";
+import { markSpeakerDisconnected, markSpeakerReconnected } from "@/lib/repositories/event-speakers";
 
 /**
- * LiveKit webhook receiver — issue #13's disconnect-cleanup path. LiveKit
- * calls this server-to-server, with no Supabase session at all, so
- * authorization here is entirely the webhook signature check below, never
- * `auth.uid()`. That's why this is the one route in the app that calls
- * `endSpeakerSeat` (backed by the service-client-only `end_speaker_seat`
- * function, migration 00000000000006) — the signature check *is* the
- * authorization; `end_speaker_seat` just trusts whatever already-verified
- * server code calls it. See DECISIONS.md's authorization-model entry for
- * issue #13.
+ * LiveKit webhook receiver — issue #13's disconnect-cleanup path, and
+ * (issue #18 UX finding) the authoritative start/end of the speaker
+ * disconnect grace period. LiveKit calls this server-to-server, with no
+ * Supabase session at all, so authorization here is entirely the webhook
+ * signature check below, never `auth.uid()`. That's why this is the one
+ * route in the app that calls `markSpeakerDisconnected`/
+ * `markSpeakerReconnected` (backed by the service-client-only functions
+ * from migration 00000000000016) — the signature check *is* the
+ * authorization; those functions just trust whatever already-verified
+ * server code calls them. See DECISIONS.md's authorization-model entry
+ * for issue #13 and the grace-period entry for issue #18.
+ *
+ * **No longer an immediate eviction**: `participant_left` used to call
+ * `end_speaker_seat` directly here, releasing the seat the instant
+ * LiveKit reported the disconnect — no grace period at all, so a speaker
+ * who merely refreshed or blipped offline lost their seat outright, the
+ * same as someone who genuinely left. It now only starts the clock
+ * (`disconnected_at`); the actual release, after the grace period
+ * genuinely elapses, is `release_expired_disconnected_speaker`'s job
+ * (`checkAndEvictInactiveSpeaker`, room/actions.ts) — see
+ * DECISIONS.md. `participant_joined` is the symmetric authoritative
+ * "they're back" signal, clearing the clock — not anything the
+ * reconnecting client asserts about itself.
  *
  * Requires a webhook configured in the LiveKit project dashboard pointing
  * at this route's public URL, using the same LIVEKIT_API_KEY/SECRET the
@@ -44,10 +58,11 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
 
-  if (event.event !== "participant_left") {
-    // Only the disconnect path is issue #13's concern — moderator_removed
-    // and event_ended have no trigger yet (see the migration comment), and
-    // every other webhook event this project doesn't act on.
+  if (event.event !== "participant_left" && event.event !== "participant_joined") {
+    // Only the disconnect/reconnect grace-period path is this route's
+    // concern — moderator_removed and event_ended have no trigger yet
+    // (see the migration comment), and every other webhook event this
+    // project doesn't act on.
     return NextResponse.json({ ok: true });
   }
 
@@ -60,17 +75,23 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // Issue #16: guests can now hold a seat too (a prototype-testing
-  // exception, see PRODUCT.md/DECISIONS.md) — endSpeakerSeat is a safe
-  // no-op for any identity with no active seat, so this doesn't need to
-  // check identity.type first; a disconnecting audience guest just hits
-  // the no-op path, same as an audience account holder always has.
-  //
-  // No live LiveKit permission push here, unlike the leave/claim paths —
-  // the participant is already gone, so there's no connected participant
-  // left to push a permission change to. The DB write alone is the fix for
-  // "stuck seat"; the next person who requests a token for this seat will
-  // correctly see it as open.
-  await endSpeakerSeat(eventId, identity, "disconnected");
+  // exception, see PRODUCT.md/DECISIONS.md) — both functions below are a
+  // safe no-op for any identity with no active seat, so this doesn't need
+  // to check identity.type first; a disconnecting/reconnecting audience
+  // guest just hits the no-op path, same as an audience account holder
+  // always has.
+  if (event.event === "participant_left") {
+    // Starts the grace-period clock — does not release the seat itself.
+    // See release_expired_inactive_speaker (checkAndEvictInactiveSpeaker,
+    // room/actions.ts) for the actual, server-authoritative expiration.
+    await markSpeakerDisconnected(eventId, identity);
+  } else {
+    // participant_joined: the authoritative "they're back" signal —
+    // clears the clock so no later, stale grace-period check can evict
+    // them. Scoped to their own seat row only (see the migration's own
+    // comment), so this can never affect a *different* occupant.
+    await markSpeakerReconnected(eventId, identity);
+  }
 
   return NextResponse.json({ ok: true });
 }

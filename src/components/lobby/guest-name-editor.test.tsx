@@ -83,4 +83,51 @@ describe("GuestNameEditor (real-device fix, 2026-08-22: commits on blur, not jus
     expect(screen.getByRole("textbox")).toBeInTheDocument();
     expect(setGuestName).not.toHaveBeenCalled();
   });
+
+  describe("edit-mode input font-size (real-device finding, issue #18 Speaker View corrective pass: text-sm silently overrode Input's own iOS-zoom fix)", () => {
+    it("the inline variant's edit input keeps Input's own 16px default, not text-sm", () => {
+      render(<GuestNameEditor initialName="Guest123" />);
+      fireEvent.click(screen.getByRole("button", { name: /change name/i }));
+      const input = screen.getByRole("textbox");
+      expect(input.className).toMatch(/\btext-base\b/);
+      expect(input.className).not.toMatch(/\btext-sm\b/);
+    });
+
+    it("the chip variant's edit input keeps Input's own 16px default too", () => {
+      render(<GuestNameEditor initialName="Guest123" variant="chip" />);
+      fireEvent.click(screen.getByRole("button", { name: "Guest123" }));
+      const input = screen.getByRole("textbox");
+      expect(input.className).toMatch(/\btext-base\b/);
+      expect(input.className).not.toMatch(/\btext-sm\b/);
+    });
+  });
+
+  describe("variant='chip' (issue #21, 05 interaction model: compact top-chrome presentation, same state machine)", () => {
+    it("renders the compact avatar+name chip instead of the 'You're X — change name' sentence", () => {
+      render(<GuestNameEditor initialName="Guest123" variant="chip" />);
+      expect(screen.queryByText(/you're/i)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Guest123" })).toBeInTheDocument();
+    });
+
+    it("tapping the chip enters edit mode, same as the inline variant", () => {
+      render(<GuestNameEditor initialName="Guest123" variant="chip" />);
+      fireEvent.click(screen.getByRole("button", { name: "Guest123" }));
+      expect(screen.getByRole("textbox")).toBeInTheDocument();
+    });
+
+    it("still commits on blur with no Save button rendered", async () => {
+      setGuestName.mockResolvedValue({});
+      render(<GuestNameEditor initialName="Guest123" variant="chip" />);
+      fireEvent.click(screen.getByRole("button", { name: "Guest123" }));
+
+      expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "Jamie" } });
+      fireEvent.blur(input);
+
+      await waitFor(() => expect(setGuestName).toHaveBeenCalledWith("Jamie"));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Jamie" })).toBeInTheDocument());
+    });
+  });
 });

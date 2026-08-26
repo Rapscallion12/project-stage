@@ -6,11 +6,13 @@ import { getEventPhase } from "@/lib/events";
 import { getEventById } from "@/lib/repositories/events";
 import {
   claimSpeakerSeat,
-  endSpeakerSeat,
   getActiveSeatForIdentity,
   leaveSpeakerSeat as leaveSpeakerSeatRow,
   leaveSpeakerSeatAsGuest,
   listActiveSpeakers,
+  markSpeakerMediaActive,
+  markSpeakerMediaInactive,
+  releaseExpiredInactiveSpeaker,
 } from "@/lib/repositories/event-speakers";
 import type { SeatIdentity } from "@/lib/repositories/event-speakers";
 import { findOpenSeat } from "@/lib/speaker-queue";
@@ -23,9 +25,10 @@ import {
   withdrawSpeakerRequest as withdrawSpeakerRequestRow,
   withdrawSpeakerRequestAsGuest,
 } from "@/lib/repositories/speaker-requests";
-import { getParticipantIdentity, getRoomName, mintLiveKitToken } from "@/lib/livekit/token";
-import { getClient, syncPublishPermission } from "@/lib/livekit/permissions";
+import { mintLiveKitToken } from "@/lib/livekit/token";
+import { syncPublishPermission } from "@/lib/livekit/permissions";
 import { decideClaimEligibility, type ClaimDecision } from "@/lib/speaker-queue";
+import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 export type GetLiveKitTokenResult = { token: string } | { error: string };
 
@@ -134,7 +137,19 @@ export async function requestToSpeak(eventId: string, body: string): Promise<Spe
   }
 }
 
-/** Self-service withdrawal of the caller's own pending request (issue #14), extended to guests by issue #16 the same way requestToSpeak was. */
+/**
+ * Self-service withdrawal of the caller's own pending request (issue
+ * #14), extended to guests by issue #16 the same way requestToSpeak was.
+ *
+ * Real-device finding (2026-08-23): the repository layer now returns
+ * `null` (not a thrown error) when there's no matching *pending* row —
+ * e.g. the request was already granted and consumed by `claimOpenSeat`.
+ * That's success from this action's own contract too: either way, the
+ * caller has no pending request left, which is the only thing
+ * `useAutomaticPromotion`'s `cancel()` actually checks before clearing
+ * `hasPendingRequest`. Treating "nothing to withdraw" as an error was
+ * exactly what left a "Withdraw" button that appeared to do nothing.
+ */
 export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRequestActionResult> {
   const identity = await resolveIdentity();
   try {
@@ -281,6 +296,22 @@ export async function checkPromotionEligibility(eventId: string): Promise<Promot
 export type JoinOpenSeatResult =
   | { ok: true }
   | { ok: false; reason: "queue-exists" }
+  /**
+   * Issue #18 real-device finding (2026-08-27): a distinct, typed
+   * reason — not folded into the generic `"error"` string case — because
+   * this one means something structurally different: the server just
+   * proved (via `getActiveSeatForIdentity`, the same expiration-aware
+   * check `mintLiveKitToken` uses) that this identity already owns an
+   * active seat, at the exact moment the caller believed otherwise
+   * (`handleTapEmptySeat` only ever calls this when the client's own
+   * `isSpeaker` was false). That's a genuine contradiction between the
+   * server's authoritative state and this client's accumulated
+   * `useActiveSpeakers` state, not an ordinary rejection — carrying
+   * `seatNumber` lets the caller reconcile immediately instead of
+   * leaving the user stuck on a dead-end error. See `EventRoom`'s own
+   * handling of this reason.
+   */
+  | { ok: false; reason: "already-speaking"; seatNumber: 1 | 2 }
   | { ok: false; reason: "error"; error: string };
 
 /**
@@ -321,7 +352,7 @@ export async function joinOpenSeat(eventId: string): Promise<JoinOpenSeatResult>
 
   const alreadySeated = await getActiveSeatForIdentity(eventId, identity);
   if (alreadySeated) {
-    return { ok: false, reason: "error", error: "You're already speaking." };
+    return { ok: false, reason: "already-speaking", seatNumber: alreadySeated.seat_number };
   }
 
   const [activeSpeakers, ranked] = await Promise.all([
@@ -374,53 +405,95 @@ export async function submitSpeakerRequest(
 export type CheckSpeakerReconnectResult = { evicted: boolean };
 
 /**
- * Real-device finding: the LiveKit webhook (api/livekit/webhook/route.ts)
- * evicts a seat the instant `participant_left` fires — no grace period —
- * so a seated speaker who merely refreshes, blips offline, or briefly
- * loses signal loses their seat outright, indistinguishable from someone
- * who genuinely left. This is the other side of that: a *reconnect grace
- * period*, called by any connected client's local timer
- * (`useSpeakerReconnectGrace`) once it's watched a seat's occupant be
- * absent from the LiveKit room for the grace duration — but the decision
- * to actually evict never trusts that caller's own timer/claim.
+ * Issue #18 unified inactive-speaker finding: the server-authoritative
+ * half of the speaker inactivity grace period — for *either* cause. The
+ * LiveKit webhook (api/livekit/webhook/route.ts) starts/clears the
+ * connection half of the clock (`disconnected_at`); the speaker's own
+ * client starts/clears the media half (`reportSpeakerMediaInactive`/
+ * `reportSpeakerMediaActive`, below) — this function is what actually
+ * *releases* the seat, once either clock genuinely clears
+ * `SPEAKER_DISCONNECT_GRACE_SECONDS`.
  *
- * **Re-validated independently, not client-trusted**: this re-checks via
- * `RoomServiceClient.getParticipant` — the same trusted server credential
- * every token/permission call already uses, never anything the client
- * sends — whether the identity is genuinely absent from the LiveKit room
- * *right now*, before calling the same `endSpeakerSeat` the webhook
- * itself uses. A caller invoking this early, repeatedly, or against a
- * speaker who already reconnected can never force an eviction: the
- * re-check simply finds them present and no-ops. Idempotent — multiple
- * viewers' independent grace-period timers firing around the same moment
- * (expected, not a race to specially guard against) just mean the first
- * one to actually run this after the grace period wins; every later call
- * finds the seat already vacated and no-ops too, via the same
- * `getActiveSeatForIdentity` check `endSpeakerSeat`'s own callers already
- * rely on elsewhere.
- *
- * A LiveKit API error here (not just a genuine "not found") is treated
- * the same as "absent" — this is a prototype-scoped simplification, not
- * a claim that every failure mode is a real disconnect; a spurious
- * transient error would evict a moment early rather than late, the same
- * direction of error the webhook's own immediate, ungraced eviction
- * already accepts today.
+ * **Called by a connected client's local estimate, never trusted
+ * directly**: `useSpeakerReconnectGrace` schedules this call once it
+ * expects the grace period to have elapsed for a seat it's watching —
+ * but the actual release decision is `release_expired_inactive_speaker`'s
+ * (migration 00000000000017), a single atomic `UPDATE ... WHERE ...`
+ * that re-derives "has the grace period really elapsed, for either
+ * cause" from Postgres's own clock and the row's own `disconnected_at`/
+ * `media_inactive_since`, every time. A caller invoking this early,
+ * repeatedly, or against a speaker who already recovered (either way)
+ * can never force an eviction — the WHERE clause simply doesn't match,
+ * and this returns `{ evicted: false }`. Idempotent — multiple viewers'
+ * independent timers firing around the same moment just mean the first
+ * one to actually clear the threshold wins; every later call finds the
+ * seat already vacated and no-ops too.
  */
-export async function checkAndEvictDisconnectedSpeaker(
+export async function checkAndEvictInactiveSpeaker(
   eventId: string,
   seatIdentity: SeatIdentity,
 ): Promise<CheckSpeakerReconnectResult> {
-  const seat = await getActiveSeatForIdentity(eventId, seatIdentity);
-  if (!seat) return { evicted: false };
-
-  try {
-    await getClient().getParticipant(getRoomName(eventId), getParticipantIdentity(seatIdentity));
-    return { evicted: false };
-  } catch {
-    // Not found (or a transient LiveKit API error, see doc comment above)
-    // — proceed to evict.
+  const released = await releaseExpiredInactiveSpeaker(eventId, seatIdentity, SPEAKER_DISCONNECT_GRACE_SECONDS);
+  if (released) {
+    // Issue #18 expiration-enforcement finding: ARCHITECTURE.md's LiveKit
+    // authorization model is explicit that a speaker losing their seat
+    // needs publish rights revoked immediately, not left to their next
+    // token request — this is that live push, for the eviction path
+    // specifically (every other eviction path already had it). Best
+    // effort, matching syncPublishPermission's own contract: if this
+    // identity isn't currently connected, or the push fails, nothing is
+    // left wrong — getActiveSeatForIdentity (now expiration-aware, see
+    // migration 00000000000018) already makes their *next* token request
+    // self-correct to canPublish: false regardless.
+    await syncPublishPermission({ eventId, identity: seatIdentity, canPublish: false });
   }
+  return { evicted: released !== null };
+}
 
-  await endSpeakerSeat(eventId, seatIdentity, "disconnected");
-  return { evicted: true };
+/**
+ * Issue #18 expiration-enforcement finding: the returning speaker's own
+ * confirmation trigger — called by their own client the instant its
+ * local countdown reaches zero, so an identity that's otherwise alone in
+ * the room (no co-speaker or audience member around to schedule
+ * `checkAndEvictInactiveSpeaker` on their behalf — `useSpeakerReconnectGrace`
+ * deliberately never watches the viewer's own seat) still gets its
+ * expiration confirmed promptly instead of waiting on some other
+ * client's timer. Resolves the caller's own identity server-side, same
+ * self-service pattern as `leaveSpeakerSeat` — the client asserts
+ * nothing about *whether* it's expired, only *that it wants the current
+ * state confirmed*; `releaseExpiredInactiveSpeaker`'s own atomic
+ * re-derivation from Postgres's clock is what actually decides. Calling
+ * this before the real deadline, or after the seat is already released
+ * (or was never held), is a harmless no-op — same idempotency guarantee
+ * as `checkAndEvictInactiveSpeaker`.
+ */
+export async function confirmOwnSeatExpiration(eventId: string): Promise<CheckSpeakerReconnectResult> {
+  const identity = await resolveIdentity();
+  return checkAndEvictInactiveSpeaker(eventId, identity);
+}
+
+/**
+ * Issue #18 unified inactive-speaker finding: starts the media half of
+ * the inactivity grace period — called by the speaker's own connected
+ * client the instant it observes itself publishing no usable media at
+ * all (both camera and mic off/muted, or never activated — see
+ * `isLocalMediaInactive`, `lib/speaker-presence.ts`). Resolves the
+ * caller's identity server-side, same as every other action here — the
+ * client only asserts *that* it's currently media-inactive, never *whose*
+ * seat to touch. Idempotent (a duplicate report never restarts the
+ * clock) and a safe no-op for a caller with no active seat.
+ */
+export async function reportSpeakerMediaInactive(eventId: string): Promise<void> {
+  const identity = await resolveIdentity();
+  await markSpeakerMediaInactive(eventId, identity);
+}
+
+/**
+ * Clears the media half of the inactivity grace period — called by the
+ * speaker's own connected client the instant either camera or
+ * microphone becomes active again (either alone is enough).
+ */
+export async function reportSpeakerMediaActive(eventId: string): Promise<void> {
+  const identity = await resolveIdentity();
+  await markSpeakerMediaActive(eventId, identity);
 }

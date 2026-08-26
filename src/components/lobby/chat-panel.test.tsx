@@ -124,4 +124,200 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(screen.getByText("You already have a pending request.")).toBeInTheDocument());
     expect(onMicRequestModeChange).not.toHaveBeenCalledWith(false);
   });
+
+  describe("compact mode (issue #21, '05 — Social Stage' Phase 2: Watch Mode's persistent composer)", () => {
+    it("renders only the form — no message history, no quick-emoji row", () => {
+      render(<ChatPanel {...baseProps} compact messages={[{
+        id: "m1",
+        author_display_name: "Sam",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      }]} />);
+      expect(screen.queryByText("hello")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/^Insert /)).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+    });
+
+    describe("landscape width cap (real-device finding, issue #21: the composer stretched across most of the screen in landscape, pushing React/Vote/Gift to the far right)", () => {
+      // Pins the rendered CSS class — jsdom doesn't evaluate the
+      // `orientation` media query itself, so this can't exercise the
+      // actual landscape-vs-portrait visual difference. Real-device-only
+      // check for that (see this session's verification report).
+      it("the compact form caps its width in landscape, uncapped in portrait", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const form = screen.getByTestId("chat-composer-form");
+        expect(form.className).toMatch(/\blandscape:max-w-\[40%\]/);
+      });
+
+      it("still grows/shrinks normally up to that cap — min-w-0 and flex-1 both preserved, not a fixed size", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const form = screen.getByTestId("chat-composer-form");
+        expect(form.className).toMatch(/\bmin-w-0\b/);
+        const pill = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pill.className).toMatch(/\bflex-1\b/);
+        expect(pill.className).toMatch(/\bmin-w-0\b/);
+      });
+
+      it("full (non-compact) mode is unaffected — no landscape cap applied", () => {
+        render(<ChatPanel {...baseProps} />);
+        const form = screen.getByTestId("chat-composer-form");
+        expect(form.className).not.toMatch(/landscape:/);
+      });
+    });
+
+    describe("input font size (real-device finding, 2026-08-23: text-sm/14px triggered iOS Safari's auto-zoom-on-focus)", () => {
+      // This only pins the rendered CSS class, which is what actually
+      // governs the computed font-size — it does not and cannot exercise
+      // real Safari zoom behavior. That's a real-device-only check (see
+      // this session's verification report).
+      it("the input uses text-base (16px+), never text-sm, when commenting normally", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const input = screen.getByPlaceholderText("Add a comment…");
+        expect(input.className).toMatch(/\btext-base\b/);
+        expect(input.className).not.toMatch(/\btext-sm\b/);
+      });
+
+      it("the same is true in Request-to-Speak (mic-on) mode — same input element, same fix applies to both", () => {
+        render(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+        const input = screen.getByPlaceholderText("What's your topic?");
+        expect(input.className).toMatch(/\btext-base\b/);
+        expect(input.className).not.toMatch(/\btext-sm\b/);
+      });
+    });
+
+    it("defaults to the comment placeholder; mic mode switches to the request placeholder — same contract as full mode", () => {
+      const { rerender } = render(<ChatPanel {...baseProps} compact />);
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+
+      rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+      expect(screen.getByPlaceholderText("What's your topic?")).toBeInTheDocument();
+    });
+
+    it("tapping the mic toggle requests mode-change — same controlled-prop contract as full mode", () => {
+      const onMicRequestModeChange = vi.fn();
+      render(<ChatPanel {...baseProps} compact onMicRequestModeChange={onMicRequestModeChange} />);
+      fireEvent.click(screen.getByTestId("watch-composer-mic"));
+      expect(onMicRequestModeChange).toHaveBeenCalledWith(true);
+    });
+
+    it("sending a normal comment calls sendMessage, never submitSpeakerRequest or onPrepareMedia", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      const onPrepareMedia = vi.fn();
+      render(<ChatPanel {...baseProps} compact onPrepareMedia={onPrepareMedia} />);
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "nice point" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitSpeakerRequest).not.toHaveBeenCalled();
+      expect(onPrepareMedia).not.toHaveBeenCalled();
+    });
+
+    it("submitting a request in mic mode still calls onPrepareMedia synchronously, same as full mode", () => {
+      submitSpeakerRequest.mockResolvedValue(undefined);
+      const onPrepareMedia = vi.fn();
+      render(<ChatPanel {...baseProps} compact micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
+      fireEvent.change(screen.getByPlaceholderText("What's your topic?"), {
+        target: { value: "AI and creativity" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
+      expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+    });
+
+    it("the mic-on state is visually distinct from mic-off, without a second/larger control appearing", () => {
+      const { rerender } = render(<ChatPanel {...baseProps} compact />);
+      const pillOff = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+      expect(pillOff.className).not.toMatch(/\bborder-accent/);
+
+      rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+      const pillOn = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+      expect(pillOn.className).toMatch(/\bborder-accent/);
+      expect(screen.getAllByRole("button")).toHaveLength(2); // mic + send only, no third control appears
+    });
+
+    describe("allowMicRequest (issue #18, Speaker View Phase 2: a seated speaker has no use for requesting the mic they already hold)", () => {
+      it("defaults to true — every existing caller keeps the mic toggle", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        expect(screen.getByTestId("watch-composer-mic")).toBeInTheDocument();
+      });
+
+      it("false hides the mic toggle entirely, not just disables it", () => {
+        render(<ChatPanel {...baseProps} compact allowMicRequest={false} />);
+        expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
+      });
+
+      it("still submits an ordinary comment via sendMessage with the toggle hidden", async () => {
+        sendMessage.mockResolvedValue(undefined);
+        render(<ChatPanel {...baseProps} compact allowMicRequest={false} />);
+        fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+        await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      });
+    });
+
+    describe("hasPendingRequest / onCancelPendingRequest (issue #18 UX finding: no separate 'Request sent' bar — the mic button itself carries the pending state)", () => {
+      it("defaults to the idle state when hasPendingRequest is omitted — every existing caller unaffected", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton).toHaveAccessibleName("Request to speak");
+        expect(micButton.className).not.toMatch(/\banimate-pulse\b/);
+      });
+
+      it("shows a distinct pending visual state when hasPendingRequest is true and micRequestMode is false", () => {
+        render(<ChatPanel {...baseProps} compact hasPendingRequest={true} />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton).toHaveAccessibleName("Cancel speaker request");
+        expect(micButton.className).toMatch(/\banimate-pulse\b/);
+        expect(micButton.className).toMatch(/\bbg-accent\/30\b/);
+      });
+
+      it("the pending state is visually distinct from the actively-composing state — not the same solid accent treatment", () => {
+        render(<ChatPanel {...baseProps} compact hasPendingRequest={true} />);
+        const pendingButton = screen.getByTestId("watch-composer-mic");
+        expect(pendingButton.className).not.toMatch(/\bbg-accent text-white\b/);
+      });
+
+      it("micRequestMode takes visual priority over hasPendingRequest — actively composing a new request always shows the solid accent state", () => {
+        render(<ChatPanel {...baseProps} compact hasPendingRequest={true} micRequestMode={true} />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton.className).toMatch(/\bbg-accent text-white\b/);
+        expect(micButton.className).not.toMatch(/\banimate-pulse\b/);
+      });
+
+      it("tapping the mic button while pending calls onCancelPendingRequest, not onMicRequestModeChange", () => {
+        const onCancelPendingRequest = vi.fn();
+        const onMicRequestModeChange = vi.fn();
+        render(
+          <ChatPanel
+            {...baseProps}
+            compact
+            hasPendingRequest={true}
+            onCancelPendingRequest={onCancelPendingRequest}
+            onMicRequestModeChange={onMicRequestModeChange}
+          />,
+        );
+        fireEvent.click(screen.getByTestId("watch-composer-mic"));
+        expect(onCancelPendingRequest).toHaveBeenCalledTimes(1);
+        expect(onMicRequestModeChange).not.toHaveBeenCalled();
+      });
+
+      it("tapping the mic button while idle (no pending request) still opens the request-mode input as before", () => {
+        const onCancelPendingRequest = vi.fn();
+        const onMicRequestModeChange = vi.fn();
+        render(
+          <ChatPanel
+            {...baseProps}
+            compact
+            hasPendingRequest={false}
+            onCancelPendingRequest={onCancelPendingRequest}
+            onMicRequestModeChange={onMicRequestModeChange}
+          />,
+        );
+        fireEvent.click(screen.getByTestId("watch-composer-mic"));
+        expect(onMicRequestModeChange).toHaveBeenCalledWith(true);
+        expect(onCancelPendingRequest).not.toHaveBeenCalled();
+      });
+    });
+  });
 });

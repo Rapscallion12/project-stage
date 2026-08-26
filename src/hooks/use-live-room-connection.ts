@@ -42,6 +42,34 @@ export type MediaError = { source: "camera" | "microphone"; reason: MediaErrorRe
  * so this mapping is unit-testable without a real Room/getUserMedia call,
  * same reasoning as shouldPublish above.
  */
+/**
+ * Issue #18 self-preview consistency finding (real-device report:
+ * Speaker View occasionally rendered without the floating self-preview
+ * even though the camera was actually live). Pure decision function —
+ * whether `localVideoTrack` state should be reconciled from an
+ * already-existing LiveKit camera publication, rather than treated as
+ * "no camera" — so the actual branching logic is unit-testable without
+ * a real Room/WebRTC surface, same reasoning as `shouldPublish` above.
+ * Deliberately does not know about `participantRole`/`isSpeaker` at all:
+ * `canPublish` (the server-granted LiveKit permission, itself derived
+ * from the same `event_speakers` occupancy — see ARCHITECTURE.md's
+ * LiveKit authorization model) is the correct signal at *this* layer,
+ * matching this codebase's existing DB-authoritative-for-role /
+ * LiveKit-authoritative-for-media-state separation (see
+ * `useActiveSpeakers`'s own doc comment) — not a second, competing role
+ * flag.
+ */
+export function shouldReconcileLocalVideoTrack(params: {
+  canPublish: boolean;
+  hasLocalVideoTrack: boolean;
+  cameraMuted: boolean;
+  publication: { hasTrack: boolean; isMuted: boolean } | null;
+}): boolean {
+  if (!params.canPublish || params.hasLocalVideoTrack || params.cameraMuted) return false;
+  if (!params.publication) return false;
+  return params.publication.hasTrack && !params.publication.isMuted;
+}
+
 export function classifyMediaError(source: "camera" | "microphone", error: unknown): MediaError {
   const name = error instanceof Error ? error.name : "";
   switch (name) {
@@ -122,12 +150,33 @@ export type LiveRoomConnection = {
    * with nothing held.
    */
   releaseLocalMedia: () => void;
+  /** Issue #18, Speaker View Phase 2 (mic/camera toggles): whether the local participant's own published microphone/camera are currently muted. Both start `false` on every fresh hook instance, matching a newly-published track's real default state. */
+  microphoneMuted: boolean;
+  cameraMuted: boolean;
+  /**
+   * Toggles mute on the *already-published* microphone/camera track in
+   * place — `LocalTrack.mute()`/`.unmute()`, never
+   * `setMicrophoneEnabled`/`setCameraEnabled`. Those convenience methods
+   * unpublish-and-stop the underlying hardware track on disable and
+   * re-run `createLocalTracks`/`getUserMedia` on re-enable — a real
+   * reacquisition, and on iOS Safari specifically, one that isn't
+   * guaranteed to succeed without a fresh gesture at all (see
+   * DECISIONS.md). `mute()`/`unmute()` instead toggles the send state on
+   * the exact same `MediaStreamTrack` already held — no new hardware
+   * access, no new permission prompt, and it's what correctly notifies
+   * every other participant via `TrackMuted`/`TrackUnmuted`. A no-op if
+   * there's no published track for that source yet (not currently
+   * publishing).
+   */
+  toggleMicrophone: () => Promise<void>;
+  toggleCamera: () => Promise<void>;
 };
 
 /**
- * Owns the LiveKit `Room` connection lifecycle: connects once per
- * token/url pair, disconnects on unmount, and keeps `canPublish` in sync
- * with the server's permission grant — on connect, and again every time
+ * Owns the LiveKit `Room` connection lifecycle: connects once `params` is
+ * non-null (see below for exactly what "once" means), disconnects on
+ * unmount, and keeps `canPublish` in sync with the server's permission
+ * grant — on connect, and again every time
  * `RoomEvent.ParticipantPermissionsChanged` fires on the local participant
  * (the live push from issue #13's `syncPublishPermission`). Actually
  * publishing camera/mic tracks only happens automatically once this tab
@@ -138,6 +187,14 @@ export type LiveRoomConnection = {
  * skips connecting entirely — the room still works for chat and the
  * DB-sourced speaker roster, just without media, per the
  * graceful-degradation principle.
+ *
+ * **Connects once the *token's presence* flips, not once per distinct
+ * token string** — see the connect effect's own comment below for the
+ * real-device bug this fixes (a guest-name edit minting a fresh-but-
+ * equivalent token and silently forcing a full reconnect). A later
+ * render carrying a *different* token string for an *already-connected*
+ * room is not treated as a reason to reconnect; only the room's own live
+ * `ParticipantPermissionsChanged` push is.
  */
 export function useLiveRoomConnection(params: { livekitUrl: string; token: string } | null): LiveRoomConnection {
   const [status, setStatus] = useState<ConnectionStatus>(params ? "connecting" : "unavailable");
@@ -147,6 +204,8 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
   const [canPublish, setCanPublish] = useState(false);
   const [mediaActivated, setMediaActivated] = useState(false);
   const [localVideoTrack, setLocalVideoTrack] = useState<LocalVideoTrack | null>(null);
+  const [microphoneMuted, setMicrophoneMuted] = useState(false);
+  const [cameraMuted, setCameraMuted] = useState(false);
   const roomRef = useRef<Room | null>(null);
   const mediaActivatedRef = useRef(false);
   const applyPublishStateRef = useRef<(publish: boolean) => Promise<void>>(async () => {});
@@ -230,8 +289,15 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       // clear the state so the self-preview slot hides again, same as an
       // ordinary audience member with no local media. A no-op for anyone
       // who never held a track (the common publish=false case on initial
-      // connect).
-      if (!publish) setLocalVideoTrack(null);
+      // connect). Mute state resets alongside it — a later republish (a
+      // leave-then-rejoin within the same mounted session, not a fresh
+      // page load) acquires a genuinely new track, which always starts
+      // unmuted, so any prior mute toggle here must not carry over.
+      if (!publish) {
+        setLocalVideoTrack(null);
+        setMicrophoneMuted(false);
+        setCameraMuted(false);
+      }
     }
     applyPublishStateRef.current = applyPublishState;
 
@@ -294,10 +360,100 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
       stopPreparedTracks();
       void room.disconnect();
     };
-    // Reconnecting on every render would tear down a healthy call; only
-    // the identity of the token/url actually held should restart this.
+    // Real-device finding (issue #18 Speaker View corrective pass):
+    // deliberately `Boolean(params?.token)`, not `params?.token` itself.
+    // A guest editing their display name sets a cookie in a Server
+    // Action, which (per Next.js's own documented cookie-mutation
+    // behavior) re-renders the current page's Server Components —
+    // re-running `getLiveKitToken`, which mints a brand-new JWT
+    // (`AccessToken.toJwt()` signs a fresh token, byte-different, on
+    // every call) with *identical* grants. With the token's own string
+    // value in this dependency array, that alone was enough to tear down
+    // this effect — disconnecting the live `Room`, nulling
+    // `localVideoTrack` via `stopPreparedTracks()`, then reconnecting and
+    // re-publishing camera/mic via `setCameraEnabled`/
+    // `setMicrophoneEnabled` (a real `getUserMedia` reacquisition, since
+    // an already-published speaker's tracks have already left
+    // `preparedTracksRef`) — and `localVideoTrack` was never set back to
+    // non-null by that particular re-publish path, permanently hiding
+    // the self-preview. This is exactly backwards from how this
+    // project's own authorization model already says token changes
+    // should be handled: "token expiry doesn't enforce anything...
+    // revocation happens live via syncPublishPermission()'s push to an
+    // already-connected participant, no reconnect required" (see
+    // ARCHITECTURE.md's LiveKit authorization model section) — a token
+    // refreshed for unrelated reasons (a cookie write, not a permission
+    // change) was never supposed to be a reconnect signal at all.
+    // Depending on presence rather than value preserves the one
+    // legitimate case this effect must still react to (the documented
+    // null-params → real-params transition, e.g. phase flipping to
+    // "ready") while never tearing down an already-healthy connection
+    // just because a later render happens to carry a newer token string
+    // for the same room. Reconnecting on every render for any other
+    // reason would tear down a healthy call too; only the url actually
+    // held, or the token's presence flipping, should restart this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params?.livekitUrl, params?.token]);
+  }, [params?.livekitUrl, Boolean(params?.token)]);
+
+  /**
+   * Issue #18 self-preview consistency finding (real-device report:
+   * Speaker View occasionally rendered without the floating self-preview
+   * even though the camera was actually live). Investigated the
+   * suspected failure paths directly:
+   * - `SelfPreview` itself attaches/re-attaches correctly whenever its
+   *   `track` prop changes (see its own `useEffect`) — it's only ever
+   *   mounted at all when `localVideoTrack` is non-null (see
+   *   `SpeakerStage`), so a missing preview traces back to
+   *   `localVideoTrack` state being null, not a layout/z-index issue or
+   *   a stale attach.
+   * - The ordinary paths (`prepareLocalMedia`'s own `setLocalVideoTrack`
+   *   call, `applyPublishState`'s prepared-tracks branch) already set
+   *   `localVideoTrack` directly and don't appear to have a code-level
+   *   gap — but `syncCanPublish()`'s own gesture-safety guard
+   *   (`mediaActivatedRef.current || !publish`) deliberately *skips*
+   *   publishing if the server's permission push arrives before this
+   *   tab's own `createLocalTracks()` has resolved (issue #27's direct
+   *   join calls `prepareLocalMedia()` fire-and-forget, concurrently with
+   *   the seat claim, so this ordering is genuinely possible) — in that
+   *   window, publishing is correctly deferred to `prepareLocalMedia`'s
+   *   own tail check instead, which re-reads permissions fresh. No
+   *   concrete gap was found in that specific handoff, but the number of
+   *   independent async completions involved (Realtime, LiveKit
+   *   permission push, getUserMedia, publish) makes a rare ordering this
+   *   analysis didn't model plausible.
+   *
+   * Rather than keep chasing an exact reproduction, this is a defensive
+   * reconciliation for the general invariant: whenever this tab is
+   * permitted to publish (`canPublish`) and the camera is genuinely live
+   * and unmuted in the Room, `localVideoTrack` must reflect it. It never
+   * re-acquires media (no `createLocalTracks`/`getUserMedia`, so no
+   * permission prompt), never reconnects, and isn't a poll — it only
+   * re-runs when something real already changed (`canPublish`,
+   * `localVideoTrack`, `cameraMuted`, or `participantsVersion`, which
+   * `RoomEvent.LocalTrackPublished`/etc. already bump). Logs loudly in
+   * development when it actually does something, so a real recurrence
+   * on-device leaves a concrete trace instead of silently self-healing.
+   */
+  useEffect(() => {
+    const room = roomRef.current;
+    const publication = room?.localParticipant.getTrackPublication(Track.Source.Camera) ?? null;
+    const shouldReconcile = shouldReconcileLocalVideoTrack({
+      canPublish,
+      hasLocalVideoTrack: localVideoTrack !== null,
+      cameraMuted,
+      publication: publication ? { hasTrack: Boolean(publication.track), isMuted: publication.isMuted } : null,
+    });
+    if (!shouldReconcile || !publication?.track) return;
+    if (process.env.NODE_ENV !== "production") {
+      console.error(
+        "[useLiveRoomConnection] localVideoTrack was missing while an unmuted camera publication already existed — reconciling from the existing publication instead of re-acquiring media.",
+      );
+    }
+    setLocalVideoTrack(publication.track as LocalVideoTrack);
+    // participantsVersion isn't read directly — see getParticipant's own
+    // comment on why it's a dependency purely to force a re-check when
+    // room/track state mutates in place.
+  }, [canPublish, localVideoTrack, cameraMuted, participantsVersion]);
 
   const getParticipant = useCallback(
     (identity: string): Participant | undefined => {
@@ -375,6 +531,42 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     stopPreparedTracks();
   }, [stopPreparedTracks]);
 
+  /**
+   * Issue #18, Speaker View Phase 2: toggles mute in place on the
+   * already-published microphone track — see `LiveRoomConnection`'s own
+   * doc comment for why this calls `LocalTrack.mute()`/`.unmute()`
+   * rather than `setMicrophoneEnabled`, which would stop/reacquire the
+   * hardware track instead. A no-op if nothing is actually published yet
+   * for this source (e.g. `needsMediaActivation` still true) — there's
+   * no track to mute.
+   */
+  const toggleMicrophone = useCallback(async () => {
+    const room = roomRef.current;
+    const track = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    if (!track) return;
+    const nextMuted = !track.isMuted;
+    if (nextMuted) {
+      await track.mute();
+    } else {
+      await track.unmute();
+    }
+    setMicrophoneMuted(nextMuted);
+  }, []);
+
+  /** Same as `toggleMicrophone`, for the camera track. */
+  const toggleCamera = useCallback(async () => {
+    const room = roomRef.current;
+    const track = room?.localParticipant.getTrackPublication(Track.Source.Camera)?.track;
+    if (!track) return;
+    const nextMuted = !track.isMuted;
+    if (nextMuted) {
+      await track.mute();
+    } else {
+      await track.unmute();
+    }
+    setCameraMuted(nextMuted);
+  }, []);
+
   return {
     status,
     participantCount,
@@ -386,5 +578,9 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     localVideoTrack,
     prepareLocalMedia,
     releaseLocalMedia,
+    microphoneMuted,
+    cameraMuted,
+    toggleMicrophone,
+    toggleCamera,
   };
 }

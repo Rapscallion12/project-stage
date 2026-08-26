@@ -280,4 +280,81 @@ describe("RoomControls", () => {
       expect(screen.queryByText(/hasn't started yet/i)).not.toBeInTheDocument();
     });
   });
+
+  describe("compact (issue #21, '05 — Social Stage' Phase 2 fix: pending-request feedback shouldn't occupy a large share of the video)", () => {
+    it("renders a single-line pill instead of the paragraph+button treatment while waiting", () => {
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          {...notPromoting}
+          {...readyMediaProps}
+          compact
+        />,
+      );
+      expect(screen.getByText("Request sent")).toBeInTheDocument();
+      expect(screen.queryByText(/you'll go live automatically/i)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    });
+
+    it("shows the countdown compactly too, same Cancel action", () => {
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          promotionCountdown={3}
+          onCancelPromotion={vi.fn()}
+          {...readyMediaProps}
+          compact
+        />,
+      );
+      expect(screen.getByText("Going live in 3…")).toBeInTheDocument();
+      expect(screen.queryByText("You're up next")).not.toBeInTheDocument();
+    });
+
+    it("Cancel still calls onCancelPromotion", () => {
+      const onCancelPromotion = vi.fn();
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          promotionCountdown={null}
+          onCancelPromotion={onCancelPromotion}
+          {...readyMediaProps}
+          compact
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+    });
+
+    it("still surfaces a media error with its retry action in compact mode — nothing necessary is dropped", () => {
+      const onPrepareMedia = vi.fn(async () => {});
+      render(
+        <RoomControls
+          eventId="e1"
+          isSpeaker={false}
+          hasPendingRequest={true}
+          {...notPromoting}
+          {...readyMediaProps}
+          onPrepareMedia={onPrepareMedia}
+          mediaError={{ source: "camera", reason: "permission-denied" }}
+          compact
+        />,
+      );
+      expect(screen.getByText(/Camera permission was denied/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not affect the isSpeaker (Leave the stage) state — compact only changes the pending-request states", () => {
+      render(
+        <RoomControls eventId="e1" isSpeaker hasPendingRequest={false} {...notPromoting} {...readyMediaProps} compact />,
+      );
+      expect(screen.getByRole("button", { name: "Leave the stage" })).toBeInTheDocument();
+    });
+  });
 });

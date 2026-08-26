@@ -8,6 +8,7 @@ import {
   withdrawSpeakerRequest,
 } from "@/app/events/[id]/room/actions";
 import type { MediaError } from "@/hooks/use-live-room-connection";
+import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import type { EventPhase } from "@/lib/events";
 
 /** Tunable, not product doctrine — see this file's own doc comment. */
@@ -58,13 +59,28 @@ export function useAutomaticPromotion(params: {
   needsMediaActivation: boolean;
   mediaError: MediaError;
   onHasPendingRequestChange: (value: boolean) => void;
+  /** Issue #18 real-device finding (2026-08-28): called immediately once `claimOpenSeat` reports success — see the claim effect below for why this can't wait solely on `isSpeaker` eventually flipping via Realtime the way it used to. */
+  onClaimSucceeded: () => void;
 }) {
-  const { eventId, hasPendingRequest, isSpeaker, phase, needsMediaActivation, mediaError, onHasPendingRequestChange } =
-    params;
+  const {
+    eventId,
+    hasPendingRequest,
+    isSpeaker,
+    phase,
+    needsMediaActivation,
+    mediaError,
+    onHasPendingRequestChange,
+    onClaimSucceeded,
+  } = params;
   const [countdown, setCountdown] = useState<number | null>(null);
+  // Issue #18 UX finding fix: true for exactly as long as a Cancel is in
+  // flight (from the moment the user taps it until `withdrawSpeakerRequest`
+  // actually resolves) — see `cancel()` and the polling effect below for
+  // the race this closes.
+  const [isCancelling, setIsCancelling] = useState(false);
 
   useEffect(() => {
-    if (isSpeaker || !hasPendingRequest || phase !== "ready" || countdown !== null) return;
+    if (isSpeaker || !hasPendingRequest || phase !== "ready" || countdown !== null || isCancelling) return;
 
     let cancelled = false;
     async function poll() {
@@ -79,7 +95,18 @@ export function useAutomaticPromotion(params: {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [isSpeaker, hasPendingRequest, phase, countdown, eventId]);
+    // Issue #18 UX finding fix: `isCancelling` in the guard/deps closes a
+    // real race — `cancel()` sets `countdown` to `null` immediately (so
+    // the center-stage overlay disappears at once), which alone would
+    // re-run *this* effect the same render. Without `isCancelling`,
+    // `hasPendingRequest` is still `true` at that instant (the server
+    // withdrawal hasn't resolved yet), so the guard above would pass and
+    // immediately start a *new* poll — and if `checkPromotionEligibility`
+    // still reports eligible (because the withdrawal genuinely hasn't
+    // landed server-side yet), that poll would call `setCountdown` again,
+    // resurrecting the just-canceled promotion. `isCancelling` suppresses
+    // polling for exactly the window where that race is possible.
+  }, [isSpeaker, hasPendingRequest, phase, countdown, eventId, isCancelling]);
 
   useEffect(() => {
     if (countdown === null) return;
@@ -87,12 +114,62 @@ export function useAutomaticPromotion(params: {
       // The real, independently-revalidated claim — see
       // checkPromotionEligibility's doc comment for why this can't
       // itself be trusted from the countdown having merely reached zero.
-      void claimOpenSeat(eventId).finally(() => setCountdown(null));
+      //
+      // Issue #18 UX finding fix: on *success*, this deliberately no
+      // longer resets `countdown` or `hasPendingRequest` itself. Both used
+      // to reset here, racing an entirely independent completion — the
+      // Realtime push that flips `isSpeaker` true (see EventRoom) — with
+      // no guaranteed ordering between the two. When this reset won that
+      // race, the composition (still gated on `isSpeaker`, not yet true)
+      // fell back to plain Watch Mode for one or more render frames before
+      // `isSpeaker` caught up: the exact "candidate UI flash right before
+      // Speaker View" real-device report this fix addresses. `isSpeaker`
+      // flipping true is now the single authoritative signal that ends
+      // this state — the effect below resets `countdown` once that
+      // happens (in `useAutomaticPromotion` itself), and `EventRoom`'s
+      // `useRoleTransitionReset` resets `hasPendingRequest` (and
+      // `micRequestMode`/`joinSeatMessage`) the same way, regardless of
+      // which path granted the seat. Until `isSpeaker` flips, the
+      // countdown overlay simply stays on screen (frozen at 0) — still a
+      // legitimate part of the same transition, never a fallback to stale
+      // candidate UI. A *failed*/lost-race claim is different: nothing
+      // else will ever flip `isSpeaker` true for this attempt, so
+      // `countdown` must still reset here to fall back to waiting — see
+      // this hook's own doc comment ("a stale/lost-race outcome... just
+      // silently resets to waiting").
+      void claimOpenSeat(eventId).then((result) => {
+        if (!("ok" in result)) {
+          setCountdown(null);
+          return;
+        }
+        // Issue #18 real-device finding (2026-08-28): previously relied
+        // solely on isSpeaker eventually flipping via Realtime (see the
+        // long comment above) — exactly the assumption a missed delta
+        // breaks, leaving the countdown overlay frozen at 0 forever
+        // instead of ever handing off to Speaker View. A direct refetch
+        // here means a genuinely successful claim reflects immediately
+        // regardless of whether the Realtime INSERT ever arrives.
+        onClaimSucceeded();
+      });
       return;
     }
     const timeout = setTimeout(() => setCountdown((seconds) => (seconds === null ? null : seconds - 1)), 1000);
     return () => clearTimeout(timeout);
-  }, [countdown, eventId]);
+  }, [countdown, eventId, onClaimSucceeded]);
+
+  // Issue #18 UX finding fix: the single reconciliation point for this
+  // hook's own `countdown` state, keyed to the one authoritative
+  // `isSpeaker` signal — reuses the *same* `useRoleTransitionReset` hook
+  // `EventRoom` already calls for `hasPendingRequest`/`micRequestMode`/
+  // `joinSeatMessage`, rather than a second, parallel reconciliation
+  // mechanism. Without this, a countdown left frozen at 0 by a successful
+  // claim (see above) would still be sitting non-null the next time this
+  // composition renders (e.g. after the speaker later leaves the stage),
+  // incorrectly resurrecting the center-stage overlay.
+  useRoleTransitionReset({
+    isSpeaker,
+    onReset: () => setCountdown(null),
+  });
 
   useEffect(() => {
     if (!isSpeaker || (!needsMediaActivation && !mediaError)) return;
@@ -103,9 +180,18 @@ export function useAutomaticPromotion(params: {
   }, [isSpeaker, needsMediaActivation, mediaError, eventId]);
 
   function cancel() {
+    setIsCancelling(true);
     setCountdown(null);
+    // Both state updates below happen in this one `.then()` callback,
+    // deliberately not split across `.then()`/`.finally()` — two chained
+    // continuations run in two separate microtask ticks, which (even with
+    // `isCancelling` above) can still land `onHasPendingRequestChange`
+    // and clearing `isCancelling` in two different renders, briefly
+    // reopening the exact re-arm race this fix closes. Calling both
+    // together lets them batch into the same commit.
     void withdrawSpeakerRequest(eventId).then((result) => {
       if (!("error" in result)) onHasPendingRequestChange(false);
+      setIsCancelling(false);
     });
   }
 

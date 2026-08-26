@@ -2,8 +2,12 @@
 
 import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
+import { cn } from "@/lib/utils";
+import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { inactiveSince } from "@/lib/speaker-presence";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { Orientation } from "@/hooks/use-orientation";
 
 function initials(name: string): string {
   return name.trim().slice(0, 2).toUpperCase() || "?";
@@ -57,7 +61,9 @@ export function SpeakerTile({
   mediaError = null,
   onTapEmptySeat,
   isJoiningSeat = false,
-  isReconnecting = false,
+  isInactive: isInactiveProp = false,
+  orientation = "landscape",
+  clearTopChrome = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -70,11 +76,79 @@ export function SpeakerTile({
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
   isJoiningSeat?: boolean;
-  /** Real-device reconnect-grace-period finding: true when `useSpeakerReconnectGrace` has been watching this seat's occupant be absent from LiveKit for a while, still within the grace period — always false for the local viewer's own seat (see that hook's own doc comment for why). Shown as "Speaker reconnecting…" instead of the generic "Camera off", since the seat isn't lost, just temporarily disconnected. */
-  isReconnecting?: boolean;
+  /**
+   * Issue #18 unified inactive-speaker finding: true while this seat's
+   * occupant is inactive for *either* reason — a genuine LiveKit
+   * disconnect (`disconnected_at`) or still connected but publishing no
+   * usable media (`media_inactive_since`) — and the server-side grace
+   * period hasn't yet expired. See `useSpeakerReconnectGrace`'s own doc
+   * comment. Always false for the local viewer's own seat.
+   *
+   * **Not the sole source of truth** (issue #18 real-device finding,
+   * 2026-08-25, generalized by the unified inactive-speaker finding): a
+   * real-device retest found "Camera off" still showing during an active
+   * grace period — traced to this prop being an *independently
+   * re-derived* signal (via `reconnectingIdentities`, itself gated by
+   * this tab's own `canConnect`) that could disagree with the seat's own
+   * `inactiveSince(speaker)`, which this component already reads
+   * directly for the countdown itself. This component now ORs the two
+   * together (see `isInactive` below, the local const) so the seat's own
+   * authoritative field always wins regardless of whatever the caller's
+   * derived set says — "inactivity UI must take precedence over generic
+   * media-off UI" is now true by construction from a single field, not
+   * by keeping two independent derivations in sync by hand. Kept as a
+   * prop (not removed) since `SpeakerStage`'s existing
+   * `reconnectingIdentities` plumbing still does real scheduling work
+   * (triggering the server-side eviction check) — only the *display*
+   * decision no longer trusts it alone.
+   *
+   * Shown as "Speaker inactive…" (issue #18 audience-countdown finding:
+   * with the remaining seconds, once known) instead of the generic
+   * "Camera off", since the seat isn't lost, just temporarily inactive.
+   * The audience never needs to know which of the two causes applies —
+   * both read identically here, on purpose.
+   */
+  isInactive?: boolean;
+  /**
+   * Issue #21 (05 interaction model): portrait gets the new lightweight
+   * top-anchored identity treatment (a small presence dot + name with a
+   * drop-shadow, no background bar) — landscape keeps today's original
+   * bottom-gradient name label completely unchanged. Landscape's own
+   * `RoomHeader`-as-overlay already occupies the top of both tiles (they
+   * sit side by side, both starting at y=0), so moving the label there
+   * would collide with it; that's out of scope for this pass ("no
+   * landscape redesign beyond avoiding regressions" — see DECISIONS.md).
+   * Optional, defaulting to `"landscape"` (today's original treatment) —
+   * the one real caller, `SpeakerStage`, always passes this explicitly;
+   * the default only matters for tests that don't care which identity
+   * treatment renders.
+   */
+  orientation?: Orientation;
+  /** Only meaningful in portrait: true for whichever tile renders visually first (seat 1, or the promoted-open-seat's sibling when reordered) — offsets the identity label below the room's own top-chrome status pill/guest chip so they don't overlap. The second tile has nothing above it and needs no offset. */
+  clearTopChrome?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Issue #18 audience-countdown finding, broadened by the unified
+  // inactive-speaker finding: the *same* authoritative deadline this
+  // seat's own row already carries (whichever of disconnected_at/
+  // media_inactive_since is set — already flowing through the same
+  // Realtime-subscribed `speakers` state the returning speaker's own
+  // "Tap to reconnect · Ns"/"Resume speaking · Ns" prompt reads from) —
+  // never a second, independently-started timer. `useReconnectCountdown`
+  // returns null (no suffix) whenever there's nothing to count down, so
+  // passing it unconditionally here is safe regardless of `isInactive`.
+  const mySeatInactiveSince = inactiveSince(speaker);
+  const reconnectSecondsRemaining = useReconnectCountdown(mySeatInactiveSince);
+
+  // Issue #18 real-device finding (2026-08-25), generalized by the
+  // unified inactive-speaker finding: ORs the caller's own derived
+  // signal with the seat's own authoritative field directly — see the
+  // isInactive prop's own doc comment above for why the two could
+  // disagree and why this field must win. Only ever adds true, never
+  // suppresses a true the caller already passed.
+  const isInactive = isInactiveProp || mySeatInactiveSince !== null;
 
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
@@ -178,15 +252,24 @@ export function SpeakerTile({
           </div>
           <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
         </div>
-      ) : isReconnecting ? (
+      ) : isInactive ? (
         <div
-          data-testid="speaker-reconnecting"
+          data-testid="speaker-inactive"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
             {initials(speaker.display_name)}
           </div>
-          <p className="text-xs">Speaker reconnecting…</p>
+          <p className="text-xs" data-testid="audience-inactive-countdown">
+            {reconnectSecondsRemaining === 0
+              ? // Issue #18 expiration-enforcement finding: never a stuck
+                // "· 0s" here either — authoritative expiration is being
+                // confirmed (the seat's own occupant already triggers
+                // this; see useOwnSeatExpirationConfirmation), and this
+                // tile has nothing further to decide either way.
+                "Speaker inactive — resolving…"
+              : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
+          </p>
         </div>
       ) : (
         <div
@@ -200,12 +283,28 @@ export function SpeakerTile({
         </div>
       )}
       {!isLocal && <audio ref={audioRef} autoPlay />}
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
-        <p className="truncate text-sm font-medium text-white">
-          {speaker.display_name}
-          {isLocal ? " (you)" : ""}
-        </p>
-      </div>
+      {orientation === "portrait" ? (
+        <div
+          data-testid="speaker-identity"
+          className={cn("absolute left-3 flex items-center gap-1.5", clearTopChrome ? "top-12" : "top-3")}
+        >
+          <span
+            aria-hidden="true"
+            className="h-[7px] w-[7px] shrink-0 rounded-full bg-emerald-400 [filter:drop-shadow(0_1px_2px_rgb(0_0_0/0.65))]"
+          />
+          <p className="truncate text-sm font-semibold text-white [text-shadow:0_1px_4px_rgb(0_0_0/0.65)]">
+            {speaker.display_name}
+            {isLocal ? " (you)" : ""}
+          </p>
+        </div>
+      ) : (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
+          <p className="truncate text-sm font-medium text-white">
+            {speaker.display_name}
+            {isLocal ? " (you)" : ""}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

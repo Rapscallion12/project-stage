@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Participant, Track, TrackPublication } from "livekit-client";
 import { SpeakerTile } from "./speaker-tile";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -15,6 +16,8 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     joined_at: new Date().toISOString(),
     left_at: null,
     left_reason: null,
+    disconnected_at: null,
+    media_inactive_since: null,
     ...overrides,
   };
 }
@@ -208,22 +211,22 @@ describe("SpeakerTile", () => {
     });
   });
 
-  describe("reconnect grace period (real-device finding: a disconnected-but-still-seated speaker shouldn't just read as 'Camera off')", () => {
-    it("shows 'Speaker reconnecting…' instead of the generic camera-off placeholder when isReconnecting is true", () => {
+  describe("inactivity grace period (real-device finding: an inactive-but-still-seated speaker shouldn't just read as 'Camera off')", () => {
+    it("shows 'Speaker inactive…' instead of the generic camera-off placeholder when isInactive is true", () => {
       render(
-        <SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} isReconnecting={true} />,
+        <SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} isInactive={true} />,
       );
-      expect(screen.getByTestId("speaker-reconnecting")).toHaveTextContent("Speaker reconnecting…");
+      expect(screen.getByTestId("speaker-inactive")).toHaveTextContent("Speaker inactive…");
       expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
     });
 
-    it("still shows the seat's own display name below the tile while reconnecting — DB stays authoritative", () => {
+    it("still shows the seat's own display name below the tile while inactive — DB stays authoritative", () => {
       render(
         <SpeakerTile
           speaker={speaker({ display_name: "Priya" })}
           participant={undefined}
           isLocal={false}
-          isReconnecting={true}
+          isInactive={true}
         />,
       );
       expect(screen.getByTestId("speaker-tile")).toHaveTextContent("Priya");
@@ -232,16 +235,194 @@ describe("SpeakerTile", () => {
     it("defaults to false — ordinary 'Camera off' is unaffected when the prop is omitted", () => {
       render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
       expect(screen.getByTestId("no-video-placeholder")).toHaveTextContent("Camera off");
-      expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-inactive")).not.toBeInTheDocument();
     });
 
-    it("a real published video still wins over isReconnecting — stale/contradictory props never hide a live feed", () => {
+    it("a real published video still wins over isInactive — stale/contradictory props never hide a live feed", () => {
       const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
       const { container } = render(
-        <SpeakerTile speaker={speaker()} participant={participant} isLocal={false} isReconnecting={true} />,
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={false} isInactive={true} />,
       );
-      expect(screen.queryByTestId("speaker-reconnecting")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("speaker-inactive")).not.toBeInTheDocument();
       expect(container.querySelector("video")).toBeInTheDocument();
+    });
+  });
+
+  describe("unified inactive-speaker finding: media_inactive_since alone (no disconnected_at) also drives the inactive UI", () => {
+    it("a seat with only media_inactive_since set (still connected, both muted) shows 'Speaker inactive · Ns', same as a disconnect would", () => {
+      const mediaInactiveSince = new Date(Date.now() - 2000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: null, media_inactive_since: mediaInactiveSince })}
+          participant={undefined}
+          isLocal={false}
+        />,
+      );
+      expect(screen.getByTestId("speaker-inactive")).toBeInTheDocument();
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent(
+        `Speaker inactive · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 2}s`,
+      );
+    });
+
+    it("the audience never sees which of the two causes applies — the copy is identical either way", () => {
+      const since = new Date(Date.now() - 2000).toISOString();
+      const { unmount } = render(
+        <SpeakerTile speaker={speaker({ disconnected_at: since })} participant={undefined} isLocal={false} />,
+      );
+      const disconnectText = screen.getByTestId("audience-inactive-countdown").textContent;
+      unmount();
+
+      render(
+        <SpeakerTile
+          speaker={speaker({ media_inactive_since: since })}
+          participant={undefined}
+          isLocal={false}
+        />,
+      );
+      const mediaInactiveText = screen.getByTestId("audience-inactive-countdown").textContent;
+      expect(mediaInactiveText).toBe(disconnectText);
+    });
+  });
+
+  describe("audience inactivity countdown (issue #18 real-device finding: the audience saw an inactive speaker with no indication of when they'd be removed)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows no suffix when there's no authoritative deadline yet despite isInactive — nothing to count down from", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: null, media_inactive_since: null })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("Speaker inactive…");
+    });
+
+    it("real-device precedence fix: an inactivity deadline alone (isInactive prop omitted/false) still overrides the generic 'Camera off' placeholder — the seat's own field is authoritative, not a separately-derived flag that could disagree with it", () => {
+      const disconnectedAt = new Date(Date.now() - 2000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={false}
+        />,
+      );
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+      expect(screen.getByTestId("speaker-inactive")).toBeInTheDocument();
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent(
+        `Speaker inactive · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 2}s`,
+      );
+    });
+
+    it("renders the remaining seconds derived from the seat's own deadline — the same deadline the returning speaker's own prompt reads from", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent(
+        `Speaker inactive · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 3}s`,
+      );
+    });
+
+    it("reopening partway through the grace period shows the actual remainder, not a fresh restart at the full grace period", () => {
+      const disconnectedAt = new Date(Date.now() - 6000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent(
+        `Speaker inactive · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 6}s`,
+      );
+    });
+
+    it("ticks down once a second, same as the speaker's own reconnect prompt", async () => {
+      vi.useFakeTimers();
+      const disconnectedAt = new Date().toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent(
+        `Speaker inactive · ${SPEAKER_DISCONNECT_GRACE_SECONDS}s`,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent(
+        `Speaker inactive · ${SPEAKER_DISCONNECT_GRACE_SECONDS - 1}s`,
+      );
+    });
+
+    it("shows a resolving state, not a stuck '· 0s', once the countdown reaches zero (issue #18 expiration-enforcement finding)", () => {
+      const disconnectedAt = new Date(Date.now() - (SPEAKER_DISCONNECT_GRACE_SECONDS + 5) * 1000).toISOString();
+      render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("Speaker inactive — resolving…");
+      expect(screen.getByTestId("audience-inactive-countdown")).not.toHaveTextContent("0s");
+    });
+
+    it("the countdown disappears the instant the seat is released — a null speaker renders the empty-seat state, not a stale countdown", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      const { rerender } = render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toBeInTheDocument();
+
+      rerender(<SpeakerTile speaker={null} participant={undefined} isLocal={false} isInactive={false} />);
+      expect(screen.queryByTestId("audience-inactive-countdown")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+    });
+
+    it("clears immediately on recovery — both fields going back to null stops the countdown even while isInactive hasn't yet flipped", () => {
+      const disconnectedAt = new Date(Date.now() - 3000).toISOString();
+      const { rerender } = render(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: disconnectedAt })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("·");
+
+      rerender(
+        <SpeakerTile
+          speaker={speaker({ disconnected_at: null, media_inactive_since: null })}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+        />,
+      );
+      expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("Speaker inactive…");
     });
   });
 });

@@ -6,8 +6,14 @@ import { leaveSpeakerSeat } from "@/app/events/[id]/room/actions";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
 import type { EventPhase } from "@/lib/events";
 
-/** Specific, named copy per failure reason — see MediaErrorReason's doc comment for why these are distinguished instead of a generic "camera off". */
-function mediaErrorMessage(error: NonNullable<MediaError>): string {
+/**
+ * Specific, named copy per failure reason — see MediaErrorReason's doc
+ * comment for why these are distinguished instead of a generic "camera
+ * off". Exported (issue #18, Speaker View lifecycle fix) so
+ * `SpeakerMediaActivationPrompt` can surface the same specific copy
+ * rather than duplicating this switch.
+ */
+export function mediaErrorMessage(error: NonNullable<MediaError>): string {
   const device = error.source === "camera" ? "Camera" : "Microphone";
   switch (error.reason) {
     case "permission-denied":
@@ -53,6 +59,16 @@ function mediaErrorMessage(error: NonNullable<MediaError>): string {
  * pending branch below surfaces it with its own retry action
  * (`onPrepareMedia`) for exactly that case, not just the already-seated
  * one.
+ *
+ * `compact` (issue #21, "05 — Social Stage" Phase 2 fix): real-device
+ * testing found the `hasPendingRequest` states' paragraph-plus-button
+ * treatment "occupies far too much of the video" against Watch Mode's
+ * now-minimal chrome. `compact` renders those two states (waiting,
+ * counting down) as a single-line pill instead — same information, same
+ * `onCancelPromotion` action, same `mediaErrorNotice` — nothing removed,
+ * only the layout. The `isSpeaker` branch (Leave the stage) is
+ * deliberately untouched by this flag — it wasn't the state real-device
+ * testing flagged, and compacting it isn't part of this fix.
  */
 export function RoomControls({
   eventId,
@@ -68,6 +84,7 @@ export function RoomControls({
   connectionStatus,
   phase,
   countdownText,
+  compact = false,
 }: {
   eventId: string;
   isSpeaker: boolean;
@@ -84,6 +101,8 @@ export function RoomControls({
   /** Issue #17: requesting the mic works from lobby_open onward, but going live is still gated to "ready" — enforced server-side (checkPromotionEligibility/claimOpenSeat), not just here. */
   phase: EventPhase;
   countdownText: string | null;
+  /** See this component's own doc comment above. Only affects the two `hasPendingRequest` states. */
+  compact?: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -160,6 +179,27 @@ export function RoomControls({
         </Button>
       </div>
     );
+
+    if (compact) {
+      return (
+        <div className="flex shrink-0 flex-col gap-1.5">
+          <div className="flex items-center gap-2 rounded-full border border-white/30 bg-white/[0.14] py-1.5 pr-2 pl-3 text-xs text-white">
+            <span aria-hidden="true">🎙</span>
+            <span className="flex-1 truncate">
+              {promotionCountdown !== null ? `Going live in ${promotionCountdown}…` : "Request sent"}
+            </span>
+            <button
+              type="button"
+              onClick={onCancelPromotion}
+              className="shrink-0 rounded-full px-2 py-1 font-medium text-white/70 transition-colors hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+          {mediaErrorNotice}
+        </div>
+      );
+    }
 
     if (promotionCountdown !== null) {
       return (

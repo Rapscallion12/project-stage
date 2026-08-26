@@ -816,17 +816,15 @@ one generic "update a seat" function:
   profile's occupancy without a replacement (`moderator_removed`,
   `event_ended`, or `disconnected`). Same trusted-server-only tier as
   `claim_speaker_seat`, for the same root reason — there's no
-  `auth.uid()`-shaped authorization for "end someone else's seat." Its one
-  real caller is the LiveKit webhook route
-  (`src/app/api/livekit/webhook/route.ts`), which independently verifies
-  LiveKit's webhook signature (`WebhookReceiver`, same
-  `LIVEKIT_API_KEY`/`SECRET` pair token minting already uses — not a
-  separate credential) before calling it with `reason: 'disconnected'` —
-  that signature check *is* the authorization; the function just trusts
-  already-verified server code. `moderator_removed` and `event_ended` are
-  accepted values with no caller yet: issue #7 (the `profiles.moderator`
-  flag doesn't exist) and a future event-lifecycle feature are what will
-  authorize those.
+  `auth.uid()`-shaped authorization for "end someone else's seat."
+  `moderator_removed` and `event_ended` are accepted values with no
+  caller yet: issue #7 (the `profiles.moderator` flag doesn't exist) and
+  a future event-lifecycle feature are what will authorize those.
+  `'disconnected'` is no longer called directly by the LiveKit webhook
+  (issue #18 UX finding) — `release_expired_disconnected_speaker`
+  (migration 00000000000016) now performs the equivalent release inline,
+  gated on the grace-period math — see "Disconnect cleanup, concretely"
+  below for why that changed.
 
 **Why `service_role` here, when this project otherwise never uses it**:
 every Postgres function still needs *some* PostgREST-facing grant to be
@@ -843,20 +841,25 @@ two repository functions — was judged the right tradeoff. See
 DECISIONS.md for the fuller reasoning and the self-service design this
 replaced.
 
-**Disconnect cleanup, concretely**: LiveKit's `participant_left` webhook
-fires after LiveKit's own reconnect grace period elapses (a platform
-default this project doesn't override), not on a transient network blip.
-The handler verifies the signature, parses the room/participant identity
-back into `event_id`/`profile_id` (`parseRoomName`/
-`parseParticipantIdentity` — the inverse of `getRoomName`/
-`getParticipantIdentity`, returning `null` rather than throwing on
-anything malformed, since a webhook payload is untrusted input even after
-signature verification proves *LiveKit* sent it), and calls
-`end_speaker_seat` with `reason: 'disconnected'` — a safe no-op if that
-identity never held a seat. No live permission push follows: the
-participant is already gone, so there's no connected participant to push
-a change to. The DB write alone fixes the "stuck seat" problem; the next
-token request correctly sees the seat as open.
+**Disconnect cleanup, concretely** (issue #18 UX finding — no longer an
+immediate eviction): LiveKit's `participant_left` webhook fires after
+LiveKit's own reconnect grace period elapses (a platform default this
+project doesn't override), not on a transient network blip. The handler
+verifies the signature, parses the room/participant identity back into
+`event_id`/`profile_id` (`parseRoomName`/`parseParticipantIdentity` —
+the inverse of `getRoomName`/`getParticipantIdentity`, returning `null`
+rather than throwing on anything malformed, since a webhook payload is
+untrusted input even after signature verification proves *LiveKit* sent
+it), and calls `mark_speaker_disconnected` (migration 00000000000016) —
+which only stamps `event_speakers.disconnected_at = now()`, idempotently
+(a duplicate delivery never restarts the clock), and does **not**
+release the seat. The webhook's `participant_joined` event is now
+handled too, calling `mark_speaker_reconnected` to clear that clock —
+the authoritative "they're back" signal, scoped to the identity's own
+active-seat row only so a stale reconnect can never touch a different
+occupant's row. See "Application-level reconnect grace period" below
+for what actually releases the seat, and why this changed from an
+immediate `end_speaker_seat` call.
 
 **Live permission push is best-effort, never authoritative.** By the time
 `syncPublishPermission()` runs, the DB write has already durably
@@ -873,28 +876,40 @@ warns against, for a prototype where this failure mode is rare and
 self-healing.
 
 **Application-level reconnect grace period, layered on top of LiveKit's
-own (2026-08-22)**: the paragraph above already covers LiveKit's own
-platform-default reconnect tolerance — brief enough that a fast page
-refresh usually never even reaches `participant_left` at all. Once that
-webhook *does* fire, though, `endSpeakerSeat` still runs immediately —
-no application-level grace period, so a genuinely slower reconnect (a
-real network blip, not just a refresh) still lost the seat outright. A
-real-device test surfaced this: refreshing while seated worked (LiveKit's
-own tolerance covered it), but the fix that restored the client-side
-self-preview state afterward exposed that nothing was actually watching
-for the *slower* case. `useSpeakerReconnectGrace` (client-side, every
-connected viewer) and `checkAndEvictDisconnectedSpeaker` (server-side,
-room/actions.ts) add exactly that layer: a client-observed gap between
-DB occupancy and LiveKit's live participant list starts a 25s (tunable)
-timer; only once it elapses does a server action re-verify absence via
-`RoomServiceClient.getParticipant` — the same trusted credential every
-token/permission call already uses — before calling the same
-`endSpeakerSeat` the webhook itself calls. The caller triggering the
-check is never trusted on its own; only the server's own independent
-LiveKit query decides. See DECISIONS.md for the full investigation,
-including why this reuses `useAutomaticPromotion`'s own grace-period
-shape rather than introducing a second timer system, and why the watch
-runs for every viewer rather than just the other active speaker (a solo
+own — now genuinely server-authoritative (2026-08-22, redesigned
+2026-08-24, issue #18 UX finding)**: the paragraph above already covers
+LiveKit's own platform-default reconnect tolerance — brief enough that a
+fast page refresh usually never even reaches `participant_left` at all.
+Once that webhook *does* fire, `mark_speaker_disconnected` starts a
+clock (`disconnected_at`) rather than releasing the seat immediately.
+`SPEAKER_DISCONNECT_GRACE_SECONDS = 11` (`lib/speaker-reconnect.ts`,
+shared by both sides) is the actual boundary — enforced entirely in
+Postgres: `release_expired_disconnected_speaker` is a single atomic
+`UPDATE ... WHERE left_at is null AND disconnected_at is not null AND
+disconnected_at <= now() - interval '11 seconds'`. That WHERE clause
+*is* the race guard, not a separate check-then-write step — a
+concurrent `mark_speaker_reconnected` clearing `disconnected_at` makes a
+stale/late-firing release attempt a pure no-op, verified directly
+against the real linked project (`event-speakers-disconnect-grace.test.ts`),
+not just reasoned about.
+
+`useSpeakerReconnectGrace` (client-side, every connected viewer) derives
+"who's currently in a disconnect grace window" as a pure function of
+`speaker.disconnected_at` — already flowing through `speakers` via the
+same Realtime subscription `useActiveSpeakers` already has, so this
+needs no LiveKit-participant-list comparison at all (the previous
+design's own signal, now removed as a second, racier source of truth).
+It still schedules a local `setTimeout` (computed from the seat's own
+`disconnected_at`, not from mount time) and calls
+`checkAndEvictDisconnectedSpeaker` (server-side, room/actions.ts) when
+it expects the grace period to have elapsed — but that server action's
+own `releaseExpiredDisconnectedSpeaker` call re-derives the real
+decision from Postgres's own clock every time; the caller triggering
+the check is never trusted on its own. See DECISIONS.md for the full
+investigation (including why the earlier 25s/LiveKit-live-check design
+still amounted to a purely cosmetic grace period, since the webhook was
+releasing the seat immediately underneath it) and why the watch runs
+for every viewer rather than just the other active speaker (a solo
 speaker's seat must still eventually release with no co-speaker around
 to notice).
 
@@ -1413,6 +1428,22 @@ its own editing state on blur/outside-tap — a pre-existing bug in that
 component, not caused by or specific to Watch Mode/Comments Mode) is
 documented in DECISIONS.md; it touched `GuestNameEditor` and `<Input>`'s
 ref-forwarding only, nothing in this section's architecture.
+
+**Superseded for both orientations (2026-08-23/24)**: the Watch Mode /
+Comments Mode two-state model this whole section describes was
+first replaced in `PortraitRoom` by the "05 — Social Stage" redesign
+(issue #21) — a single, always-visible composition (minimal top chrome,
+persistent compact composer/React/Vote/Gift row, ambient comments)
+rather than a modal toggle between a bare stage and a full chat panel.
+`MobileLandscapeRoom`'s audience composition was rebuilt onto that same
+model shortly after (issue #21, real-device finding: rotating to
+landscape still fell back to this section's legacy Comments Mode
+toggle/`RoomChatPanel`/`RoomHeader`, which read as reverting to the
+pre-05 interface). `useCommentsMode` (and its test) were deleted
+outright once nothing referenced it. This section is kept as the
+historical record of the tap-toggle design and why it was built that
+way; see `PortraitRoom`'s and `MobileLandscapeRoom`'s own doc comments,
+and DECISIONS.md, for the current architecture.
 
 ## Testing & Definition of Done
 

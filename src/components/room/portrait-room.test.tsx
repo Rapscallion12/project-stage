@@ -1,25 +1,31 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 
+const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
+  vi.hoisted(() => ({
+    leaveSpeakerSeat: vi.fn(),
+    withdrawSpeakerRequest: vi.fn(),
+    submitSpeakerRequest: vi.fn(),
+    sendMessage: vi.fn(),
+    addReaction: vi.fn(),
+    setGuestName: vi.fn(),
+  }));
+
 vi.mock("@/app/events/[id]/room/actions", () => ({
-  leaveSpeakerSeat: vi.fn(),
-  withdrawSpeakerRequest: vi.fn(),
-  submitSpeakerRequest: vi.fn(),
+  leaveSpeakerSeat,
+  withdrawSpeakerRequest,
+  submitSpeakerRequest,
 }));
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({
-  sendMessage: vi.fn(),
-  addReaction: vi.fn(),
+  sendMessage,
+  addReaction,
+  setGuestName,
 }));
-
-// jsdom doesn't implement Element.scrollTo — ChatPanel calls it to keep
-// the message list pinned to the latest message, unrelated to anything
-// this file is testing.
-Element.prototype.scrollTo = vi.fn();
 
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
 
@@ -42,6 +48,9 @@ const baseProps: RoomLayoutProps = {
   myIdentity: "profile:p1",
   identity,
   isSpeaker: false,
+  mySeatNumber: null,
+  participantRole: "audience",
+  myInactiveSince: null,
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
@@ -63,159 +72,366 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  microphoneMuted: false,
+  cameraMuted: false,
+  toggleMicrophone: vi.fn(async () => {}),
+  toggleCamera: vi.fn(async () => {}),
 };
 
-describe("PortraitRoom", () => {
-  it("gives the stage 100% of the space below the header, with chat/controls layered over it as an overlay — not a separate block consuming a share of that space (issue #20 corrective pass)", () => {
+describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("gives the stage the full space, with chrome/controls layered over it as overlays — not separate blocks consuming a share of it", () => {
     render(<PortraitRoom {...baseProps} />);
     const stageWrapper = screen.getByTestId("room-stage").parentElement;
     const overlay = screen.getByTestId("stage-bottom-overlay");
-    // The stage and the overlay are siblings inside the same relatively
-    // positioned wrapper — the overlay is absolutely positioned over the
-    // stage, not a shrink-0 flex sibling stealing height from it.
     expect(overlay.parentElement).toBe(stageWrapper);
     expect(overlay.className).toMatch(/\babsolute\b/);
     expect(stageWrapper?.className).toMatch(/\brelative\b/);
   });
 
-  it("explicitly ranks the overlay above the stage (z-10 vs the stage's own z-0) — real-device testing found the speaker divider bleeding across this overlay before this fix", () => {
+  it("explicitly ranks the bottom overlay above the stage (z-10 vs the stage's own z-0)", () => {
     render(<PortraitRoom {...baseProps} />);
     expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bz-10\b/);
     expect(screen.getByTestId("room-stage").className).toMatch(/\bz-0\b/);
   });
 
-  it("re-scopes the overlay to a fixed dark theme so chat stays legible over live video regardless of the visitor's own light/dark preference", () => {
+  it("opts out of StageOverlayShell's heavy gradient wash — the new controls carry their own individual legibility", () => {
     render(<PortraitRoom {...baseProps} />);
-    expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bstage-overlay\b/);
+    expect(screen.getByTestId("stage-bottom-overlay").className).not.toMatch(/\bfrom-black\/90\b/);
   });
 
-  describe("the overlay's decorative margin lets taps through to the stage beneath (real-device finding: an open seat could end up under it)", () => {
-    it("the overlay itself is click-through — only its inner content wrapper captures taps", () => {
+  it("the bottom overlay's decorative margin is click-through — only its inner content wrapper captures taps", () => {
+    render(<PortraitRoom {...baseProps} />);
+    const overlay = screen.getByTestId("stage-bottom-overlay");
+    expect(overlay.className).toMatch(/\bpointer-events-none\b/);
+    const inner = overlay.firstElementChild as HTMLElement;
+    expect(inner.className).toMatch(/\bpointer-events-auto\b/);
+  });
+
+  it("tapping an empty seat tile calls onTapEmptySeat — unaffected by the redesign", () => {
+    const onTapEmptySeat = vi.fn();
+    render(<PortraitRoom {...baseProps} onTapEmptySeat={onTapEmptySeat} />);
+    fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
+    expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a failed join attempt's message visibly", () => {
+    render(<PortraitRoom {...baseProps} joinSeatMessage="Create an account to join as a speaker." />);
+    expect(screen.getByText("Create an account to join as a speaker.")).toBeInTheDocument();
+  });
+
+  it("SpeakerStage never receives a darkened scrim in this phase — there is no Discussion Expanded yet to darken it for", () => {
+    render(<PortraitRoom {...baseProps} />);
+    expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+  });
+
+  describe("minimal top chrome (replaces RoomHeader for this composition)", () => {
+    it("shows a compact status pill with the event title, click-through outside its own bounds", () => {
       render(<PortraitRoom {...baseProps} />);
-      const overlay = screen.getByTestId("stage-bottom-overlay");
-      expect(overlay.className).toMatch(/\bpointer-events-none\b/);
-      const inner = overlay.firstElementChild as HTMLElement;
-      expect(inner.className).toMatch(/\bpointer-events-auto\b/);
+      const pill = screen.getByTestId("watch-status-pill");
+      expect(pill).toHaveTextContent("Late Night Debate");
     });
 
-    it("the comments toggle lives inside the click-through-capable wrapper", () => {
-      render(<PortraitRoom {...baseProps} />);
-      const overlay = screen.getByTestId("stage-bottom-overlay");
-      expect(overlay).toContainElement(screen.getByTestId("comments-toggle"));
+    it("omits connection-status text when connected, but surfaces it when degraded (the one safety-relevant thing RoomHeader used to show)", () => {
+      const { rerender } = render(<PortraitRoom {...baseProps} connectionStatus="connected" />);
+      expect(screen.getByTestId("watch-status-pill")).not.toHaveTextContent("Reconnecting");
+
+      rerender(<PortraitRoom {...baseProps} connectionStatus="reconnecting" />);
+      expect(screen.getByTestId("watch-status-pill")).toHaveTextContent("Reconnecting…");
+    });
+
+    it("shows the guest identity chip for a guest, not for an account holder", () => {
+      const { rerender } = render(
+        <PortraitRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Cheerful Raven" }} />,
+      );
+      expect(screen.getByRole("button", { name: "Cheerful Raven" })).toBeInTheDocument();
+
+      rerender(<PortraitRoom {...baseProps} identity={identity} />);
+      expect(screen.queryByRole("button", { name: /cheerful raven/i })).not.toBeInTheDocument();
     });
   });
 
-  describe("speaker-entry friction removal (issue #27)", () => {
-    it("has no standalone 'Request the mic' control anywhere in the room", () => {
+  describe("persistent Watch Mode controls — composer real as of Phase 2, React/Vote/Gift still inert", () => {
+    it("React, Vote, and Gift stay disabled — only the composer is functional in this phase", () => {
       render(<PortraitRoom {...baseProps} />);
-      expect(screen.queryByRole("button", { name: /request the mic/i })).not.toBeInTheDocument();
-      expect(screen.queryByPlaceholderText(/why should you get the mic/i)).not.toBeInTheDocument();
+      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
-    it("has exactly one text composer once Comments Mode is open", () => {
+    it("there is no Discussion Expanded entry point yet — no comments-toggle", () => {
       render(<PortraitRoom {...baseProps} />);
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-      expect(screen.getAllByRole("textbox")).toHaveLength(1);
+      expect(screen.queryByTestId("comments-toggle")).not.toBeInTheDocument();
     });
 
-    it("tapping an empty seat tile calls onTapEmptySeat", () => {
-      const onTapEmptySeat = vi.fn();
-      render(<PortraitRoom {...baseProps} onTapEmptySeat={onTapEmptySeat} />);
-      fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
-      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
-    });
+    describe("the composer (issue #21, '05 — Social Stage' Phase 2: reuses ChatPanel's existing send/request logic verbatim)", () => {
+      it("renders a real, focusable text field with the 'Add a comment…' placeholder — not the Phase 1 disabled placeholder", () => {
+        render(<PortraitRoom {...baseProps} />);
+        const input = screen.getByPlaceholderText("Add a comment…");
+        expect(input).toBeInTheDocument();
+        expect(input).not.toBeDisabled();
+      });
 
-    it("surfaces a failed join attempt's message near the controls, not silently", () => {
-      render(<PortraitRoom {...baseProps} joinSeatMessage="Create an account to join as a speaker." />);
-      expect(screen.getByText("Create an account to join as a speaker.")).toBeInTheDocument();
-    });
+      it("sending a normal comment calls the existing sendMessage action, never submitSpeakerRequest or onPrepareMedia", async () => {
+        sendMessage.mockResolvedValue(undefined);
+        const onPrepareMedia = vi.fn();
+        render(<PortraitRoom {...baseProps} onPrepareMedia={onPrepareMedia} />);
 
-    it("the composer's 🎤 toggle switches it into speaker-request mode, once Comments Mode is open", () => {
-      render(<PortraitRoom {...baseProps} micRequestMode={true} />);
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-      expect(screen.getByPlaceholderText("What do you want to talk about?")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Request" })).toBeInTheDocument();
+        fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello room" } });
+        fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+
+        await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+        expect(submitSpeakerRequest).not.toHaveBeenCalled();
+        expect(onPrepareMedia).not.toHaveBeenCalled();
+      });
+
+      it("tapping the mic toggle switches to Request-to-Speak mode, changing the placeholder without enlarging the composer", () => {
+        render(<PortraitRoom {...baseProps} micRequestMode={true} />);
+        expect(screen.getByPlaceholderText("What's your topic?")).toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
+      });
+
+      it("the mic-on pill is visually distinct (accent border) from mic-off", () => {
+        const { rerender } = render(<PortraitRoom {...baseProps} micRequestMode={false} />);
+        const pillOff = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pillOff.className).not.toMatch(/\bborder-accent/);
+
+        rerender(<PortraitRoom {...baseProps} micRequestMode={true} />);
+        const pillOn = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pillOn.className).toMatch(/\bborder-accent/);
+      });
+
+      it("submitting a speaker request still calls onPrepareMedia synchronously — the existing Safari-gesture-safe submit order is preserved", () => {
+        submitSpeakerRequest.mockResolvedValue(undefined);
+        const onPrepareMedia = vi.fn();
+        render(<PortraitRoom {...baseProps} micRequestMode={true} onPrepareMedia={onPrepareMedia} />);
+
+        fireEvent.change(screen.getByPlaceholderText("What's your topic?"), {
+          target: { value: "AI and creativity" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
+
+        expect(onPrepareMedia).toHaveBeenCalledTimes(1);
+      });
+
+      it("a successful request flips hasPendingRequest and drops the composer back to normal mode", async () => {
+        submitSpeakerRequest.mockResolvedValue(undefined);
+        const onHasPendingRequestChange = vi.fn();
+        const onMicRequestModeChange = vi.fn();
+        render(
+          <PortraitRoom
+            {...baseProps}
+            micRequestMode={true}
+            onHasPendingRequestChange={onHasPendingRequestChange}
+            onMicRequestModeChange={onMicRequestModeChange}
+          />,
+        );
+        fireEvent.change(screen.getByPlaceholderText("What's your topic?"), {
+          target: { value: "AI and creativity" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send speaker request" }));
+
+        await waitFor(() => expect(onHasPendingRequestChange).toHaveBeenCalledWith(true));
+        expect(onMicRequestModeChange).toHaveBeenCalledWith(false);
+      });
     });
   });
 
-  describe("Watch Mode / Comments Mode (issue #21, gesture retired 2026-08-22: built from scratch for portrait — it never got either gesture pass)", () => {
-    it("defaults to Watch Mode: comments closed, no chat panel mounted at all", () => {
+  describe("RoomControls — leave stage unchanged, pending-request states compact (issue #21, Phase 2 fix)", () => {
+    it("renders nothing for a plain audience member with no pending request", () => {
       render(<PortraitRoom {...baseProps} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      expect(toggle).toHaveAttribute("aria-expanded", "false");
-      expect(toggle).toHaveTextContent("Comments");
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /leave the stage/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
+    });
+
+    it("a seated speaker is routed to Speaker View instead of Watch Mode's own leave-stage treatment (issue #18)", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          isSpeaker={true}
+          mySeatNumber={1}
+          participantRole="speaker"
+          canPublish={true}
+        />,
+      );
+      // Still SpeakerStage underneath (via PortraitSpeakerView) — not a blank page.
+      expect(screen.getByTestId("room-scrim")).toBeInTheDocument();
+      // Speaker View has its own composer/leave control (issue #18, Phase
+      // 2) — a real leave button exists, just not the old legacy
+      // RoomControls block (no "Enable camera & mic"/status text
+      // alongside it) — see portrait-speaker-view.test.tsx for the full
+      // Speaker View composer/leave/ambient-comments coverage.
+      expect(screen.getByRole("button", { name: /leave the stage/i })).toBeInTheDocument();
+      expect(screen.queryByText(/setting up your mic access/i)).not.toBeInTheDocument();
+    });
+
+    describe("no separate 'Request sent' bar (issue #18 UX finding — the composer's own mic button carries the pending state instead)", () => {
+      it("renders no standalone pending-request bar/pill at all — no 'Request sent' text, no old paragraph+Withdraw block", () => {
+        render(<PortraitRoom {...baseProps} hasPendingRequest={true} />);
+        expect(screen.queryByText("Request sent")).not.toBeInTheDocument();
+        expect(screen.queryByText(/you'll go live automatically/i)).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /withdraw/i })).not.toBeInTheDocument();
+      });
+
+      it("the composer's mic button reflects the pending state and is still the sole Cancel affordance", () => {
+        render(<PortraitRoom {...baseProps} hasPendingRequest={true} />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        expect(micButton).toHaveAccessibleName("Cancel speaker request");
+        expect(micButton.className).toMatch(/\bbg-accent\/30\b/);
+      });
+
+      it("tapping the pending mic button calls onCancelPromotion — the same existing action the old bar's Cancel button used", () => {
+        const onCancelPromotion = vi.fn();
+        render(<PortraitRoom {...baseProps} hasPendingRequest={true} onCancelPromotion={onCancelPromotion} />);
+        fireEvent.click(screen.getByTestId("watch-composer-mic"));
+        expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+      });
+
+      it("the ambient request comment is unaffected by this composition — still whatever ChatPanel/AmbientComments already renders", () => {
+        render(
+          <PortraitRoom
+            {...baseProps}
+            hasPendingRequest={true}
+            messages={[
+              {
+                id: "m1",
+                author_display_name: "Jamie",
+                author_profile_id: "p1",
+                author_guest_id: null,
+                body: "AI and creativity",
+                created_at: new Date().toISOString(),
+                is_speaker_request: true,
+              },
+            ]}
+          />,
+        );
+        expect(screen.getByTestId("ambient-comment")).toHaveTextContent("AI and creativity");
+      });
+    });
+  });
+
+  it("no pointer/drag gesture infrastructure is present — the retired room-level gesture stays retired", () => {
+    render(<PortraitRoom {...baseProps} />);
+    expect(document.querySelector("[data-gesture-ignore]")).not.toBeInTheDocument();
+  });
+
+  describe("ambient live comments (issue #21, Phase 3 — reuses the existing chat stream, no second backend)", () => {
+    it("renders nothing when there are no messages yet", () => {
+      render(<PortraitRoom {...baseProps} messages={[]} />);
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
+
+    it("shows a recent message ambiently, lower-left, click-through outside the bubbles themselves", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "great show",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      const bubble = screen.getByTestId("ambient-comment");
+      expect(bubble).toHaveTextContent("great show");
+      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      expect(wrapper.className).toMatch(/\bpointer-events-none\b/);
+      expect(bubble.className).toMatch(/\bpointer-events-auto\b/);
+    });
+
+    it("positions the ambient overlay clear of the persistent bottom composer row", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "hi",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      expect(wrapper.className).toMatch(/\babsolute\b/);
+      expect(wrapper.className).toMatch(/\bbottom-16\b/);
+      expect(wrapper.className).toMatch(/\bleft-3\b/);
+    });
+  });
+
+  describe("center-stage 'Going live' countdown (issue #18 UX finding — reuses the existing promotionCountdown/onCancelPromotion state, not a new one)", () => {
+    it("renders the countdown overlay instead of the ordinary bottom composer/controls once promotionCountdown is set", () => {
+      render(<PortraitRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.getByTestId("countdown-overlay")).toBeInTheDocument();
+      expect(screen.queryByTestId("stage-bottom-overlay")).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Add a comment…")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+    });
+
+    it("hides ambient comments during the countdown too, so nothing competes with it", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          hasPendingRequest={true}
+          promotionCountdown={2}
+          messages={[
+            {
+              id: "m1",
+              author_display_name: "Jamie",
+              author_profile_id: "p1",
+              author_guest_id: null,
+              body: "hi",
+              created_at: new Date().toISOString(),
+              is_speaker_request: false,
+            },
+          ]}
+        />,
+      );
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    });
+
+    it("dims the stage behind the countdown via SpeakerStage's existing scrim mechanism", () => {
+      render(<PortraitRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.getByTestId("room-scrim").style.opacity).not.toBe("0");
+    });
+
+    it("no scrim, ordinary composer, when promotionCountdown is null (including the plain pending-request waiting state, shown via the mic button's own pending style)", () => {
+      render(<PortraitRoom {...baseProps} hasPendingRequest={true} promotionCountdown={null} />);
       expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
+      expect(screen.queryByTestId("countdown-overlay")).not.toBeInTheDocument();
+      expect(screen.getByTestId("watch-composer-mic")).toHaveAccessibleName("Cancel speaker request");
     });
 
-    it("tapping the toggle opens Comments Mode: full composer/history mount, scrim darkens", () => {
-      render(<PortraitRoom {...baseProps} />);
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-
-      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "true");
-      expect(screen.getByTestId("comments-toggle")).toHaveTextContent("Hide");
-      expect(screen.getByRole("textbox")).toBeInTheDocument();
-      expect(Number(screen.getByTestId("room-scrim").style.opacity)).toBeGreaterThan(0);
+    it("preserves top chrome (status pill/guest chip) during the countdown — still feels like the same room, not a separate page", () => {
+      render(<PortraitRoom {...baseProps} hasPendingRequest={true} promotionCountdown={3} />);
+      expect(screen.getByTestId("watch-status-pill")).toBeInTheDocument();
     });
 
-    it("Comments Mode shows message history and the reaction/emoji affordance, not just a bare composer", () => {
-      const messages = [
-        {
-          id: "m1",
-          author_display_name: "Jamie",
-          author_profile_id: "p1",
-          author_guest_id: null,
-          body: "hello from the audience",
-          created_at: new Date().toISOString(),
-          is_speaker_request: false,
-        },
-      ];
-      render(<PortraitRoom {...baseProps} messages={messages} />);
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-
-      expect(screen.getByText("hello from the audience")).toBeInTheDocument();
-      expect(screen.getAllByLabelText(/^Insert /).length).toBeGreaterThan(0);
-    });
-
-    it("opening Comments Mode never resizes, remounts, or reconnects SpeakerStage — same DOM node, same class list", () => {
-      render(<PortraitRoom {...baseProps} />);
-      const stage = screen.getByTestId("room-stage");
-      const stageClassBefore = stage.className;
-
-      fireEvent.click(screen.getByTestId("comments-toggle"));
-
-      expect(screen.getByTestId("room-stage")).toBe(stage);
-      expect(stage.className).toBe(stageClassBefore);
-    });
-
-    it("tapping close/back returns immediately to Watch Mode — chat panel unmounts entirely, not just shrinks", () => {
-      render(<PortraitRoom {...baseProps} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      fireEvent.click(toggle);
-      fireEvent.click(toggle);
-
-      expect(toggle).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-      expect(screen.getByTestId("room-scrim").style.opacity).toBe("0");
-    });
-
-    it("the guest-name editor renders above the toggle, not inside Comments Mode", () => {
-      render(<PortraitRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Guest" }} />);
-      const toggle = screen.getByTestId("comments-toggle");
-      const changeNameButton = screen.getByRole("button", { name: /change name/i });
-      expect(changeNameButton.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    });
-
-    it("no pointer/drag gesture infrastructure remains active on the stage wrapper", () => {
-      render(<PortraitRoom {...baseProps} />);
-      const surface = screen.getByTestId("room-stage").parentElement as HTMLElement;
-
-      fireEvent.pointerDown(surface, { pointerId: 1, clientY: 100 });
-      fireEvent.pointerMove(surface, { pointerId: 1, clientY: 260 });
-      fireEvent.pointerUp(surface, { pointerId: 1, clientY: 260 });
-
-      expect(screen.getByTestId("comments-toggle")).toHaveAttribute("aria-expanded", "false");
-      expect(document.querySelector("[data-gesture-ignore]")).not.toBeInTheDocument();
+    it("Cancel on the countdown overlay calls onCancelPromotion — the same existing action, not a new one", () => {
+      const onCancelPromotion = vi.fn();
+      render(
+        <PortraitRoom
+          {...baseProps}
+          hasPendingRequest={true}
+          promotionCountdown={3}
+          onCancelPromotion={onCancelPromotion}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancelPromotion).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -43,6 +43,7 @@ export function DesktopRoom({
   myIdentity,
   identity,
   isSpeaker,
+  mySeatNumber,
   hasPendingRequest,
   onHasPendingRequestChange,
   promotionCountdown,
@@ -80,6 +81,8 @@ export function DesktopRoom({
             speakers={speakers}
             getParticipant={getParticipant}
             myIdentity={myIdentity}
+            isSpeaker={isSpeaker}
+            mySeatNumber={mySeatNumber}
             needsMediaActivation={needsMediaActivation}
             activateMedia={activateMedia}
             mediaError={mediaError}

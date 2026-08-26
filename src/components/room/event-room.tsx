@@ -8,7 +8,14 @@ import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
+import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
+import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
+import { useOwnSeatExpirationConfirmation } from "@/hooks/use-own-seat-expiration-confirmation";
+import { useSeatReconciliation } from "@/hooks/use-seat-reconciliation";
+import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
+import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
+import { inactiveSince } from "@/lib/speaker-presence";
 import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
@@ -66,6 +73,17 @@ const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
  * …)` media query), this class only marks "currently inside a room" for
  * that CSS to key off. Added on mount, removed on unmount — never left
  * stuck on after navigating away.
+ *
+ * **`mobile-landscape-live-active` body class** (issue #18/#21): the
+ * same pattern, one level more specific — tracks "the live-room mobile
+ * landscape composition (`MobileLandscapeRoom`, audience *or* speaker)
+ * is actually rendering" rather than "any room is mounted," so the site
+ * header can be hidden outright (not just shrunk) in short landscape
+ * viewports for either role. Originally speaker-only
+ * (`speaker-view-active`); broadened once real-device testing found
+ * audience landscape needed the exact same treatment once it moved onto
+ * the "05" shell too — one class, one CSS rule, not two nearly-identical
+ * ones. See globals.css's own comment.
  */
 export function EventRoom({
   event,
@@ -89,7 +107,7 @@ export function EventRoom({
   initialHasPendingRequest: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
-  const { speakers, roomStatus } = useActiveSpeakers(event.id, initialSpeakers);
+  const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
 
   // Issue #27: lifted above the orientation branch — like every other
   // piece of state here, this must survive a rotation, and RoomControls/
@@ -101,6 +119,33 @@ export function EventRoom({
   const [isJoiningSeat, startJoiningSeat] = useTransition();
 
   function handleTapEmptySeat() {
+    // Issue #18, Speaker View real-device finding: `SpeakerStage`'s own
+    // `viewerIsSpeaking` check already omits `onTapEmptySeat` entirely
+    // for a seated viewer (never wires a click handler to the empty-tile
+    // button at all — see its own doc comment), which is what actually
+    // makes the tile inert in the normal case. But that's a *second*,
+    // independently-recomputed check, deep in the tree, and this
+    // function had no guard of its own — it trusted every caller to
+    // never invoke it while seated. If it ever were reachable regardless
+    // (a future composition change, a stale prop, anything), it would
+    // have called `prepareLocalMedia()` unconditionally below — and for
+    // an *already-published* speaker, `preparedTracksRef` is empty (the
+    // original tracks already transferred to the Room on publish), so
+    // that call would **not** have been the usual no-op: it would have
+    // acquired a second, unpublished `getUserMedia()` track and
+    // overwritten `localVideoTrack` state with it via `setLocalVideoTrack`,
+    // pointing the self-preview at an orphaned track instead of the one
+    // actually being published. This early return is the single source
+    // of truth this function should have had from the start — `isSpeaker`
+    // is already computed once, right here, from the same data
+    // `SpeakerStage` re-derives independently; checking it directly at
+    // the point where the mutating action actually originates means
+    // nothing downstream has to get its own re-derivation exactly right
+    // for this to stay safe. `joinOpenSeat`'s own server-side check
+    // (`getActiveSeatForIdentity` — see room/actions.ts) was already a
+    // second, real guard against an actual seat swap even without this;
+    // this closes the client-side gap in front of it.
+    if (isSpeaker) return;
     setJoinSeatMessage(null);
     // Issue #22 convergence (real-device finding, 2026-08-22): tapping an
     // open seat is the same expressed intent to speak as the composer's
@@ -123,9 +168,15 @@ export function EventRoom({
     startJoiningSeat(async () => {
       const result = await joinOpenSeat(event.id);
       if (result.ok) {
-        // useActiveSpeakers' own Realtime subscription picks up the new
-        // event_speakers row and isSpeaker flips on its own from there —
-        // nothing else to update locally, same as claimOpenSeat today.
+        // Issue #18 real-device finding (2026-08-28): previously relied
+        // solely on useActiveSpeakers' own Realtime subscription to pick
+        // up the new row — exactly the assumption that let a missed
+        // delta leave this tab stuck showing the audience composition
+        // after a successful claim. A direct, immediate refetch here
+        // means a genuinely successful join reflects instantly even if
+        // the Realtime INSERT never arrives at all, not just eventually
+        // once some other trigger happens to notice the contradiction.
+        void refetchSpeakers();
         return;
       }
       if (result.reason === "queue-exists") {
@@ -134,6 +185,32 @@ export function EventRoom({
         // normal request flow instead of being told "no" and left
         // stranded — this is that fallback, not an error.
         setMicRequestMode(true);
+        return;
+      }
+      if (result.reason === "already-speaking") {
+        // Issue #18 real-device finding (2026-08-27): this is proof of a
+        // genuine contradiction, not an ordinary rejection —
+        // getActiveSeatForIdentity (server, expiration-aware) just found
+        // an active seat for an identity this component's own isSpeaker
+        // (derived from useActiveSpeakers' accumulated client state)
+        // believed was audience. The dev-facing invariant this captures:
+        // participantRole/isSpeaker said "audience" while the
+        // authoritative seat lookup said otherwise for the same
+        // identity — that combination should be structurally
+        // impossible once useActiveSpeakers' state is genuinely synced.
+        // Un-gated (not NODE_ENV-conditional) so this is inspectable via
+        // remote devtools on a real device, matching this room's other
+        // real-device diagnostics.
+        console.error(
+          "[EventRoom] contradiction: joinOpenSeat found an active seat for this identity while participantRole/isSpeaker said audience — reconciling from a fresh server read.",
+          { participantRole, isSpeaker, mySeatNumber, authoritativeSeatNumber: result.seatNumber },
+        );
+        // Reconciles this tab's speakers state from the same
+        // authoritative source getActiveSeatForIdentity just read,
+        // instead of leaving the user stuck on a dead-end error — see
+        // useActiveSpeakers' own doc comment for why its accumulated
+        // state could have drifted in the first place.
+        void refetchSpeakers();
         return;
       }
       setJoinSeatMessage(result.error);
@@ -154,6 +231,11 @@ export function EventRoom({
 
   const orientation = useOrientation();
   const isDesktopViewport = useIsDesktopViewport();
+  // Issue #18 first-load consistency finding — see this hook's own doc
+  // comment for the exact hydration race this closes (a seated speaker
+  // intermittently landing in the wrong, role-unaware composition on a
+  // fresh page load).
+  const hasMountedOnClient = useHasMountedOnClient();
 
   // See this component's own doc comment ("room-active body class").
   useEffect(() => {
@@ -166,12 +248,88 @@ export function EventRoom({
   const myIdentity = getParticipantIdentity(
     identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
   );
-  // Issue #16: a guest can hold a seat too (prototype-testing exception —
-  // see PRODUCT.md/DECISIONS.md), so this matches whichever identity
-  // column is actually set on the seat row, not just profile_id.
-  const isSpeaker = speakers.some((s) =>
-    identity.type === "profile" ? s.profile_id === identity.id : s.guest_id === identity.id,
-  );
+  // Issue #18 consistency fix: the *one* place "which seat, if any, does
+  // this identity hold" gets computed — everything downstream (isSpeaker,
+  // the role routers, SpeakerStage's own solo-tile selection) reads the
+  // result as a plain prop instead of re-deriving it independently. See
+  // lib/participant-role.ts's own doc comment for the investigation this
+  // closes. Issue #16: a guest can hold a seat too (prototype-testing
+  // exception — see PRODUCT.md/DECISIONS.md), so this matches whichever
+  // identity column is actually set on the seat row, not just profile_id.
+  const mySeatNumber = findMySeatNumber(speakers, identity);
+  const isSpeaker = mySeatNumber !== null;
+  const participantRole = deriveParticipantRole({ isSpeaker, hasPendingRequest });
+  // Issue #18 unified inactive-speaker finding: the viewer's own
+  // active-seat row (if any) carries whichever of `disconnected_at`/
+  // `media_inactive_since` is set — both delivered here via the same
+  // Realtime subscription `speakers` already flows through, independent
+  // of this tab's own LiveKit connection state (a network drop the
+  // LiveKit server detects reaches this tab over Realtime even if this
+  // tab's own UI is still rendering). `inactiveSince` collapses both
+  // into the one deadline `SpeakerMediaActivationPrompt`/`SpeakerTile`
+  // show the real remaining grace time from — never a fresh,
+  // client-invented countdown. See lib/speaker-presence.ts.
+  const myInactiveSince = inactiveSince(speakers.find((s) => s.seat_number === mySeatNumber));
+
+  // Issue #18 first-load consistency finding: dev-only trace of the
+  // exact ordering that determines which composition renders, so a
+  // recurrence of "role says speaker but the wrong composition shows"
+  // leaves a concrete, inspectable log instead of needing to be
+  // reproduced blind. Fires after each commit (not during render), so
+  // it reflects what actually painted, not a discarded intermediate
+  // render.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    console.debug("[EventRoom] composition inputs", {
+      hasMountedOnClient,
+      isDesktopViewport,
+      orientation,
+      phase,
+      participantRole,
+      isSpeaker,
+      mySeatNumber,
+    });
+  }, [hasMountedOnClient, isDesktopViewport, orientation, phase, participantRole, isSpeaker, mySeatNumber]);
+
+  // Issue #18 consistency fix: becoming a speaker invalidates any
+  // candidate-only local state — see useRoleTransitionReset's own doc
+  // comment for why this is the single reconciliation point rather than
+  // relying on each individual promotion path (claimOpenSeat's countdown
+  // resolution, joinOpenSeat's direct join) to remember to clear its own
+  // piece of it.
+  useRoleTransitionReset({
+    isSpeaker,
+    onReset: () => {
+      setHasPendingRequest(false);
+      setMicRequestMode(false);
+      setJoinSeatMessage(null);
+    },
+  });
+
+  // Issue #18/#21: mirrors the `room-active` class above, but tracks
+  // "the live-room mobile landscape composition is actually rendering"
+  // specifically (not just "a room is mounted") — see globals.css's own
+  // comment for what this actually does (hides the site header in short
+  // landscape viewports, reclaiming space for the full-bleed
+  // composition). Originally gated on `isSpeaker` alone; broadened to
+  // `phase !== "upcoming" && !isDesktopViewport && orientation ===
+  // "landscape"` once audience landscape moved onto the same "05" shell
+  // and needed the identical treatment — this condition is true exactly
+  // when `MobileLandscapeRoom` (either its audience or its speaker
+  // branch) is the composition `EventRoom` is about to render below, so
+  // it covers both without needing two separate classes/CSS rules. A
+  // separate effect, not folded into the `room-active` one above, since
+  // this one's dependency set is real and can change repeatedly across a
+  // single mount (rotating, getting promoted, resizing past the desktop
+  // threshold), unlike `room-active`'s mount-once/unmount-once
+  // lifecycle.
+  useEffect(() => {
+    const inMobileLandscapeLiveRoom = phase !== "upcoming" && !isDesktopViewport && orientation === "landscape";
+    document.body.classList.toggle("mobile-landscape-live-active", inMobileLandscapeLiveRoom);
+    return () => {
+      document.body.classList.remove("mobile-landscape-live-active");
+    };
+  }, [phase, isDesktopViewport, orientation]);
 
   // Issue #23: replaces the manual "Claim your seat" button. Called
   // unconditionally here (above the phase==="upcoming" early return
@@ -187,19 +345,69 @@ export function EventRoom({
     needsMediaActivation: connection.needsMediaActivation,
     mediaError: connection.mediaError,
     onHasPendingRequestChange: setHasPendingRequest,
+    // Issue #18 real-device finding (2026-08-28): the same immediate,
+    // direct refetch as handleTapEmptySeat's own successful join above —
+    // a successful automatic-promotion claim previously relied solely on
+    // isSpeaker eventually flipping via Realtime (see this hook's own
+    // doc comment on the countdown overlay staying frozen at 0 until
+    // then), which is exactly the assumption a missed delta breaks.
+    // Passed directly, not wrapped in a fresh arrow function each render
+    // — refetchSpeakers is already a stable reference (useActiveSpeakers'
+    // own useCallback), and this hook's claim effect depends on it, so an
+    // unstable identity here would re-schedule its countdown timer on
+    // every unrelated EventRoom re-render.
+    onClaimSucceeded: refetchSpeakers,
   });
 
-  // Real-device reconnect-grace-period finding: enabled only once LiveKit
-  // is actually meant to be connected (canConnect/"ready") — before that,
-  // every getParticipant lookup is undefined for reasons unrelated to
-  // anyone disconnecting (see the hook's own doc comment).
+  // Issue #18 real-device finding (2026-08-28): the automatic,
+  // no-second-tap-required version of the same reconciliation
+  // `handleTapEmptySeat`'s `already-speaking` branch already does
+  // manually — see this hook's own doc comment for the exact triggers
+  // (a LiveKit-confirmed publish permission the client's own role still
+  // doesn't reflect, and returning to a backgrounded tab). Never a
+  // second role flag: it only ever calls the same `refetchSpeakers`
+  // already used everywhere else in this component.
+  useSeatReconciliation({
+    isSpeaker,
+    canPublish: connection.canPublish,
+    refetch: refetchSpeakers,
+  });
+
+  // Real-device reconnect-grace-period finding, issue #18 UX finding:
+  // enabled only once LiveKit is actually meant to be connected
+  // (canConnect/"ready") — kept for interface parity even though the
+  // hook's own derivation no longer depends on this tab's LiveKit
+  // connection state at all (see its own doc comment).
   const reconnectingIdentities = useSpeakerReconnectGrace({
     eventId: event.id,
     speakers,
-    getParticipant: connection.getParticipant,
     myIdentity,
     enabled: canConnect,
   });
+
+  // Issue #18 unified inactive-speaker finding: the client-observed half
+  // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
+  // media-presence transitions to the server, which owns the actual
+  // grace-period clock/release the same way it already does for a
+  // genuine LiveKit disconnect. Only meaningful while this identity
+  // holds a seat; a no-op hook call otherwise.
+  useSpeakerMediaPresenceReporting({
+    eventId: event.id,
+    isSpeaker,
+    canPublish: connection.canPublish,
+    needsMediaActivation: connection.needsMediaActivation,
+    microphoneMuted: connection.microphoneMuted,
+    cameraMuted: connection.cameraMuted,
+  });
+
+  // Issue #18 expiration-enforcement finding: the returning speaker's
+  // own confirmation trigger — useSpeakerReconnectGrace above
+  // deliberately never schedules an eviction check for the viewer's own
+  // seat, so without this, an identity alone in the room (no co-speaker/
+  // audience tab to trigger it on their behalf) could sit at "· 0s"
+  // indefinitely. Reuses myInactiveSince — the same deadline the visible
+  // countdown itself is derived from — never a second timer.
+  useOwnSeatExpirationConfirmation(event.id, myInactiveSince);
 
   // Issue #22: "Withdraw" (waiting) and "Cancel" (mid-countdown) both route
   // through cancelPromotion — releasing any held-but-unpublished tracks
@@ -246,6 +454,9 @@ export function EventRoom({
     myIdentity,
     identity,
     isSpeaker,
+    mySeatNumber,
+    participantRole,
+    myInactiveSince,
     hasPendingRequest,
     onHasPendingRequestChange: setHasPendingRequest,
     promotionCountdown,
@@ -267,12 +478,30 @@ export function EventRoom({
     reconnectingIdentities,
     messages,
     reactions,
+    microphoneMuted: connection.microphoneMuted,
+    cameraMuted: connection.cameraMuted,
+    toggleMicrophone: connection.toggleMicrophone,
+    toggleCamera: connection.toggleCamera,
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1">
-        {isDesktopViewport ? (
+        {!hasMountedOnClient ? (
+          // Issue #18 first-load consistency finding: viewport/orientation
+          // are unknown on the server and guessed (mobile-portrait) for
+          // the client's first hydration pass — committing to a real
+          // composition on that guess is exactly what let a seated
+          // speaker's first paint briefly show Speaker View and then get
+          // silently replaced by DesktopRoom (no role router at all) once
+          // the guess corrected. A brief neutral state here, instead,
+          // means the *next* render — once useHasMountedOnClient flips
+          // true and orientation/isDesktopViewport already reflect the
+          // real client — is the only one that ever picks a composition.
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-black text-white/70">
+            {isSpeaker && <p className="text-sm font-medium">Reconnecting to stage…</p>}
+          </div>
+        ) : isDesktopViewport ? (
           <DesktopRoom {...layoutProps} />
         ) : orientation === "landscape" ? (
           <MobileLandscapeRoom {...layoutProps} />

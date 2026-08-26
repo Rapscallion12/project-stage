@@ -39,6 +39,9 @@ const baseProps: RoomLayoutProps = {
   myIdentity: "profile:p1",
   identity,
   isSpeaker: false,
+  mySeatNumber: null,
+  participantRole: "audience",
+  myInactiveSince: null,
   hasPendingRequest: false,
   onHasPendingRequestChange: vi.fn(),
   promotionCountdown: null,
@@ -60,6 +63,10 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  microphoneMuted: false,
+  cameraMuted: false,
+  toggleMicrophone: vi.fn(async () => {}),
+  toggleCamera: vi.fn(async () => {}),
 };
 
 describe("DesktopRoom (renamed from LandscapeRoom, real-device finding: desktop and mobile landscape are not the same composition)", () => {

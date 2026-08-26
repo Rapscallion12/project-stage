@@ -1,15 +1,12 @@
-import { RoomHeader } from "@/components/room/room-header";
 import { SpeakerStage } from "@/components/room/speaker-stage";
-import { RoomChatPanel } from "@/components/room/room-chat-panel";
-import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
-import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
-import { useCommentsMode } from "@/hooks/use-comments-mode";
+import { WatchModeControls } from "@/components/room/watch-mode-controls";
+import { AmbientComments } from "@/components/room/ambient-comments";
+import { CountdownOverlay } from "@/components/room/countdown-overlay";
+import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
+import { MobileLandscapeSpeakerView } from "@/components/room/mobile-landscape-speaker-view";
+import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { RoomLayoutProps } from "@/components/room/types";
-
-/** Comments Mode's own height when open — a phone in landscape has less room to spare than portrait, so this stays shorter. Tunable, not validated against a real device yet. */
-const COMMENTS_MODE_HEIGHT_PX = 208;
-const SCRIM_OPACITY_WHEN_OPEN = 0.55;
 
 /**
  * A phone rotated sideways, not a small desktop (real-device finding,
@@ -28,157 +25,152 @@ const SCRIM_OPACITY_WHEN_OPEN = 0.55;
  * comfortably under the desktop width threshold, so it lands here, not
  * in `DesktopRoom`.
  *
- * **Watch Mode / Comments Mode, tap-driven (issue #21, gesture retired,
- * 2026-08-22)**: two rounds of real-device testing found the room-level
- * downward-drag gesture didn't produce a usable interaction — no
- * meaningful transition on an actual iPhone — and, independently, that
- * the *previous* "collapsed" state was never actually hidden, just
- * shorter, so comments/composer still permanently dominated the stage.
- * `useCommentsMode` (retired back to a plain boolean, no drag tracking
- * at all — see its own doc comment) now drives two clean, discrete
- * states: **Watch Mode** (`open === false`) shows only
- * `GuestNameEditor`/`joinSeatMessage`/`RoomControls` and the compact
- * `comments-toggle` — no chat panel rendered at all, not even a sliver.
- * **Comments Mode** (`open === true`) additionally mounts the full
- * `RoomChatPanel` at `COMMENTS_MODE_HEIGHT_PX` and darkens
- * `SpeakerStage`'s scrim. This is a deliberate, temporary foundation —
- * see DECISIONS.md's "Future Figma seam" note — not a redesign: the
- * eventual downward-drag reveal returns once Watch Mode and Comments
- * Mode both have a real, Figma-defined visual target to transition
- * between, not before.
+ * **Audience/Candidate composition rebuilt onto "05 — Social Stage"**
+ * (issue #21, real-device finding: rotating to landscape as an audience
+ * member still fell back to the pre-05 legacy interface —
+ * `RoomHeader`'s full status bar, the centered "💬 Comments" toggle,
+ * `RoomChatPanel` — none of which portrait Watch Mode has used since
+ * issue #21's own redesign). This is an *adaptation* of that same
+ * approved shell, not a new design system: `SpeakerViewTopChrome` (the
+ * minimal status-pill top chrome, reused unchanged — its `SelfPreview`-
+ * footprint reservation matters here too, since a candidate can hold a
+ * self-preview in landscape exactly as in portrait), `AmbientComments`,
+ * and `WatchModeControls` wrapping the *same* compact `ChatPanel` are
+ * all the *identical* components/props portrait Watch Mode already
+ * uses — nothing here is a landscape-specific reimplementation of chat
+ * or media logic. `useCommentsMode`, the modal comments toggle, and
+ * `RoomChatPanel` are gone entirely for this composition — same
+ * "always-available, no modal gate" model portrait already settled on,
+ * not a new one invented for landscape.
+ *
+ * **Deliberately not a portrait layout stretched sideways**: the one
+ * responsive difference from `PortraitRoom` is `SpeakerStage`'s own
+ * `orientation="landscape"` (side-by-side tiles, unchanged — two-speaker
+ * audience viewing is untouched) — everything else (chrome, controls,
+ * ambient comments) reuses portrait's exact components/positioning
+ * conventions, since nothing about *them* is portrait-specific; only the
+ * stage tiling itself genuinely differs by orientation.
  *
  * **Video geometry never changes** — `SpeakerStage`'s own size/position
- * (and the actual `<video>` elements/LiveKit tracks inside it) are a
- * sibling of the overlay, not a child of it; toggling Comments Mode on
- * or off never re-renders, resizes, or remounts it. The room's own
- * `RoomHeader` stays a translucent top overlay (reclaims its document-
- * flow footprint for the stage); `pr-16`/`pr-20` on its wrapper reserves
- * room for the top-right self-preview so the two don't visually collide.
+ * (and the actual `<video>` elements/LiveKit tracks inside it) stay a
+ * sibling of every overlay here, never a child of one; nothing in this
+ * composition ever resizes, remounts, or reconnects it. `scrimOpacity`
+ * is never passed (defaults to `0`) — there's no Comments Mode left to
+ * darken the stage for, matching `PortraitRoom`'s own audience
+ * composition exactly.
+ *
+ * **Role router** (issue #18, Speaker View corrective pass): a seated
+ * speaker (`isSpeaker`) is delegated to `MobileLandscapeSpeakerView`
+ * instead — a completely different, already-approved composition, left
+ * untouched by this pass. Checked before any of this component's own
+ * destructuring/JSX, the same discipline `PortraitRoom` already
+ * established for its own role router. This component now owns no hooks
+ * of its own (the old `useCommentsMode()` call is gone along with
+ * Comments Mode itself), so there's no "hooks above the branch" ordering
+ * concern left to satisfy here — the role check can sit at the very top.
  */
-export function MobileLandscapeRoom({
-  event,
-  phase,
-  countdownText,
-  roomStatus,
-  speakers,
-  myIdentity,
-  identity,
-  isSpeaker,
-  hasPendingRequest,
-  onHasPendingRequestChange,
-  promotionCountdown,
-  onCancelPromotion,
-  micRequestMode,
-  onMicRequestModeChange,
-  onTapEmptySeat,
-  isJoiningSeat,
-  joinSeatMessage,
-  getParticipant,
-  participantCount,
-  connectionStatus,
-  canPublish,
-  needsMediaActivation,
-  activateMedia,
-  mediaError,
-  localVideoTrack,
-  onPrepareMedia,
-  reconnectingIdentities,
-  messages,
-  reactions,
-}: RoomLayoutProps) {
-  const { open: commentsOpen, openComments, closeComments } = useCommentsMode();
+export function MobileLandscapeRoom(props: RoomLayoutProps) {
+  // Issue #18 consistency fix: keys off `participantRole`, the one
+  // derived value both this composition choice and the bottom control
+  // row are meant to share — see lib/participant-role.ts.
+  if (props.participantRole === "speaker") {
+    return <MobileLandscapeSpeakerView {...props} />;
+  }
+
+  const {
+    event,
+    speakers,
+    myIdentity,
+    identity,
+    isSpeaker,
+    mySeatNumber,
+    hasPendingRequest,
+    onHasPendingRequestChange,
+    promotionCountdown,
+    onCancelPromotion,
+    micRequestMode,
+    onMicRequestModeChange,
+    onTapEmptySeat,
+    isJoiningSeat,
+    joinSeatMessage,
+    getParticipant,
+    connectionStatus,
+    needsMediaActivation,
+    activateMedia,
+    mediaError,
+    localVideoTrack,
+    onPrepareMedia,
+    reconnectingIdentities,
+    messages,
+    reactions,
+  } = props;
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="relative min-h-0 flex-1">
-        <SpeakerStage
-          speakers={speakers}
-          getParticipant={getParticipant}
-          myIdentity={myIdentity}
-          needsMediaActivation={needsMediaActivation}
-          activateMedia={activateMedia}
-          mediaError={mediaError}
-          orientation="landscape"
-          onTapEmptySeat={onTapEmptySeat}
-          isJoiningSeat={isJoiningSeat}
-          localVideoTrack={localVideoTrack}
-          scrimOpacity={commentsOpen ? SCRIM_OPACITY_WHEN_OPEN : 0}
-          reconnectingIdentities={reconnectingIdentities}
-        />
-        {/* Room header as a translucent top overlay — reclaims its document-flow footprint for the stage, same reasoning as the bottom overlay below. Right padding leaves room for the top-right self-preview so the two don't collide. */}
-        <div
-          data-testid="room-header-overlay"
-          className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/60 to-transparent"
-        >
-          <div className="stage-overlay pointer-events-auto pr-16 sm:pr-20">
-            <RoomHeader
-              eventTitle={event.title}
-              roomStatus={roomStatus}
-              countdownText={countdownText}
-              participantCount={participantCount}
-              connectionStatus={connectionStatus}
-              compact
-            />
+    <div className="relative h-full min-h-0 w-full overflow-hidden">
+      <SpeakerStage
+        speakers={speakers}
+        getParticipant={getParticipant}
+        myIdentity={myIdentity}
+        isSpeaker={isSpeaker}
+        mySeatNumber={mySeatNumber}
+        needsMediaActivation={needsMediaActivation}
+        activateMedia={activateMedia}
+        mediaError={mediaError}
+        orientation="landscape"
+        onTapEmptySeat={onTapEmptySeat}
+        isJoiningSeat={isJoiningSeat}
+        localVideoTrack={localVideoTrack}
+        reconnectingIdentities={reconnectingIdentities}
+        // Issue #18 UX finding: dims the stage behind the center-stage
+        // "Going live" countdown — SpeakerStage's own existing scrim
+        // mechanism (issue #21), reused rather than a second dimming
+        // layer. See PortraitRoom's identical comment.
+        scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
+      />
+
+      <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
+
+      {promotionCountdown !== null ? (
+        // Issue #18 UX finding: same center-stage countdown treatment as
+        // PortraitRoom — landscape uses the same available stage area
+        // rather than any dedicated/legacy layout. See CountdownOverlay
+        // and PortraitRoom's own doc comment.
+        <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+      ) : (
+        <>
+          <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
+            <AmbientComments messages={messages} />
           </div>
-        </div>
-        <StageOverlayShell topClassName="pt-8">
-          {identity.type === "guest" && <GuestNameEditor initialName={identity.displayName} />}
-          {joinSeatMessage && (
-            <p className="text-xs text-red-500" role="alert">
-              {joinSeatMessage}
-            </p>
-          )}
-          <RoomControls
-            eventId={event.id}
-            isSpeaker={isSpeaker}
-            hasPendingRequest={hasPendingRequest}
-            promotionCountdown={promotionCountdown}
-            onCancelPromotion={onCancelPromotion}
-            canPublish={canPublish}
-            needsMediaActivation={needsMediaActivation}
-            activateMedia={activateMedia}
-            onPrepareMedia={onPrepareMedia}
-            mediaError={mediaError}
-            connectionStatus={connectionStatus}
-            phase={phase}
-            countdownText={countdownText}
-          />
-          {/* Watch Mode's one persistent affordance — Comments Mode's own explicit "back to video" control, same button either way. */}
-          <button
-            type="button"
-            data-testid="comments-toggle"
-            onClick={commentsOpen ? closeComments : openComments}
-            aria-expanded={commentsOpen}
-            aria-label={commentsOpen ? "Hide comments" : "Show comments"}
-            className="flex h-7 w-full shrink-0 items-center justify-center gap-1 text-xs text-white/70"
+
+          <StageOverlayShell
+            gradient={false}
+            topClassName="pt-0"
+            className="gap-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
           >
-            {commentsOpen ? (
-              <>
-                <span aria-hidden="true">⌄</span> Hide
-              </>
-            ) : (
-              <>
-                <span aria-hidden="true">💬</span> Comments
-              </>
+            {joinSeatMessage && (
+              <p className="rounded-lg bg-black/35 px-3 py-2 text-xs text-red-400" role="alert">
+                {joinSeatMessage}
+              </p>
             )}
-          </button>
-          {/* Comments Mode only — not rendered at all in Watch Mode, not just shorter. */}
-          {commentsOpen && (
-            <div style={{ height: COMMENTS_MODE_HEIGHT_PX }} className="min-h-0 shrink-0">
-              <RoomChatPanel
-                eventId={event.id}
-                messages={messages}
-                reactions={reactions}
-                micRequestMode={micRequestMode}
-                onMicRequestModeChange={onMicRequestModeChange}
-                onHasPendingRequestChange={onHasPendingRequestChange}
-                onPrepareMedia={onPrepareMedia}
-                className="h-full"
-              />
-            </div>
-          )}
-        </StageOverlayShell>
-      </div>
+            <WatchModeControls
+              composer={
+                <ChatPanel
+                  eventId={event.id}
+                  messages={messages}
+                  reactions={reactions}
+                  micRequestMode={micRequestMode}
+                  onMicRequestModeChange={onMicRequestModeChange}
+                  onHasPendingRequestChange={onHasPendingRequestChange}
+                  onPrepareMedia={onPrepareMedia}
+                  hasPendingRequest={!isSpeaker && hasPendingRequest}
+                  onCancelPendingRequest={onCancelPromotion}
+                  compact
+                />
+              }
+            />
+          </StageOverlayShell>
+        </>
+      )}
     </div>
   );
 }

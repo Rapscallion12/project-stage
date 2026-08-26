@@ -4,6 +4,1360 @@ Newest entry first.
 
 ---
 
+## 2026-08-28 — Session 31: Issue #18 reopened — seat-role reconciliation made self-healing (the fix already existed, nothing triggered it automatically)
+
+**Goal**: the split-layout bug reproduced again on the build confirmed
+clean and closed the previous round. Decisive new evidence: tapping
+"Join" a *second* time immediately fixed it — proving
+`useActiveSpeakers`' `refetch()` mechanism was already correct; nothing
+automatic ever called it. Issue #18 reopened and moved back to In
+Progress.
+
+**Fix, reusing the existing mechanism, no new role flag**: `mySeatNumber`
+remains the one canonical value everything else derives from —
+`participantRole`/the role routers/self-preview eligibility were never
+the problem, they already correctly recompute the instant the data
+source is corrected. What changed is how reliably that correction
+happens:
+
+1. Both seat-claim success paths (`handleTapEmptySeat`'s direct join,
+   `useAutomaticPromotion`'s automatic-promotion claim — new
+   `onClaimSucceeded` param) now call `refetchSpeakers()` immediately on
+   success, instead of relying solely on a Realtime delta arriving.
+2. New `useSeatReconciliation` watchdog: `canPublish` (LiveKit-confirmed
+   speaker rights) contradicting the client's own `isSpeaker` — exactly
+   the contradiction captured on-device — triggers a refetch
+   automatically, once per contradiction episode. Covers both "LiveKit
+   permission became speaker-capable" and "local publication starting"
+   in one signal, since publishing is always gated on `canPublish`
+   first.
+3. The same hook also resyncs on `visibilitychange`/`focus` restoration
+   — a backgrounded mobile tab is exactly where a Realtime socket can
+   silently drop without the app ever knowing.
+4. Realtime `SUBSCRIBED`/reconnect — already covered by the previous
+   round's `useActiveSpeakers` fix, unchanged.
+
+See DECISIONS.md's "Seat-role reconciliation made self-healing" entry
+for the full design.
+
+lint/tsc/build/full suite all pass (661/661, 56 files, +17 new tests
+covering every scenario requested: a missed Realtime delta triggering
+automatic refetch with no tap of any kind; the watchdog reacting only
+to the genuine contradiction and never more than once per episode;
+Speaker View replacing the split layout once reconciled data lands; and
+no duplicate seat claim or media acquisition anywhere in any of these
+paths). Deployed a fresh `feature/social-stage-shell` preview.
+
+**Issue #18 reopened, not closed.** Per explicit instruction, does not
+close until this automatic recovery survives repeated real-device
+testing.
+
+## 2026-08-27 — Session 30: Issue #18 confirmed clean on real-device retest — final diagnostic cleanup, issue closed
+
+**Goal**: the user's real-device retest of commit `9e9309e` reported no
+complaints and no reproduced issues — final cleanup only, no behavior
+changes, per explicit instruction not to touch the underlying fixes.
+
+**Removed** (all temporary, all specific to the #18 investigation): the
+fuchsia `EventRoom` diagnostic strip; the cyan `SpeakerStage` diagnostic
+strip; `SpeakerStage`'s instance-tracking registry (`useId`,
+`useSyncExternalStore`-backed live cross-instance count, the
+`parentComposition` prop and its five call-site wires) — built
+specifically to rule out a double-mounted `SpeakerStage`, a theory now
+conclusively ruled out; the amber diagnostic strips on the speaker's own
+prompt and the audience tile, and the now-dead `reconnectDiagnostics`
+helper plus its dedicated unit tests. Test coverage that existed only to
+assert on the removed strips' own text went with them; the behavioral
+tests underneath (tile/seat counts against the real DOM, countdown text,
+resolving states, expiration enforcement, ownership reconciliation) are
+untouched.
+
+**Explicitly kept**: the dev-only `console.debug` composition trace in
+`EventRoom` (ongoing dev tooling, not investigation-specific); the
+`console.error` invariant assertions in `SpeakerStage` and `EventRoom`'s
+ownership-contradiction handler (permanent "this should be impossible"
+checks in this codebase's existing style, and part of the actual fix
+logic, not throwaway diagnostics).
+
+**ROADMAP.md**: both the original #18 tracking bullet and the #21
+mega-entry's #18 status note updated to reflect the confirmed, closed
+state.
+
+lint/tsc/build/full suite all pass (644/644, 55 files — down from 656 by
+exactly the removed diagnostic-only tests). Deployed a fresh
+`feature/social-stage-shell` preview.
+
+**Issue #18 closed.** No new issue started this pass, per explicit
+instruction.
+
+## 2026-08-27 — Session 29: The "split-layout" bug was client data staleness, not a rendering bug — `useActiveSpeakers` now self-heals
+
+**Goal**: the previous round's instance-tracking diagnostics worked
+exactly as designed — a real-device capture showed `liveInstances=1`
+with a single, self-consistent `SpeakerStage` instance correctly
+rendering the audience/two-tile composition because `EventRoom`'s own
+`participantRole` said "audience." The same capture also showed "You're
+already speaking" and a live self-preview for the same identity — proof
+this was never a rendering bug, but an upstream ownership/role
+synchronization contradiction: the client's own idea of "do I own a
+seat" had diverged from the server's.
+
+**Root cause**: `mySeatNumber` (`EventRoom`) is the one canonical value
+`participantRole`/`isSpeaker`/Speaker View routing already all
+correctly derived from — there was no second, independently-computed
+role flag to find. The actual bug was upstream of all of that:
+`useActiveSpeakers` only ever applied incremental Realtime deltas on top
+of its initial state, with zero reconciliation mechanism. A routine
+WebSocket drop/reconnect (mobile networks, this project's real-device
+target) can silently cause one Postgres CDC event to never arrive,
+after which this hook's state stays wrong for the rest of the session —
+self-preview being visible while `mySeatNumber` said null was a symptom
+of that staleness, not a second bug (self-preview is driven by LiveKit's
+own permission push, an entirely separate channel).
+
+**Fix, not another role flag**: `useActiveSpeakers` now performs a full
+resync (replace, not patch) from the same `event_speakers_active` view
+the server already trusts, on every Realtime `SUBSCRIBED` callback —
+initial subscription and every reconnect — and exposes `refetch()` for
+an explicit trigger. `joinOpenSeat`'s "already holds an active seat"
+rejection is now a distinct, typed `already-speaking` result carrying
+the real seat number, instead of a dead-end error string; `EventRoom`
+treats it as definitive proof of the exact contradiction captured
+on-device, logs it loudly, and reconciles immediately via `refetch()`.
+
+See DECISIONS.md's "The split-layout bug was a client-state staleness
+bug" entry for the full design.
+
+lint/tsc/build/full suite all pass (656/656, 55 files, +10 new tests,
+including the first test in this codebase to mock a Realtime channel's
+subscribe-status callback — it reproduces the exact missed-delta
+failure mode and proves the resync catches it, and a dedicated
+`EventRoom` test reproduces the full contradiction end to end with no
+dead-end error ever rendered). Deployed a fresh `feature/social-stage-
+shell` preview.
+
+**Next task**: real-device confirmation that the original split-layout
+symptom doesn't reproduce (the diagnostics from the previous round stay
+in place either way, per explicit instruction). Do not move #18 to Done
+until confirmed.
+
+## 2026-08-26 — Session 28: Split-layout instance diagnostics; found and fixed the real expiration-enforcement gap
+
+**Goal**: the user reproduced both remaining #18 bugs on the
+instrumented build with real evidence for the first time. (1) The
+fuchsia/cyan diagnostics agreed Speaker View/solo mode was active while
+the visible stage still showed the two-tile split layout. (2) The
+countdown correctly reached "Tap to reconnect · 0s," but the old
+occupant could still reconnect and keep the seat — proving the
+countdown/render pipeline (already fixed) was never the actual problem;
+enforcement was.
+
+**Split-layout bug**: re-read `speaker-stage.tsx`'s render function a
+third time — confirmed again it's structurally impossible for a single
+mounted instance to render both layouts (one ternary, no shared path).
+Per explicit instruction, did not attempt another speculative fix.
+Instead added a `useSyncExternalStore`-backed module registry every
+mounted `SpeakerStage` joins on mount and leaves on unmount: each
+instance's diagnostic strip now shows a `useId()`-based instance id,
+which composition mounted it (all 5 real call sites now self-identify),
+a *live* cross-instance mount count (updates immediately on any
+instance's mount/unmount, not just at its own), and the actual rendered
+tile count/seat numbers, computed from the same `renderSolo` value the
+JSX itself branches on. New tests prove the structural half directly.
+**Not claimed fixed — instrumentation for the next capture.**
+
+**Expiration enforcement — the real bug, found by reading the actual
+code path**: `getActiveSeatForIdentity` (drives LiveKit token minting's
+`canPublish`) and `listActiveSpeakers` (drives `findOpenSeat`) both only
+ever checked `left_at is null` — with zero awareness that a row could be
+*logically* expired but not yet physically released, since nothing
+guaranteed `release_expired_inactive_speaker` ran at the exact deadline
+moment. New `is_speaker_seat_active()` predicate + `event_speakers_active`
+view (migration `00000000000018`) make every ownership-relevant read
+expiration-aware; `release_if_expired`, folded into `claim_speaker_seat`
+and `request_to_speak_internal`, does the same for the write side (an
+identity's own stale row no longer blocks the unique index from a
+legitimate re-entry). Also added: immediate `canPublish: false` push on
+a successful eviction (the one path in the app missing this, per
+ARCHITECTURE.md's own standing rule); a new
+`useOwnSeatExpirationConfirmation` hook so a speaker alone in the room
+(no one else to trigger the existing scheduled check) still gets their
+own expiration confirmed promptly; and a "resolving" state on both
+surfaces so the countdown never sits stuck at "· 0s."
+
+See DECISIONS.md's "Split-layout instance diagnostics; real expiration
+enforcement" entry for the full design.
+
+lint/tsc/build/full suite all pass (650/650, 54 files, +30 new tests,
+including 10 tests against the real linked database proving the
+expiration fix end-to-end: a stale reconnect is rejected, a new
+claimant can take the seat, the old identity can't reclaim it, the
+guard is idempotent and doesn't affect a genuinely active seat).
+Deployed a fresh `feature/social-stage-shell` preview.
+
+**Next task**: real-device confirmation of exactly the user's stated
+plan — reproduce Speaker View and check the expanded cyan diagnostics;
+let inactivity count to zero; try to reconnect after zero; confirm
+rejection/return to audience; confirm another participant can take the
+expired seat. Do not move #18 to Done until confirmed.
+
+## 2026-08-25 — Session 27: Unified inactive-speaker model shipped, reusing the existing 11s grace period for both LiveKit disconnect and both-media-off
+
+**Goal**: continue #18 with a simplified product direction, explicitly
+superseding the 30s-idle + 10s-warning architecture proposed (not built)
+at the end of Session 26: "the important question is not whether
+someone is technically connected; it is whether they are meaningfully
+present on stage." One product-level `speakerPresence = active |
+inactive`, reusing the *existing* 11-second grace period for both
+causes — a genuine LiveKit disconnect, or staying connected with both
+camera and mic off/muted (either alone stays active). Also asked to
+trace the still-missing countdown once more with real evidence, and to
+leave the split-layout diagnostics untouched.
+
+**Schema** (migration `00000000000017`): `event_speakers.media_inactive_since`
+— a second, independent clock alongside `disconnected_at`, not a
+repurposing of it (the actual cause stays inspectable in storage, per
+"continue distinguishing... where technically necessary"). Three new
+`service_role`-only functions mirror migration 16's shape exactly:
+`mark_speaker_media_inactive`/`mark_speaker_media_active` (called by the
+speaker's own client, since mute state has no server-observable signal
+in this app — a deliberate, documented difference in trust model from
+the webhook-only disconnect pair) and `release_expired_inactive_speaker`
+— one unified atomic release checking either clock. `left_reason`
+gained a new `'inactive'` value. Applied via `supabase db push
+--linked`; types regenerated.
+
+**One collapsing point**: new `lib/speaker-presence.ts` — `inactiveSince()`
+(the earlier of `disconnected_at`/`media_inactive_since`, whichever is
+set) is the only value any countdown reads; `isLocalMediaInactive()` is
+the pure client-side rule (`needsMediaActivation || (micMuted &&
+camMuted)`, always false without `canPublish`). Every component reads
+`inactiveSince(speaker)`, never either raw field — "camera off alone
+stays active" is true by construction, not a rule to remember.
+
+**New reporting hook**: `useSpeakerMediaPresenceReporting` (speaker-only,
+no-op for audience) reports genuine transitions only — never on every
+render, never from a meaningless tap. `useSpeakerReconnectGrace`'s
+existing eviction-check scheduler now watches `inactiveSince()` too, so
+a media-inactive seat gets the same "any connected viewer can trigger
+the check" robustness a disconnected one already had.
+
+**UI**: the speaker's own prompt branches — "Tap to reconnect · Ns"
+(never activated, tappable) vs. "Resume speaking · Ns" (already
+publishing but both muted, non-interactive — the real recovery action is
+the existing mic/camera toggle buttons). The audience always sees
+"Speaker inactive · Ns," never which cause applied. Diagnostics extended
+to show both raw fields alongside the collapsed deadline.
+
+Split-layout diagnostics (fuchsia/cyan): left exactly as they were, per
+explicit instruction.
+
+See DECISIONS.md's "Unified inactive-speaker model shipped" entry for
+the full design.
+
+lint/tsc/build/full suite all pass (624/624, 52 files, +28 new tests:
+unit tests for the three `speaker-presence.ts` functions and the
+reporting hook's transition logic, extended `useSpeakerReconnectGrace`
+coverage, and 11 real-linked-database tests covering both causes'
+countdown/recovery/release/reassignment-safety end to end). Deployed a
+fresh `feature/social-stage-shell` preview.
+
+**Next task**: real-device confirmation — whether the countdown now
+reliably shows on both surfaces for a genuine disconnect and for
+explicit both-media-mute, whether "Resume speaking" reads sensibly,
+recovery via either camera or mic alone, and continued watch for the
+split-layout bug. Do not move #18 to Done until confirmed.
+
+## 2026-08-25 — Session 26: Reconnect-countdown root cause fixed; inactive-speaker timeout scoped and stopped per explicit instruction
+
+**Goal**: continue #18 from Session 25's diagnostics-first pass. The user
+reported the reconnect countdown was still missing on both surfaces on
+real devices, asked for the *actual render path* traced with real
+evidence (not re-verified math), asked to keep the split-layout
+diagnostics as-is without another speculative fix, and asked for a new,
+separate "inactive speaker" seat-timeout feature — with an explicit stop
+condition if it needed broader schema/backend changes than expected.
+
+**Reconnect countdown — a real root cause found and fixed**: traced
+`SpeakerTile`'s branch-selection logic (not just the countdown math
+again) and found a genuine divergence: `isReconnecting` was a *separate*
+derivation (`useSpeakerReconnectGrace`'s `reconnectingIdentities`,
+gated by the viewer's own `canConnect`) from the `disconnected_at` field
+the countdown itself already reads — the hook's own doc comment already
+flagged the `canConnect` gate as vestigial. Fixed by making `SpeakerTile`
+OR the two together, so the seat's own authoritative field always wins —
+"reconnect UI must take precedence over Camera off" is now true by
+construction, not by keeping two independent computations in sync by
+hand. Added a new unit test proving the fix: `disconnected_at` set,
+`isReconnecting` prop explicitly `false`, reconnecting UI still shows.
+
+**On-screen diagnostics added to both real render paths** (un-gated,
+visible on the deployed preview): raw `disconnected_at`, parsed
+timestamp, computed deadline, remaining seconds, and an active flag —
+on both the speaker's own "Tap to reconnect" prompt and every occupied
+audience tile. Deliberately reuse the *already-computed* remaining-
+seconds value from the same `useReconnectCountdown` call driving the
+visible text (an early draft used a second, independently-clocked
+`useNow()` instead — a test caught it disagreeing by a second at a
+rounding boundary, which would have made the diagnostic itself
+misleading).
+
+**Split-layout diagnostics (fuchsia/cyan)**: left exactly as they were,
+per explicit instruction — no new speculative fix attempted.
+
+**Inactive-speaker timeout — scoped, then stopped per the user's own
+explicit condition**: walked the design through before writing any code
+(per this project's standing rule). The core finding: disconnect
+detection is server-authoritative because LiveKit's *own* webhook
+reports it; mic/camera mute state has no equivalent server-observable
+signal in this app, so "muted + camera off + no activity" can only be
+client-observed and server-recorded — a genuinely new schema/backend
+surface (a new column, new service-role functions, a new server action,
+a new client activity-detection hook) comparable in size to the entire
+disconnect-grace-period feature. The user's own instruction said to stop
+and report the proposed architecture in exactly this situation, so this
+session ends with a concrete design handed back for confirmation instead
+of an unreviewed migration.
+
+lint/tsc/build/full suite all pass (584/584, 50 files, +9 new tests).
+Deployed a fresh `feature/social-stage-shell` preview.
+
+**Next task**: user confirmation on the inactive-speaker architecture
+proposal before any of it is implemented. Real-device confirmation of
+the reconnect-countdown fix (both "Tap to reconnect · Ns" and "Speaker
+reconnecting · Ns" actually showing correct numbers) and continued
+watch for the split-layout bug (screenshot the fuchsia/cyan strips if it
+reproduces). Do not move #18 to Done until confirmed.
+
+## 2026-08-24 — Session 25: Real-device retest of #18 — all three findings still reported; audience countdown shipped, split-layout bug explicitly not resolved
+
+**Goal**: pick up after the hydration-race fix and countdown work
+(previous entry) with a real-device retest. The user retested on a
+speaker phone and a separate audience/observer device and reported all
+three original findings still present: (1) the split-layout bug still
+occasionally reproduces alongside speaker-specific state; (2) the
+returning speaker's "Tap to reconnect" prompt showed no countdown; (3)
+the audience had no visibility into a disconnected speaker's remaining
+grace time. Explicit instructions: no new speculative boolean/test
+around `participantRole`; do not call the split-layout bug fixed on
+unit tests alone; add real on-screen diagnostics if needed.
+
+**Split-layout bug**: re-derived the entire render path from scratch a
+second time (`EventRoom`, `participant-role.ts`,
+`portrait-room.tsx`/`mobile-landscape-room.tsx`'s role routers,
+`portrait-speaker-view.tsx`, `speaker-stage.tsx`) rather than trust the
+previous pass's conclusion. Confirmed again that every prop in the
+chain — `isSpeaker`, `participantRole`, `mySeatNumber`, `soloMode`,
+`renderSolo` — is provably derived from the same single value in the
+same render, with no memoization anywhere that could make a stale prop
+plausible. No new mechanism found. Added two temporary, un-gated
+on-screen diagnostic strips (visible on the actual Vercel preview) to
+`EventRoom` and `SpeakerStage` showing the exact live values of every
+variable the user asked to trace, so a future reproduction can be
+screenshotted instead of guessed at again. **Not claimed fixed. Issue
+#18 stays open.**
+
+**Reconnect countdown**: ran a real verification script against the
+linked Supabase project confirming `disconnected_at` correctly reaches
+both a plain read and a live Realtime broadcast — ruling out the DB/
+Realtime pipeline as the cause of the missing speaker-side countdown.
+Implemented the audience-side countdown ("Speaker reconnecting · Ns")
+in `SpeakerTile`, reusing the exact same `useReconnectCountdown` hook
+and `disconnected_at` field the speaker's own prompt already used — one
+timer, two displays. Added `reconnect-countdown-full-path.test.tsx`,
+testing against the real linked database: a live disconnected row's
+`disconnected_at`, fetched fresh, drives matching countdown text on
+both the speaker and audience components; reopening ~5s in shows ~5s,
+not a fresh 11; reconnect and expiration both clear the countdown on
+both surfaces, with expiration additionally removing the row itself.
+
+See DECISIONS.md's "Real-device retest reproduced all three #18
+failures" entry for the full investigation detail.
+
+lint/tsc/build/full suite all pass (575/575, 50 files, +11 new tests: 7
+audience-countdown unit tests in `speaker-tile.test.tsx`, 4 real-DB
+full-path tests). Deployed a fresh `feature/social-stage-shell` preview.
+
+**Next task**: real-device confirmation only — the split-layout bug's
+diagnostic strips (screenshot both if it reproduces again), "Tap to
+reconnect · Ns" and "Speaker reconnecting · Ns" actually appearing with
+correct/matching numbers, reconnect-before-expiry, and expiry-after-11s.
+Do not move #18 to Done until confirmed.
+
+## 2026-08-24 — Session 24: Speaker View (#18) designed and Phase 1 implemented
+
+**Goal**: Pick up where Session 23 left off — Watch Mode's Phase 3 (ambient
+comments) was confirmed on a real iPhone, and the user explicitly paused
+"05 — Social Stage" Phases 4–7 to design the speaker-dominant role view
+flagged in Session 23. This session covered that whole arc: dependency
+verification, architecture assessment, layout-direction options, plan
+approval, and Phase 1 implementation.
+
+**#16/#17 verified complete and closed**: before touching #18, checked
+both blocking dependencies' actual acceptance criteria against current
+code rather than assuming "looks similar enough" — #16 (guest speaker
+participation: schema, all four guest-specific `service_role` functions,
+generalized app layer, the webhook route's fixed disconnect-cleanup
+regression, PRODUCT.md's documented exception) and #17 (unified event/
+lobby/room lifecycle: single persistent `EventRoom` tree, hooks-above-
+phase-branch, lazy LiveKit, and — checked specifically since it'd be easy
+to silently drop — the `/lobby`/`/room` redirect stubs are still real,
+not deleted) were both fully satisfied. Closed both with a verification
+comment citing the specific files/migrations checked; board cards moved
+to Done.
+
+**Architecture assessment produced, no code**: walked the design through
+before writing anything, per this project's own standing rule for
+data-model/cross-system changes. Found the "own camera small" half of
+Direction B was already built (issue #22's dominant-video corrective
+pass already suppresses a seated speaker's own big video in favor of the
+existing `SelfPreview` corner) — the only real gap is the *other*
+speaker's tile still being equal-sized instead of dominant, already
+named three separate times in ARCHITECTURE.md/DECISIONS.md as deferred
+to #18 specifically. Presented three layout directions (A: corner-swap,
+B: full-bleed remote + floating self-preview, C: asymmetric grid) with
+tradeoffs, without picking one, plus a recommended implementation
+architecture (role as a derived value off already-live `isSpeaker`/
+`hasPendingRequest`, no new hooks; role-branch inside each device
+composition, not a new top-level `EventRoom` branch; same mounted
+`SpeakerStage`/`SpeakerTile`/`SelfPreview` infrastructure, extended not
+duplicated; landscape untouched).
+
+**User chose Direction B** with six concrete decisions: keep commenting
+available to speakers; add real mic/camera toggles using the *existing*
+published LiveKit tracks (`.mute()`/`.unmute()`, never
+`setMicrophoneEnabled`/`setCameraEnabled`'s reacquire-on-enable path);
+`SpeakerControlBar` as a new purpose-built component, not another
+`RoomControls` branch; portrait only; same underlying stage/LiveKit
+infrastructure, not a duplicate room implementation; empty-other-seat
+reuses the existing placeholder, no new "waiting" system. Issue #18
+updated in place (retitled, body rewritten for Direction B, dependencies
+cleared) rather than replaced. A 4-phase implementation plan was written
+and approved, with only Phase 1 authorized to start.
+
+**Phase 1 (static full-bleed layout) implemented on `feature/speaker-view`**
+(branched from `feature/social-stage-shell`, not `main` — #21 Phases 4–7
+are still pending, so `main` isn't ready to receive either branch yet;
+checkpoint tag `prototype-pre-speaker-view-stable` cut at
+`feature/social-stage-shell`'s Phase-3-confirmed HEAD first). `SpeakerStage`
+gained one new optional prop, `soloMode` (default `false`, every existing
+caller/test unaffected) — when the viewer holds a seat, renders only the
+*other* seat's tile at full size via the exact same `renderTile()` used
+for the ordinary two-tile layout (no new tile-rendering logic, no
+divider). `PortraitRoom` gained a role router at the very top —
+`isSpeaker` delegates immediately to a new `PortraitSpeakerView`
+(minimal top chrome + full-bleed `SpeakerStage` only) before any of its
+own Watch Mode JSX runs. `SelfPreview` and the empty-other-seat
+placeholder are both reused completely unchanged — the existing
+"recreated, never reacquired" `<video>` re-attach tolerance already
+proven safe for every orientation/viewport composition swap is the same
+mechanism covering this one; `EventRoom`/`useLiveRoomConnection` are
+untouched, so the underlying LiveKit `Room`/subscriptions never move.
+
+**Known, deliberate Phase 1 gap**: per the approved phase scope (no
+`SpeakerControlBar`, no mic/camera controls yet), a seated speaker
+currently has **no in-UI way to leave the stage** — Watch Mode's
+"Leave the stage" button doesn't render in this composition at all until
+Phase 3. Closing the tab still releases the seat via the existing
+LiveKit-webhook disconnect path. Called out explicitly in the real-device
+report so this isn't mistaken for a bug.
+
+lint/tsc/build/test all pass (339/339, 38 files, +19 new tests: 6 new
+`SpeakerStage` `soloMode` cases, a new `portrait-speaker-view.test.tsx`,
+1 updated `portrait-room.test.tsx` case reflecting the role router).
+Local production smoke test confirmed the built route serves the
+homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of Phase
+1 specifically — full-bleed video for the other speaker on promotion,
+self-preview continuity through the transition, empty-other-seat
+behavior, clean return to Watch Mode on leaving the stage (via
+disconnect, since there's no in-UI button yet), and no landscape
+regression. Do not begin Phase 2 (speaker composer + ambient comments)
+until explicitly approved.
+
+**Phase 1 portrait transition confirmed correct on a real iPhone, but
+real-device testing found two regressions**, fixed on the same branch
+before Phase 2: (1) the self-preview appeared to disappear after editing
+the guest-name chip — traced (not patched around) to two real causes:
+the chip was positioned directly in `SelfPreview`'s own fixed top-right
+corner, and `GuestNameEditor`'s edit input carried a `text-sm` override
+that silently defeated `<Input>`'s own iOS-Safari-zoom-on-focus fix (the
+same bug already fixed once for the Watch Mode composer, never checked
+against this component). Fixed both directly — a new shared
+`SpeakerViewTopChrome` keeps the status pill and guest chip anchored
+left, away from the self-preview corner; `GuestNameEditor` no longer sets
+any font-size class on its edit input. (2) Rotating a seated speaker to
+landscape reverted to `MobileLandscapeRoom`'s ordinary audience
+composition (equal-split tiles, full `RoomHeader`, Comments toggle) —
+undoing the whole role hierarchy. Resolved with a new
+`MobileLandscapeSpeakerView`, mirroring `PortraitSpeakerView` exactly
+(same `soloMode`, same shared top chrome, same reused `SelfPreview`) —
+the same role-router pattern already proven for portrait, not a
+`soloMode` conditional threaded into `MobileLandscapeRoom`'s unrelated
+audience JSX. `MobileLandscapeRoom` calls `useCommentsMode()`
+unconditionally before its role check specifically because `isSpeaker`
+can flip while it stays mounted — a genuine Rules-of-Hooks constraint,
+not a style choice, with its own regression test. No new video/media
+logic in either fix — same `soloMode`/`SelfPreview`/attach-not-reacquire
+tolerance as Phase 1 itself. lint/tsc/build/test all pass (352/352, 40
+files, +26 new tests). Local production smoke test confirmed the built
+route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of this
+corrective pass specifically — self-preview surviving repeated name
+edits, landscape Speaker View's role hierarchy and reduced clutter,
+rotation both directions, and no regression to audience landscape. Do
+not begin Phase 2 until explicitly approved.
+
+**That corrective pass did not fix the actual bug** — real-device
+retesting found the self-preview still disappearing after committing a
+name edit while seated. Explicitly instructed to trace the real cause
+this time, not guess again, with a fallback (disable name editing while
+speaking) if the cause couldn't be confidently found. Traced it properly:
+`node_modules/next/dist/docs/01-app/01-getting-started/07-mutating-data.md`'s
+own "Cookies" section documents that setting a cookie inside a Server
+Action re-renders the current page's Server Components and re-runs
+effects whose dependencies changed. `setGuestName` sets a cookie;
+`EventPage` re-runs and re-calls `getLiveKitToken`, which
+(`AccessToken.toJwt()`) mints a genuinely different JWT string every
+call, even for identical grants. `useLiveRoomConnection`'s connect
+effect depended on that token's exact value — a changed string, even
+while already connected, tore the effect down: a **real**
+`room.disconnect()` (visible to the other participant too, not just a
+local artifact), `localVideoTrack` nulled, then a reconnect that
+re-published camera/mic via `setCameraEnabled`/`setMicrophoneEnabled` (a
+genuine `getUserMedia` reacquisition) — and never restored
+`localVideoTrack` through that path, permanently hiding the preview.
+Fixed by depending on the token's presence, not its value, aligning the
+implementation with this project's own already-stated principle that
+permission changes are a live push, never a reconnect. New `Room`-mocking
+tests in `use-live-room-connection.test.ts` assert a token-value-only
+change never creates a second `Room` or calls connect/disconnect again,
+while the documented null→real transition and a genuine `livekitUrl`
+change still work correctly.
+
+**Landscape site-header fix, same pass**: real-device testing separately
+found the site-wide header still consuming too much of Speaker View's
+landscape composition — the existing padding-only `room-active`
+compaction wasn't enough once there's no sidebar/chat competing for
+space. New `speaker-view-active` body class (tracks `isSpeaker`
+specifically, a separate effect in `EventRoom` since the dependency is
+real) hides the header outright under the same landscape+short-height
+media query, only while actively speaking — ordinary audience landscape
+keeps its existing treatment unchanged.
+
+lint/tsc/build/test all pass (355/355, 40 files, +3 new tests targeting
+the reconnect fix specifically). Local production smoke test confirmed
+the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation —
+self-preview surviving repeated name edits with no reconnect, landscape
+header genuinely gone/collapsed while speaking, and no regression to
+audience landscape or the LiveKit connection generally. Do not begin
+Phase 2 until explicitly approved.
+
+**The name-edit bug is confirmed fixed. A separate lifecycle bug found**:
+leaving the room via the site header's "VIRTUAL STAGE" link and
+returning left the self-preview gone, even when still landing back in
+Speaker View as a seated speaker. Instructed to trace the actual
+navigation/remount lifecycle and explicitly verify whether
+seat-persistence-across-navigation was even intended before changing
+anything, rather than assume.
+
+**Verified, not assumed**: navigating away already vacates the seat as
+designed — `EventRoom` unmounts (it lives inside the route's own tree,
+`SiteHeader` doesn't), `useLiveRoomConnection`'s cleanup calls
+`room.disconnect()`, and the existing LiveKit webhook
+(`participant_left` → `endSpeakerSeat`) vacates the DB row. This was
+already documented policy from Phase 1 itself. What looked like
+"returning to a speaker state" is that webhook's own network latency —
+a timing artifact of an already-correct mechanism, not a competing
+feature. Nothing about this lifecycle was changed.
+
+**The actual bug**: any fresh `useLiveRoomConnection` instance that
+finds itself already seated (via that timing window, or genuine
+re-promotion) needs one gesture-triggered `activateMedia()` call before
+it republishes — by design, the same Safari-gesture protection used
+everywhere else. But Speaker View Phase 1 has no UI that can ever
+trigger it: `soloMode` never renders the local tile where that
+affordance normally lives, and neither Speaker View renders
+`RoomControls`. Not cosmetic — camera/mic were never actually
+republished, so the *other* participant kept seeing "Camera off" too.
+Fixed with a new shared `SpeakerMediaActivationPrompt` (visible only
+when `needsMediaActivation` is true), calling the exact same
+`activateMedia` already wired through both views — no new acquisition
+logic, `RoomControls` deliberately not reused wholesale (would have also
+introduced "Leave the stage" as a side effect, still explicitly Phase
+3's job). lint/tsc/build/test all pass (364/364, 41 files, +11 new
+tests). Local production smoke test confirmed the built route serves the
+homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation —
+navigate away and back while still entitled to the seat, confirm the
+activate-media prompt appears and restores both the self-preview and
+actual publication (checkable from the other participant's view), and
+confirm the landscape corrections from the previous pass are still
+intact. Do not begin Phase 2 until explicitly approved.
+
+**Two more real-device issues found before Phase 1 could be approved.**
+(1) Tapping the large empty remote seat while seated could bring back
+the old split-screen composition. Traced exhaustively: `SpeakerStage`'s
+own tap-gating (`viewerIsSpeaking ? undefined : onTapEmptySeat`) is
+already correct and already tested — the empty tile is provably a
+non-interactive `<div>`, no `onClick`, whenever `soloMode` is actually
+engaged, and `joinOpenSeat` separately rejects an already-seated
+identity server-side even in the worst case, so a genuine seat swap is
+structurally impossible either way. Could not conclusively reproduce the
+exact symptom from static analysis alone — reported that honestly rather
+than claiming a root cause. Found and fixed one real, independently
+worthwhile gap instead: `handleTapEmptySeat` (`EventRoom`) had no guard
+of its own — for an already-published speaker, its unconditional
+`prepareLocalMedia()` call would **not** have been the usual no-op (that
+speaker's tracks already left `preparedTracksRef` on publish), so a
+stray invocation would have acquired a second, unpublished track and
+pointed `localVideoTrack` at it. Added an explicit `isSpeaker` early
+return at the point the mutating action actually originates, not just
+relying on a second, independently-re-derived check deep in
+`SpeakerStage`. Added the user's literal required test (repeated taps,
+still full-bleed, divider/local tile never returns) to
+`speaker-stage.test.tsx`.
+
+(2) Investigated whether `prepareLocalMedia`/`activateMedia` could be
+called automatically on mount when already entitled, to skip the tap
+prompt after a quick navigate-away-and-back. Concluded no, and explained
+why rather than guessing: camera/mic *permission* persists across
+navigation, but Safari's requirement that `getUserMedia()` run inside an
+active gesture does not — it resets per fresh
+`useLiveRoomConnection`/page-load instance, which is exactly this
+scenario, and this project already has a real-device-proven history of
+that exact silent failure mode. Not implemented — the existing
+`SpeakerMediaActivationPrompt` stays the only path, per the user's own
+anticipated fallback.
+
+lint/tsc/build/test all pass (365/365, 41 files, +1 new test). Local
+production smoke test confirmed the built route serves the homepage
+(200).
+
+**Next task**: stop for the user's own real-device confirmation —
+repeatedly tapping the empty remote seat while seated should now be a
+guaranteed no-op (both client and server layers), and the media-activation
+prompt/button remain the only (correct, gesture-safe) recovery path. Do
+not begin Phase 2 until explicitly approved.
+
+**A much more precise report followed**: claiming the top seat reliably
+works, claiming the bottom seat leaves the old split-screen composition
+in place — asked to trace this specifically as a seat-index/local-seat
+asymmetry, confirmed from the actual state/render path rather than
+assumed. This time verified empirically rather than by re-reading code:
+wrote and *ran* a throwaway probe test rendering `SpeakerStage` with the
+viewer occupying seat 2 (both remote-empty and remote-occupied) before
+concluding anything — it passed cleanly. Read `mySeatNumber`'s
+computation, `EventRoom`'s `isSpeaker`, the role router in both
+`PortraitRoom`/`MobileLandscapeRoom`, and `determineCanPublish` — all
+five relevant pieces are provably symmetric, none branch on seat number.
+
+Found one concrete, relevant fact while tracing: `findOpenSeat` (used by
+both direct-tap and automatic-promotion claim paths) always prefers the
+lowest-numbered open seat, and neither `onTapEmptySeat` nor the server
+action it calls take a seat number at all — tapping *either* tile, when
+both seats are genuinely open, assigns the *same* seat (1). A "bottom
+seat" test only actually exercises seat 2 if seat 1 was already occupied
+by something else at the time — flagged this to the user as a concrete
+question rather than a guess.
+
+Per instruction not to assume a cause, made **no speculative production
+code change** this pass — added the full required test matrix instead
+(both local-seat permutations × remote-occupied/empty × repeated taps ×
+self-preview) across `speaker-stage.test.tsx`,
+`portrait-speaker-view.test.tsx`, `mobile-landscape-speaker-view.test.tsx` —
+closing a real, pre-existing gap (every previous soloMode test only ever
+put "my" seat at seat_number 1). lint/tsc/build/test all pass (381/381,
+41 files, +16 new tests, all passing — none needed for a fix, since none
+revealed a failure).
+
+**Next task**: stop for the user's own real-device confirmation, and
+specifically to answer whether seat 1 was already occupied during the
+"bottom seat" test — that would resolve whether the two tests actually
+exercised different seat numbers at all, which the automated evidence
+here couldn't settle on its own. Do not begin Phase 2 until explicitly
+approved.
+
+**The split-screen bug didn't reproduce on retest** — the user needs a
+better way to stress-test the join/leave cycle to catch the actual
+trigger, and explicitly paused further split-screen changes. Instead:
+restored **Leave the stage**, the **composer**, and **ambient comments**
+to Speaker View (both orientations) as stress-testing infrastructure.
+New `SpeakerControlBar` (currently one pill) calls the *exact same*
+`leaveSpeakerSeat` Server Action `RoomControls` already uses — no new
+mutation path — deliberately not `RoomControls` itself (its `isSpeaker`
+branch is the padded legacy block the user explicitly said not to bring
+back). `ChatPanel` gained one new prop, `allowMicRequest` (default
+`true`, no existing caller affected) — `false` hides the 🎙 toggle
+entirely, since a seated speaker already holds the seat a request would
+be for. Both Speaker Views now wrap `WatchModeControls`/`ChatPanel`/
+`AmbientComments` in the same `StageOverlayShell`/`bottom-16 left-3`
+positioning Watch Mode already established — zero new layout logic.
+`SpeakerMediaActivationPrompt` moved from the bottom edge to vertically
+centered, so it stays clear of the new bottom row regardless of its
+rendered height. Landscape got the same additions (not portrait-only) —
+the stress-test plan explicitly includes rotating mid-test, and leaving
+landscape without a leave/composer would itself look like a new bug.
+
+Two role-router tests (`portrait-room.test.tsx`,
+`mobile-landscape-room.test.tsx`) had asserted "no composer/no leave
+button" for a seated speaker — now stale, updated to assert the real
+leave button exists while the legacy `RoomControls` block's text still
+doesn't. lint/tsc/build/test all pass (402/402, 42 files, +22 new
+tests). Local production smoke test confirmed the built route serves the
+homepage (200).
+
+**Next task**: stop for the user's own real-device stress-testing —
+repeated join (top/bottom)/leave cycles, rotating during different
+states, watching for exactly what precedes the split-screen issue if it
+reappears. No further split-screen changes until a clearer trigger is
+identified from that session. Do not begin further Speaker View scope
+until explicitly approved.
+
+**Phase 1 (everything shipped so far) approved on real-device stress
+testing** — top/bottom join both work, self-preview works, Leave the
+stage and commenting/ambient comments hold up under repeated cycles,
+landscape is acceptable with the header hidden. The split-screen issue
+did not reproduce; the user explicitly paused further investigation of
+it pending a clearer trigger, rather than more speculative changes.
+
+**Asked to "proceed to Phase 2"** — reconciled phase numbering before
+writing code, per instruction: the original 4-phase plan's Phase 2
+(composer + ambient comments) and Phase 3's leave-stage half were both
+already delivered in the prior pass, framed as stress-testing
+infrastructure rather than by their original numbers. The user's
+"Phase 2" now maps to the plan's remaining **Phase 3 content: live
+mic/camera mute toggles** — stated this mapping explicitly before
+touching code.
+
+**Implemented**: `useLiveRoomConnection` gained `microphoneMuted`/
+`cameraMuted` state and `toggleMicrophone`/`toggleCamera`, backed by
+`LocalTrack.mute()`/`.unmute()` on the already-published track — never
+`setMicrophoneEnabled`/`setCameraEnabled`, which would stop and
+reacquire the hardware track (a real `getUserMedia` call, the same class
+of risk already investigated and avoided twice this session).
+`SpeakerControlBar` (already existed with just the leave pill, whose own
+doc comment had already anticipated this exact follow-up) gained two
+toggle buttons, disabled until actually publishing
+(`canPublish && !needsMediaActivation`). Mute state resets alongside
+`localVideoTrack` on leaving, so a same-session rejoin's freshly
+acquired track never inherits a stale mute flag. New `Room`-mocking
+tests assert `.mute()`/`.unmute()` are called and `setMicrophoneEnabled`/
+`setCameraEnabled`/`createLocalTracks` are not. lint/tsc/build/test all
+pass (414/414, 42 files, +12 new tests). Local production smoke test
+confirmed the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of the
+mic/camera toggles specifically — mute/unmute actually stops/resumes
+audio and video for the other participant, no permission re-prompt, no
+reconnect, buttons correctly disabled before publishing starts. Do not
+begin the next Speaker View scope until explicitly approved.
+
+**Mic/camera toggles confirmed working on real device.** Asked to
+reconcile the original #18 plan against everything shipped across all
+the corrective passes before doing more work — delivered that
+reconciliation directly: every requirement in #18's own issue body is
+now satisfied (full-bleed remote speaker, self-preview, ambient
+comments + composer, `SpeakerControlBar` leave-stage + mic/camera,
+empty-seat reuse); landscape is done too, though as an explicit
+deviation from the issue's original "portrait only this pass" text, at
+the user's own request; no meaningful #18 work remains; React/Vote/
+Gift, Discussion Expanded, a fuller landscape redesign, and a desktop
+Speaker View were all identified as belonging elsewhere (#21 or a new
+issue), not #18. Recommended one final integrated real-device pass
+before closing.
+
+**Before that pass ran, real-device testing surfaced UI crowding/
+clipping** (a screenshot: an ambient comment rendering behind the
+speaker controls, plus top-right chip/self-preview crowding) —
+paused the sign-off to fix layout, explicitly scoped as composition
+cleanup, not another architecture change. Consolidated the mic/camera
+toggles and "Leave the stage" from two separate control regions (a
+floating row above the composer, plus the persistent bottom row) into
+one: `SpeakerMediaToggles` (the *same* toggle buttons, relocated, not
+reimplemented) now sits in `WatchModeControls`' new `micCameraSlot`,
+replacing React/Vote for a seated speaker while Gift stays; ordinary
+Watch Mode is unaffected (the slot defaults to today's React/Vote when
+absent). `SpeakerControlBar` is back to just "Leave the stage."
+`AmbientComments` gained a Speaker-View-specific `bottom-32` clearance
+(up from a `bottom-16` it had wrongly inherited from Watch Mode's own,
+shorter control stack) and the bottom overlay gained safe-area-aware
+padding for the home-indicator region. `SpeakerViewTopChrome` now
+reserves `SelfPreview`'s actual responsive footprint (`pr-20 sm:pr-24`,
+mirroring `MobileLandscapeRoom`'s own already-proven pattern for the
+exact same problem) with `min-w-0 flex-1` so the status pill genuinely
+shrinks instead of overflowing into it, rather than relying on
+left-anchoring alone (the earlier fix, which reduced but didn't
+structurally prevent the collision). lint/tsc/build/test all pass
+(431/431, 43 files, +17 new tests covering the row composition and the
+specific CSS classes each fix depends on). Local production smoke test
+confirmed the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device approval of this
+cleanup pass specifically — Comment/Mic/Camera/Gift row, Leave Stage
+with no collisions, ambient-comment clearance, top-right clearance,
+keyboard behavior, toggling, leave/rejoin. #18 is not merged or closed
+yet — that's still gated on this approval plus the originally-planned
+integrated sign-off pass.
+
+**The UI cleanup approved. One more integration issue surfaced during
+that same sign-off pass, this time about #21, not #18**: rotating to
+landscape as an *audience* member (not speaking) still fell back to the
+legacy pre-05 interface — `RoomHeader`'s full status bar, the centered
+"💬 Comments" toggle, `RoomChatPanel` — since portrait Watch Mode moved
+past that model days earlier and nobody had come back to update
+`MobileLandscapeRoom`'s audience branch. Explicitly scoped as a minimal
+adaptation of the already-approved "05" shell, not a new design system,
+and not a stretched-sideways portrait clone.
+
+Rebuilt `MobileLandscapeRoom`'s audience/candidate branch to reuse the
+*exact* components portrait Watch Mode and Speaker View already use —
+`SpeakerViewTopChrome`, `AmbientComments`, `WatchModeControls` wrapping
+the compact `ChatPanel`, `StageOverlayShell` — with the only genuine
+orientation-specific difference being `SpeakerStage`'s own
+`orientation="landscape"` (side-by-side tiles, two-speaker audience
+viewing untouched). Reusing `SpeakerViewTopChrome` here (despite its
+name) also closes the same self-preview-collision risk for a landscape
+*candidate*'s prepared media that portrait's own inline top chrome still
+has — deliberately left unfixed there this pass, since the user's own
+verification plan required audience portrait to look unchanged.
+`useCommentsMode` (and its test) deleted outright once this rebuild
+removed its last import — confirmed `RoomChatPanel` stays alive via
+`DesktopRoom`, so that component wasn't touched. With `useCommentsMode`
+gone, this file no longer owns any hooks of its own, so the role router
+can sit at the very top exactly like `PortraitRoom`'s, no "hooks above
+the branch" ordering concern left to satisfy.
+
+React/Vote/Gift stay exactly as inert as before; no Discussion Expanded,
+reactions, voting, or gifting behavior added; `MobileLandscapeSpeakerView`
+(working Speaker Landscape) untouched. lint/tsc/build/test all pass
+(432/432, 42 files — one file fewer, `use-comments-mode.test.ts` deleted
+along with the hook). Local production smoke test confirmed the built
+route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation —
+audience portrait unchanged, audience landscape now Social-Stage-styled
+(not legacy), commenting and ambient comments both working in landscape,
+rotating back to portrait intact, Speaker View (both orientations) still
+working exactly as before. Neither #18 nor #21 merged or closed yet.
+
+**Landscape rebuild confirmed much closer — one narrow follow-up**: the
+site-wide header still consumed real height in audience landscape,
+crowding the stage; Speaker Landscape already hid it outright but
+audience never got that treatment. Broadened the existing header-hiding
+mechanism instead of duplicating it: `EventRoom`'s body-class toggle,
+previously gated on `isSpeaker` alone (`speaker-view-active`), now
+triggers on `phase !== "upcoming" && !isDesktopViewport && orientation
+=== "landscape"` — true exactly when `MobileLandscapeRoom` (either
+branch) is the composition about to render, regardless of role. Renamed
+to `mobile-landscape-live-active` to match its now-broader meaning; one
+class, one CSS rule, not two near-duplicates. Portrait (either role),
+desktop, and landscape outside the live room are all structurally
+unaffected — the condition can only be true for the live room's mobile
+landscape composition specifically. lint/tsc/build/test all pass
+(432/432, 42 files — no test file changes, since `EventRoom` still has
+no dedicated test file, same pre-existing limitation noted when this
+class was first added). Local production smoke test confirmed the built
+route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation — the
+site header should now be fully gone in audience landscape (not just
+shrunk), while the compact status pill, guest chip, two-speaker stage,
+ambient comments, and composer/React/Vote/Gift row all stay visible;
+audience portrait, landscape outside the room, and Speaker Landscape all
+unchanged. Neither #18 nor #21 merged or closed yet.
+
+**Header removal confirmed — one more small layout note**: the compact
+composer stretched across most of the control row in landscape, pushing
+React/Vote/Gift toward the far right instead of sitting immediately
+after it. Root cause: the composer has no explicit width of its own in
+`WatchModeControls`' row, so it grows to fill whatever the fixed-size
+emblems don't claim — fine in portrait's narrow viewport, visibly
+unbalanced in landscape's wide one. Fixed with a single Tailwind
+`landscape:max-w-[40%]` on `ChatPanel`'s own compact-mode form —
+confirmed safe to use bare (no desktop-exclusion clause needed, unlike
+the app's own hand-written media queries elsewhere) since `compact`
+mode structurally never renders outside the four mobile room
+compositions. One change fixes both Watch Mode and Speaker View in
+landscape at once, since both share this exact component; portrait is
+provably unaffected. Still `flex-1`/`min-w-0` underneath — a cap, not a
+fixed size. lint/tsc/build/test all pass (435/435, 42 files, +3 new
+tests). Local production smoke test confirmed the built route serves
+the homepage (200).
+
+**Next task**: stop for the user's own real-device confirmation of the
+composer width specifically — comfortably shows "Add a comment…" at
+roughly 35–45% of the row, React/Vote/Gift (or Mic/Camera/Gift) sit
+immediately after, portrait unchanged, no clipping at narrow landscape
+widths. Neither #18 nor #21 merged or closed yet.
+
+**Composer width confirmed — #18 sign-off/merge**: user approved commit
+`9348972` as the final Speaker View state and asked for the #18
+integration/sign-off merge: `feature/speaker-view` fast-forwarded into
+`feature/social-stage-shell` (`a65c7f9..9348972`, 12 commits, zero
+conflicts — confirmed `feature/social-stage-shell` hadn't moved since
+the branch point before merging). lint/tsc/full suite/build all pass
+unchanged (435/435, 42 files — a clean fast-forward changes nothing
+already-tested). Local production smoke test confirmed. Pushed, deployed
+a fresh preview from the merged branch, verified the deployment's `sha`
+matched the merged HEAD exactly before handing over the link. #18 left
+open, not moved to Done, per explicit instruction — the user wanted to
+run their own integrated real-device test before sign-off.
+
+**Real-device stress test surfaced an intermittent role/UI consistency
+bug — treated as an architecture problem, not a boolean patch**: during
+that pass, becoming a speaker sometimes activated Speaker View's
+full-bleed composition while the bottom control row stayed on the
+Audience set (React/Vote/Gift instead of Mic/Camera/Gift) — not reliably
+reproducible. Per explicit instruction, investigated the actual
+state/timing path before touching anything, rather than assuming a
+cause. Traced every "am I a speaker" computation in the room tree:
+`EventRoom`'s `isSpeaker` already drove both the composition choice and
+(via which file renders) the control row within one render — provably
+coupled, no divergence constructible there. But `SpeakerStage` itself
+independently re-derived the same fact from raw `speakers`/`myIdentity`,
+a real duplicate-derivation already flagged as a latent risk once before
+(in `handleTapEmptySeat`'s own guard comment, for a different bug).
+Reported this honestly: no concrete timing race could be proven against
+the pre-fix code, but the duplication was a genuine violation of "one
+authoritative role source" regardless.
+
+Consolidated to a single computation: new `lib/participant-role.ts`
+(`findMySeatNumber`, `deriveParticipantRole`) computes
+`mySeatNumber`/`isSpeaker`/`participantRole` once in `EventRoom`; every
+other consumer (`SpeakerStage`, the role routers) now receives these as
+plain props instead of re-deriving them. `SpeakerStage`'s own internal
+`viewerIsSpeaking`/`mySeatNumber` derivation is gone. Role routers key
+off `participantRole === "speaker"`. Added a dev-only `console.error` in
+`SpeakerStage` if `soloMode`/`isSpeaker` ever disagree (the one
+remaining prop-level contract, kept as intentional defensive
+redundancy, not independent derivation). Added `useRoleTransitionReset`
+(new hook) so candidate-only local state (`hasPendingRequest`/
+`micRequestMode`/`joinSeatMessage`) can't outlive the candidate role
+regardless of which promotion path granted the seat. New
+`role-consistency.test.tsx` adds the explicitly requested
+transition-level coverage: promotion, leaving, repeated join/leave
+cycles, promotion with stale composer state, and an approximated
+"rotation" check (both orientation compositions compared against the
+same speaker props) — documented honestly as not exercising a real
+continuous device rotation or `EventRoom`'s own Realtime timing, since
+`EventRoom` still has no dedicated test file. lint/tsc/full suite/build
+all pass (469/469, 45 files — +34 tests, +3 files: `participant-role.
+test.ts`, `use-role-transition-reset.test.ts`, `role-consistency.
+test.tsx`). Local production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview from the merged
+`feature/social-stage-shell` and stop for the user's own real-device
+stress test, specifically trying to reproduce the original intermittent
+report. This fix removes a genuine architectural redundancy and adds a
+loud dev-mode signal for the one remaining prop-level contract, but does
+**not** itself confirm the original report is resolved — that's
+real-device-only, same as every other tier-3 claim this project makes.
+#18 still not moved to Done.
+
+**Role-consistency stress test passed — one UX finding before #18
+close**: the countdown/status bar, ambient comments, composer, and
+Audience controls could all be visible simultaneously during promotion,
+making becoming a speaker read as just another notification instead of
+a significant transition. Redesigned as a center-stage takeover: new
+`CountdownOverlay` (large centered number, "Going live"/get-ready
+copy, visually secondary Cancel, subtle per-tick pop animation via a new
+`countdown-number-pop` keyframe) renders in place of the ordinary bottom
+composer/controls/ambient comments in `PortraitRoom`/
+`MobileLandscapeRoom` for exactly as long as `promotionCountdown !==
+null` — explicitly a presentation change to `useAutomaticPromotion`'s
+existing countdown state, not a new promotion system: no new timer, no
+new state machine, `onCancelPromotion` unchanged. `SpeakerStage`'s
+existing issue #21 scrim dims the stage behind it; top chrome stays
+visible so it still reads as the same room. The existing role-router
+structure (previous entry) already guarantees this can't coexist with
+Speaker View — `promotionCountdown` is only ever non-null while
+`!isSpeaker`, and the moment it flips the whole composition swaps to a
+different file tree that never renders this component — so no new
+invariant was needed to prevent overlap, just the presentation swap
+itself. One shared component for both orientations, no landscape-
+specific variant or legacy UI. New coverage: `countdown-overlay.test.tsx`
+(the component in isolation), new describe blocks in `portrait-room.
+test.tsx`/`mobile-landscape-room.test.tsx` (overlay replaces the bottom
+row/ambient comments, scrim applies, top chrome persists, Cancel wired),
+and countdown→speaker/countdown→cancel transition tests folded into
+`role-consistency.test.tsx`'s existing invariant checks. lint/tsc/full
+suite/build all pass (496/496, 46 files — +27 tests, +1 file). Local
+production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device verification — countdown dominance, dimming,
+animation restraint, and the landscape stage-area treatment are all
+real-device-only judgments automated coverage can't make. #18 still not
+moved to Done.
+
+**Three issues found in that pass — a corrective fix, not new scope**:
+(1) a brief flash of the old candidate UI right before the countdown
+appeared; (2) Cancel during the countdown didn't reliably stay canceled;
+(3) Speaker View's self-preview intermittently missing. Traced (1)/(2)
+to a genuine confirmed mechanism: `useAutomaticPromotion`'s claim-success
+handler used to reset `hasPendingRequest`/`countdown` itself, racing the
+*independent* Realtime push that flips `isSpeaker` true — when the reset
+won, the composition fell back to candidate UI for a frame before
+`isSpeaker` caught up; and cancelling reset `countdown` while
+`hasPendingRequest` was still momentarily true, which could re-arm the
+polling effect and silently restart a canceled promotion before the
+server-side withdrawal landed. Fixed by making `isSpeaker` the single
+signal that ends this state (the countdown now reuses the existing
+`useRoleTransitionReset` hook itself, resetting `countdown` on the same
+transition `EventRoom` already resets `hasPendingRequest`/
+`micRequestMode`/`joinSeatMessage` on — not a second mechanism) and
+adding an `isCancelling` guard that suppresses re-polling for exactly the
+window a cancellation is in flight. For (3), investigated each suspected
+path (SelfPreview's own attach logic, the prepared-tracks publish
+branch, the gesture-safety permission-sync guard) and found no proven
+code-level gap, but a plausible unmodeled ordering among several
+independent async completions — reported honestly rather than claiming
+a confirmed cause. Added a defensive reconciliation effect in
+`useLiveRoomConnection` (`shouldReconcileLocalVideoTrack`, pure and
+fully unit-tested): if a live, unmuted camera publication already exists
+but `localVideoTrack` state is null, adopts the existing track directly
+— never re-acquires media, never reconnects, isn't a poll, keyed on the
+existing LiveKit-level `canPublish` signal rather than a new role flag.
+Logs a dev-only `console.error` whenever it actually fires. lint/tsc/full
+suite/build all pass (513/513, 46 files — +17 tests; suite re-run twice
+to check for fake-timer flakiness in the new cancel-race regression
+test, stable both times). Local production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own narrow real-device re-check — no flash, Cancel stays
+canceled even after waiting, and self-preview consistently appears
+across repeated promotions/camera toggles/rotation/leave-rejoin. #18
+still not moved to Done.
+
+**A real-device screenshot during that check showed one more issue**:
+the compact "Request sent · Cancel" pill overlapping the composer and
+ambient request comment once the bottom row got crowded — visibly
+broken, not just redundant. Removed the pill entirely from
+`PortraitRoom`/`MobileLandscapeRoom`; `ChatPanel`'s own 🎙 mic button now
+carries a third, distinct pending state (a lighter pulsing accent,
+alongside its existing idle/actively-composing states) and cancels the
+request when tapped again in that state — wired to the same existing
+`onCancelPromotion` action the removed bar's own Cancel button already
+called, no new server-side capability needed. The existing badged
+ambient "requesting the mic" chat message is preserved unchanged and is
+already the social feedback that a request went through. lint/tsc/full
+suite/build all pass (521/521, 46 files — +8 tests). Local production
+smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device re-check of this specific change — no overlap,
+the pending mic-button state reads as clearly distinct from idle, and
+tapping it while pending actually cancels the request. #18 still not
+moved to Done.
+
+**Two final changes before #18 sign-off**: (1) Speaker View's "Tap to
+enable camera & mic" reworded to "Tap to reconnect" — confirmed (not
+assumed) that this state only ever represents an already-seated
+speaker's tab coming back fresh, never a genuine first-time activation,
+since a real first promotion always runs `prepareLocalMedia` ahead of
+time. Copy-only change. (2) The speaker disconnect "grace period" was
+found to be entirely a client-side illusion: the LiveKit webhook called
+`end_speaker_seat` the instant `participant_left` fired, no grace at
+all server-side — a client-side hook only showed a cosmetic
+"reconnecting" state on top of an already-vacated seat. Made it
+genuinely server-authoritative: new migration `00000000000016` adds
+`event_speakers.disconnected_at` plus three `service_role`-only
+functions (`mark_speaker_disconnected`/`mark_speaker_reconnected`/
+`release_expired_disconnected_speaker`), applied to the real linked
+Supabase project via `supabase db push --linked` and regenerated types,
+per the project's own established migration workflow. The webhook now
+starts the clock on `participant_left` and clears it on a new
+`participant_joined` handler instead of evicting immediately;
+`checkAndEvictDisconnectedSpeaker` (room/actions.ts) now enforces the
+real 11-second boundary via a single atomic `UPDATE ... WHERE` (race
+safety is the WHERE clause itself, not a separate check-then-write) —
+the old LiveKit `RoomServiceClient.getParticipant` live-check is gone
+entirely. `useSpeakerReconnectGrace` redesigned to derive "who's
+reconnecting" as a pure function of `disconnected_at` (already flowing
+through the existing Realtime subscription) instead of comparing
+against LiveKit's own live participant list — one fewer racy signal.
+New `event-speakers-disconnect-grace.test.ts` verifies every requested
+race scenario against the **real, live, linked database** (not mocks):
+reconnect at ~10s retains the seat, no-return releases at 11s, a stale
+release trigger arriving after a successful reconnect is a no-op, and a
+late reconnect after the seat was reclaimed by someone else never
+touches the new occupant. The webhook's own real-DB test file
+(`route.test.ts`) extended to cover both event types; the hook's own
+tests (mocked) cover the client-side scheduling/derivation separately.
+lint/tsc/full suite/build all pass (540/540, 47 files — +2 files,
++19 tests). Local production smoke test confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device verification — the reconnect copy, and
+specifically a real disconnect/reconnect cycle (both inside and outside
+the 11-second window) on an actual device, are the two things automated
+coverage genuinely cannot confirm by itself. #18 still not moved to
+Done.
+
+**Two more issues before sign-off**: (1) an intermittent report of
+Speaker View failing to activate on first/fresh load, most reproducible
+right after a fresh deployment — investigated the full first-load
+lifecycle as instructed rather than guessing. Server-side data and
+`participantRole`'s own derivation were both ruled out with evidence
+(checked this exact Next.js version's own bundled docs for the caching
+model, rather than assuming from training data, since Cache Components
+is off here). Found the real cause: `useOrientation`/
+`useIsDesktopViewport` guess a mobile default for the client's first
+hydration render (correct, to avoid a mismatch), and a genuine desktop
+browser's post-hydration correction was switching `EventRoom` to
+`DesktopRoom` — which has no role router at all, an already-approved
+scope boundary (no Speaker View on desktop) — after briefly showing
+Speaker View via a mobile composition first. New
+`useHasMountedOnClient()` (the same `useSyncExternalStore` idiom the
+other viewport hooks already use, not a new role flag) gates
+`EventRoom`'s composition choice entirely: a brief neutral
+"Reconnecting to stage…" state (only worded that way when already known
+to be a speaker) shows until the client has genuinely settled, so a
+wrong composition is never even briefly committed to. Dev-only
+`console.debug` logging added around the composition-selection inputs.
+New `event-room.test.tsx` (first dedicated test file for this
+component) drives every hydration-order scenario requested directly.
+
+(2) The reconnect prompt needed to show real remaining time, not just
+"Tap to reconnect." `EventRoom` now threads the viewer's own active-seat
+`disconnected_at` down; new `useReconnectCountdown`/
+`remainingGraceSeconds` derive the display purely from that
+authoritative deadline plus the existing 11-second grace period —
+ticking is a `setInterval`, never a fresh client-invented timer. A
+reopened tab partway through an existing window shows the correct
+remainder immediately; reconnecting clears the countdown at once; the
+whole prompt (and any countdown) disappears the moment Speaker View
+itself unmounts, via the existing role-consistency guarantee — no new
+mechanism needed for that part. lint/tsc/full suite/build all pass
+(565/565, 49 files — +3 files, +25 tests; suite re-run twice for
+fake-timer flakiness, stable both times). Local production smoke test
+confirmed.
+
+**Next task**: deploy a fresh integrated preview and stop for the
+user's own real-device verification — specifically a first load
+immediately after opening the preview while already a speaker, repeated
+refresh/reopen while seated, and a real disconnect/reconnect cycle
+watching the countdown. #18 still not moved to Done.
+
+---
+
+## 2026-08-23 — Session 23: Figma "05 — Social Stage" exploration finalized; real-device implementation begins (Phase 1)
+
+**Goal**: Continuation of Session 22's Figma-only design-exploration work
+(00 → 05e across the `Virtual Stage — UI Exploration` file). This session
+finished that exploration, got it approved, then began translating it
+into real code.
+
+**Figma work completed this session** (all in the existing exploration
+file, no Virtual Stage code touched until the implementation phase
+below): installed the official Figma MCP plugin and, separately, the
+official Playwright MCP server (needed for external-URL capture — the
+Figma capture tool only supports localhost via script injection or
+external URLs via Playwright, and editing source code to inject a
+capture script was explicitly off-limits); captured the real deployed
+production Watch Mode into Figma as the `00` baseline; built `01`
+(Minimal Video-First), `02` (Social Video), `03` (Immersive Stage) and a
+`03b` Discussion-Mode sketch; iterated based on user feedback into a
+`04` "Social Stage" family (04/04a/04b/04c) merging the strongest ideas
+from `02`/`03`/`03b`; then a final `05` family
+(05/05a/05b/05c/05d/05e) incorporating: always-accessible quick
+commenting (no mode gate), ambient ampule comments left / reactions
+right, a persistent glass-style bottom row (composer · React · Vote ·
+Gift), targeted double-tap reactions, and Gift as the fourth
+participation action replacing a since-removed standalone Comments
+emblem. Hit and recovered from a Figma Starter-plan rate limit
+(20 calls/month) mid-session — user upgraded to a Pro/Dev seat
+(200/day) to unblock. Caught and fixed several construction-only bugs
+along the way (ambiguous `findOne` matches tinting the wrong node,
+default-white auto-layout fills, an errant `resize()` locking a
+callout to 1px) — all caught via screenshot review before being
+reported as done, never left in the file.
+
+**Real-device implementation approved and begun**: full architectural
+survey before any code changed (see DECISIONS.md's 2026-08-23 entry for
+the complete findings) — confirmed reactions today are durable/
+per-message with no ambient concept, voting is entirely unbuilt (#25
+territory), the composer's request-to-speak/send logic must be reused
+not duplicated, `useLiveRoomConnection` already sits correctly above
+all composition branching, and the "ephemeral broadcast, no row per
+event" principle documented in ARCHITECTURE.md has zero existing
+implementations. Produced a 7-phase implementation plan (static shell →
+composer → ambient comments → Discussion Expanded → emoji broadcast →
+double-tap targeting → Vote/Gift shells), approved with clarifications:
+Discussion Expanded is an explicit, scoped exception to "Watch Mode
+never resizes video" (governing invariant there is stable media
+identity, not immutable geometry); Vote/Gift stay local-UI prototype
+shells with zero backend; the emoji quick-set stays replaceable data,
+not the final reaction architecture; ambient reactions need rate
+protection when built. Checkpoint tagged
+(`prototype-pre-05-implementation-stable` at `5c36d8b`, identical
+content to `prototype-pre-figma-stable` — tagged again because it marks
+a different milestone). Issue #21 retitled/re-scoped (kept, not
+replaced — same underlying problem, mechanism changed twice) to own
+Phases 1–4; Phases 5–6 and 7 proposed as two new issues to be created
+only once those phases actually start, per explicit instruction not to
+create speculative board churn.
+
+**Phase 1 (static shell) implemented on `feature/social-stage-shell`**:
+`PortraitRoom` rebuilt — video-first, minimal top chrome replacing
+`RoomHeader` for this composition, lightweight top-anchored speaker
+identity (portrait-only; landscape's own header-overlay would collide
+with it, left unchanged), and the new persistent
+composer/React/Vote/Gift control row (`WatchModeControls`, new), all
+functionally inert (`disabled`) in this phase. `StageOverlayShell`
+gained an opt-in `gradient={false}` and `GuestNameEditor` gained an
+opt-in `variant="chip"` — both additive, no existing caller's
+appearance changes. The old Comments Mode toggle/panel is removed from
+`PortraitRoom` entirely (not run in parallel) — commenting/reading are
+temporarily unavailable on this branch until Phases 2/4 restore them.
+lint/tsc/build/test all pass (293/293, 35 files). Structural local
+production smoke test confirmed `watch-composer`/`watch-status-pill`
+present, `comments-toggle` gone, from the actual server-rendered route.
+
+**Next task**: stop for the user's own real-device confirmation of
+Phase 1's static layout on mobile portrait specifically — no chat/react/
+vote/gift functionality to test yet, only that the video-first
+hierarchy, top chrome, and inert control row look and feel right, and
+that nothing existing (tap-to-join, camera/mic activation, leave-stage/
+promotion-countdown, guest name editing) regressed. Do not begin Phase 2
+until explicitly approved.
+
+**Phase 1 confirmed on a real iPhone** — video-first direction, minimal
+chrome, and the inert bottom controls all landed as intended; camera/mic
+activation and being on stage both still work.
+
+**Phase 2 (functional composer) implemented, same branch**: gave
+`ChatPanel` an opt-in `compact` prop rather than a second component —
+same `sendMessage`/`submitSpeakerRequest` actions, same
+`micRequestMode` contract, same synchronous `onPrepareMedia()` submit
+order, only the surrounding chrome differs (no message list, no
+quick-emoji row, glass-pill styling). `WatchModeControls` gained a
+`composer` slot; `PortraitRoom` wires the compact `ChatPanel` into it
+using the same `RoomLayoutProps` fields `RoomChatPanel` already used
+elsewhere. Mic-on state tints the pill/mic-icon accent-colored, no size
+change. React/Vote/Gift remain `disabled`; no ambient comments,
+Discussion Expanded, reactions, or voting/gifting yet — still out of
+scope. lint/tsc/build/test all pass (305/305, 35 files). Local
+production smoke test confirmed the real composer/mic-toggle markup
+renders from the actual built route.
+
+**Speaker View flagged as the next checkpoint, not started**: the
+user's real-device Phase 1 test surfaced that a seated speaker's UI
+still looks like the audience Watch interface, which isn't the intended
+final behavior — scoped to existing issue #18, to be designed *after*
+Phase 2 is confirmed and *before* Phases 3–7, since ambient comments/
+Discussion Expanded/reactions/voting/gifting may need different
+placement depending on audience-vs-speaker role.
+
+**Next task**: stop for the user's own real-device confirmation of
+Phase 2 specifically — ordinary comment sending, keyboard open/close
+behavior, Request-to-Speak toggle/submission, that plain commenting
+never triggers a camera/mic prompt, existing seat/stage behavior,
+portrait → landscape → portrait, and returning to Watch after keyboard
+dismissal. Do not begin Phase 3 or the Speaker View design/
+implementation until explicitly approved.
+
+**Phase 2 real-device testing found four issues, all fixed on the same
+branch** (no Phase 3 work started): (1) the mic-on placeholder truncated
+on the user's iPhone — shortened to "What's your topic?", compact mode
+only. (2) A stale "still pending" UI with a non-functional Withdraw
+persisted after leaving the stage — traced to its actual root, not
+hidden cosmetically: `claimOpenSeat` succeeding never told the client
+`hasPendingRequest` was stale (fixed in `useAutomaticPromotion`), and
+`withdrawSpeakerRequest`'s underlying RPC raises an exception ("no
+pending request found") when there's nothing pending to withdraw, which
+used to surface as a silent-looking failure that never cleared the flag
+(fixed in the repository layer, treating that specific exception as
+`null`/success rather than an error). (3) The pending-request UI was
+too visually heavy for Watch Mode — `RoomControls` gained a `compact`
+mode for its two `hasPendingRequest` states specifically (not
+`isSpeaker`), rendering a single-line "🎙 Request sent · Cancel" pill
+instead. (4) The Gift emblem could clip on narrow phones — a broken
+flexbox `min-width` shrink chain (the composer, the only element meant
+to shrink, was missing `min-w-0` at two nested levels), not a genuine
+width shortage; fixed by completing the `min-w-0` chain down to the
+input. Deliberately not built: any comment-sent confirmation UI — the
+user was explicit that Phase 3's ambient-comment feed is the intended
+feedback mechanism, not a temporary duplicate.
+
+lint/tsc/build/test all pass (315/315, 36 files, +10 new tests
+targeting these fixes specifically). Local production smoke test
+confirmed the `min-w-0` classes and new placeholder text render from
+the actual built route.
+
+**Next task**: stop for the user's own real-device retest of these four
+fixes specifically. Do not begin Phase 3 or the Speaker View design
+until explicitly approved.
+
+**Real-device retest found a fifth issue**: focusing the compact
+composer triggered iOS Safari's auto-zoom-on-focus, panning the page.
+Investigated before touching anything, per explicit instruction not to
+assume the cause: confirmed (not guessed) that this project has no
+`tailwind.config`/`fontSize` overrides, so Tailwind's stock scale
+genuinely applies — the compact `<input>` was `text-sm` (14px, under
+Safari's 16px threshold). Checked for a compounding cause too: no
+`transform`/`scale`/`zoom` anywhere in the room component tree, no
+`scrollIntoView`/`visualViewport` code anywhere in the codebase — the
+pan is Safari's own zoom mechanism, not a second bug. The shared
+`<Input>` component already documents this exact fix
+(`text-base`, not `text-sm`); the compact composer's raw `<input>`
+(needed for the glass-pill layout `<Input>`'s fixed styling doesn't
+support) had simply drifted from that convention. Fixed with one class
+change, same input for both mic-off/mic-on. No `maximum-scale`/
+`user-scalable` added — explicitly forbidden, and unnecessary once the
+actual cause is fixed. Added a regression test pinning the rendered
+class, explicitly caveated as not proving real Safari behavior.
+lint/tsc/build/test all pass (317/317, 36 files).
+
+**Next task**: stop for the user's own real-device retest of this fix
+specifically, plus a quick pass confirming the four Phase 2 fixes are
+still intact. Do not begin Phase 3 or the Speaker View design until
+explicitly approved.
+
+**Phase 2 confirmed on a real iPhone**: the zoom fix holds, keyboard
+behavior is acceptable, Request-to-Speak works, and the stale
+pending-request bug stays fixed.
+
+**Phase 3 (ambient live comments) implemented, same branch**: new
+`AmbientComments` component renders the last few live comments as a
+small, self-expiring stack of translucent bubbles in Watch Mode's
+lower-left, reusing the *same* `messages`/`useLobbyRealtime` stream
+every other room composition already reads — no second comment
+backend, no duplicated message state (see DECISIONS.md for the full
+ambient-vs-data-lifecycle reasoning). Seeded from the last 3 messages
+already present at mount; each message gets one ~7s fade-in/hold/fade-
+out lifecycle the first time it's seen (`ambient-comment-fade` keyframe
+in `globals.css`), tracked independently of the data's own permanence;
+a burst evicts the oldest bubble immediately rather than growing past
+3. Request-to-Speak comments reuse the existing 🎙 badge treatment.
+Each bubble carries `data-message-id` — a deliberate seam for a later
+Discussion Expanded tap handler, not implemented yet (no `onClick`).
+Wired into `PortraitRoom` as an absolutely-positioned overlay
+(`bottom-16 left-3`, click-through outside the bubbles, same pattern as
+the existing top chrome), clear of the composer row and the speaker
+identity treatment, reserving no layout space. lint/tsc/build/test all
+pass (328/328, 37 files, +14 new tests). Local production smoke test
+confirmed the built route serves the homepage (200).
+
+**Next task**: stop for the user's own real-device review of Phase 3
+specifically — another device's comment appearing ambiently; the
+user's own comment appearing as quick confirmation; several comments in
+succession staying readable with natural fade/expire; comments never
+covering the composer or speaker identity; no video resize/reflow;
+keyboard/sending and Request-to-Speak still working; portrait →
+landscape → portrait regression check. Per explicit instruction, do
+**not** auto-continue to Discussion Expanded after approval — the next
+step is pausing to design/plan the Speaker View (issue #18) before any
+further social-system phases.
+
+---
+
 ## 2026-08-20 — Session 22: Video-first room redesign finalized; issues #19–#25 created
 
 **Goal**: Continuation of Session 21's participation-friction design work,
