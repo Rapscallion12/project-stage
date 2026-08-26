@@ -7,6 +7,26 @@ separate release cadence to track here.
 
 ## [Unreleased]
 
+### Added
+
+- **Self-healing seat-role reconciliation** — the split-layout bug
+  reproduced again after the previous round's fix, with a decisive new
+  clue: a second manual "Join" tap immediately fixed it, proving the
+  reconciliation mechanism (`useActiveSpeakers.refetch()`) already
+  worked — nothing automatic ever triggered it. `mySeatNumber` remains
+  the one canonical value everything else derives from; nothing new was
+  added to that chain. What's new is reliability of its data source: a
+  successful seat claim (both the direct-join and automatic-promotion
+  paths) now triggers an immediate refetch instead of relying solely on
+  a Realtime delta arriving; a new `useSeatReconciliation` watchdog
+  refetches automatically the moment `canPublish` (LiveKit-confirmed
+  speaker rights) contradicts the client's own `isSpeaker` — covering
+  publish-permission changes and local media publication in one signal,
+  since publishing is always gated on `canPublish` first; and returning
+  to a backgrounded tab (`visibilitychange`/`focus`) triggers a resync
+  too, since that's exactly where a Realtime socket can silently drop
+  without the app ever being told. See DECISIONS.md.
+
 ### Fixed
 
 - **"You're already speaking" while the UI showed audience, seat: none**
@@ -116,15 +136,18 @@ separate release cadence to track here.
   **Superseded by the unified inactive-speaker model above**, which
   generalizes the same fix to `inactiveSince()`. See DECISIONS.md.
 
-- **Speaker View "split-layout" report — confirmed fixed on real-device
-  retest (2026-08-27).** The instance diagnostics from an earlier round
-  ruled out a double-mounted `SpeakerStage` outright — the same
-  on-device capture that ruled it out also showed "You're already
-  speaking" and a live self-preview, proving this was never a rendering
-  bug: `EventRoom`'s own `participantRole`/`mySeatNumber` had genuinely
-  diverged from the server's authoritative answer (see the
-  `useActiveSpeakers` resync fix above). **Issue #18 closed** — no
-  further complaints or reproductions on the retest. See DECISIONS.md.
+- **Speaker View "split-layout" report — reproduced again after being
+  confirmed clean (2026-08-27), reopened.** The instance diagnostics
+  from an earlier round ruled out a double-mounted `SpeakerStage`
+  outright — the same on-device capture that ruled it out also showed
+  "You're already speaking" and a live self-preview, proving this was
+  never a rendering bug: `EventRoom`'s own `participantRole`/
+  `mySeatNumber` had genuinely diverged from the server's authoritative
+  answer (see the `useActiveSpeakers` resync fix above). A follow-up
+  real-device retest found the *reconciliation mechanism itself* already
+  correct — a second manual "Join" tap immediately fixed it — but
+  nothing automatic ever triggered it. See "Self-healing seat-role
+  reconciliation" above for the fix. See DECISIONS.md.
 
 ### Removed
 

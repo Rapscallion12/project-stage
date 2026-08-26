@@ -24,6 +24,7 @@ const baseParams = {
   needsMediaActivation: false,
   mediaError: null,
   onHasPendingRequestChange: vi.fn(),
+  onClaimSucceeded: vi.fn(),
 };
 
 describe("useAutomaticPromotion", () => {
@@ -122,6 +123,52 @@ describe("useAutomaticPromotion", () => {
       // The authoritative signal: isSpeaker actually flips true (Realtime).
       rerender({ ...baseParams, isSpeaker: true });
       expect(result.current.countdown).toBeNull();
+    });
+
+    it("issue #18 real-device finding (2026-08-28): a successful claim calls onClaimSucceeded immediately, not waiting solely on a Realtime isSpeaker flip that could be missed — this is what lets the client resync without a second Join tap", async () => {
+      checkPromotionEligibility.mockResolvedValue({ eligible: true });
+      claimOpenSeat.mockResolvedValue({ ok: true });
+      vi.useFakeTimers();
+      const onClaimSucceeded = vi.fn();
+      const { result } = renderHook(() => useAutomaticPromotion({ ...baseParams, onClaimSucceeded }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.countdown).toBe(PROMOTION_COUNTDOWN_SECONDS);
+
+      // One 1000ms advance per tick, not a single combined advance — fake
+      // timers don't reliably cascade through React's own re-render (each
+      // tick's setCountdown needs to actually commit before the *next*
+      // tick's setTimeout gets (re-)scheduled) within one
+      // advanceTimersByTimeAsync call in this environment, the same
+      // documented limitation the "ticks the countdown down" test above
+      // and this file's own comment on the untested full-chain scenario
+      // already work around.
+      for (let tick = 0; tick < PROMOTION_COUNTDOWN_SECONDS; tick++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+      }
+      expect(onClaimSucceeded).toHaveBeenCalledTimes(1);
+    });
+
+    it("a failed/lost-race claim never calls onClaimSucceeded", async () => {
+      checkPromotionEligibility.mockResolvedValue({ eligible: true });
+      claimOpenSeat.mockResolvedValue({ error: "That seat was just taken — try again." });
+      vi.useFakeTimers();
+      const onClaimSucceeded = vi.fn();
+      renderHook(() => useAutomaticPromotion({ ...baseParams, onClaimSucceeded }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      for (let tick = 0; tick < PROMOTION_COUNTDOWN_SECONDS; tick++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+      }
+      expect(onClaimSucceeded).not.toHaveBeenCalled();
     });
 
     // A "failed/lost-race claim still resets countdown to null" test was

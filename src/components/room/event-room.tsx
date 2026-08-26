@@ -12,6 +12,7 @@ import { useRoleTransitionReset } from "@/hooks/use-role-transition-reset";
 import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
 import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
 import { useOwnSeatExpirationConfirmation } from "@/hooks/use-own-seat-expiration-confirmation";
+import { useSeatReconciliation } from "@/hooks/use-seat-reconciliation";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -167,9 +168,15 @@ export function EventRoom({
     startJoiningSeat(async () => {
       const result = await joinOpenSeat(event.id);
       if (result.ok) {
-        // useActiveSpeakers' own Realtime subscription picks up the new
-        // event_speakers row and isSpeaker flips on its own from there —
-        // nothing else to update locally, same as claimOpenSeat today.
+        // Issue #18 real-device finding (2026-08-28): previously relied
+        // solely on useActiveSpeakers' own Realtime subscription to pick
+        // up the new row — exactly the assumption that let a missed
+        // delta leave this tab stuck showing the audience composition
+        // after a successful claim. A direct, immediate refetch here
+        // means a genuinely successful join reflects instantly even if
+        // the Realtime INSERT never arrives at all, not just eventually
+        // once some other trigger happens to notice the contradiction.
+        void refetchSpeakers();
         return;
       }
       if (result.reason === "queue-exists") {
@@ -338,6 +345,32 @@ export function EventRoom({
     needsMediaActivation: connection.needsMediaActivation,
     mediaError: connection.mediaError,
     onHasPendingRequestChange: setHasPendingRequest,
+    // Issue #18 real-device finding (2026-08-28): the same immediate,
+    // direct refetch as handleTapEmptySeat's own successful join above —
+    // a successful automatic-promotion claim previously relied solely on
+    // isSpeaker eventually flipping via Realtime (see this hook's own
+    // doc comment on the countdown overlay staying frozen at 0 until
+    // then), which is exactly the assumption a missed delta breaks.
+    // Passed directly, not wrapped in a fresh arrow function each render
+    // — refetchSpeakers is already a stable reference (useActiveSpeakers'
+    // own useCallback), and this hook's claim effect depends on it, so an
+    // unstable identity here would re-schedule its countdown timer on
+    // every unrelated EventRoom re-render.
+    onClaimSucceeded: refetchSpeakers,
+  });
+
+  // Issue #18 real-device finding (2026-08-28): the automatic,
+  // no-second-tap-required version of the same reconciliation
+  // `handleTapEmptySeat`'s `already-speaking` branch already does
+  // manually — see this hook's own doc comment for the exact triggers
+  // (a LiveKit-confirmed publish permission the client's own role still
+  // doesn't reflect, and returning to a backgrounded tab). Never a
+  // second role flag: it only ever calls the same `refetchSpeakers`
+  // already used everywhere else in this component.
+  useSeatReconciliation({
+    isSpeaker,
+    canPublish: connection.canPublish,
+    refetch: refetchSpeakers,
   });
 
   // Real-device reconnect-grace-period finding, issue #18 UX finding:

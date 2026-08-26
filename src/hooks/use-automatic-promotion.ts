@@ -59,9 +59,19 @@ export function useAutomaticPromotion(params: {
   needsMediaActivation: boolean;
   mediaError: MediaError;
   onHasPendingRequestChange: (value: boolean) => void;
+  /** Issue #18 real-device finding (2026-08-28): called immediately once `claimOpenSeat` reports success — see the claim effect below for why this can't wait solely on `isSpeaker` eventually flipping via Realtime the way it used to. */
+  onClaimSucceeded: () => void;
 }) {
-  const { eventId, hasPendingRequest, isSpeaker, phase, needsMediaActivation, mediaError, onHasPendingRequestChange } =
-    params;
+  const {
+    eventId,
+    hasPendingRequest,
+    isSpeaker,
+    phase,
+    needsMediaActivation,
+    mediaError,
+    onHasPendingRequestChange,
+    onClaimSucceeded,
+  } = params;
   const [countdown, setCountdown] = useState<number | null>(null);
   // Issue #18 UX finding fix: true for exactly as long as a Cancel is in
   // flight (from the moment the user taps it until `withdrawSpeakerRequest`
@@ -128,13 +138,24 @@ export function useAutomaticPromotion(params: {
       // this hook's own doc comment ("a stale/lost-race outcome... just
       // silently resets to waiting").
       void claimOpenSeat(eventId).then((result) => {
-        if (!("ok" in result)) setCountdown(null);
+        if (!("ok" in result)) {
+          setCountdown(null);
+          return;
+        }
+        // Issue #18 real-device finding (2026-08-28): previously relied
+        // solely on isSpeaker eventually flipping via Realtime (see the
+        // long comment above) — exactly the assumption a missed delta
+        // breaks, leaving the countdown overlay frozen at 0 forever
+        // instead of ever handing off to Speaker View. A direct refetch
+        // here means a genuinely successful claim reflects immediately
+        // regardless of whether the Realtime INSERT ever arrives.
+        onClaimSucceeded();
       });
       return;
     }
     const timeout = setTimeout(() => setCountdown((seconds) => (seconds === null ? null : seconds - 1)), 1000);
     return () => clearTimeout(timeout);
-  }, [countdown, eventId]);
+  }, [countdown, eventId, onClaimSucceeded]);
 
   // Issue #18 UX finding fix: the single reconciliation point for this
   // hook's own `countdown` state, keyed to the one authoritative

@@ -4,6 +4,54 @@ Newest entry first.
 
 ---
 
+## 2026-08-28 — Session 31: Issue #18 reopened — seat-role reconciliation made self-healing (the fix already existed, nothing triggered it automatically)
+
+**Goal**: the split-layout bug reproduced again on the build confirmed
+clean and closed the previous round. Decisive new evidence: tapping
+"Join" a *second* time immediately fixed it — proving
+`useActiveSpeakers`' `refetch()` mechanism was already correct; nothing
+automatic ever called it. Issue #18 reopened and moved back to In
+Progress.
+
+**Fix, reusing the existing mechanism, no new role flag**: `mySeatNumber`
+remains the one canonical value everything else derives from —
+`participantRole`/the role routers/self-preview eligibility were never
+the problem, they already correctly recompute the instant the data
+source is corrected. What changed is how reliably that correction
+happens:
+
+1. Both seat-claim success paths (`handleTapEmptySeat`'s direct join,
+   `useAutomaticPromotion`'s automatic-promotion claim — new
+   `onClaimSucceeded` param) now call `refetchSpeakers()` immediately on
+   success, instead of relying solely on a Realtime delta arriving.
+2. New `useSeatReconciliation` watchdog: `canPublish` (LiveKit-confirmed
+   speaker rights) contradicting the client's own `isSpeaker` — exactly
+   the contradiction captured on-device — triggers a refetch
+   automatically, once per contradiction episode. Covers both "LiveKit
+   permission became speaker-capable" and "local publication starting"
+   in one signal, since publishing is always gated on `canPublish`
+   first.
+3. The same hook also resyncs on `visibilitychange`/`focus` restoration
+   — a backgrounded mobile tab is exactly where a Realtime socket can
+   silently drop without the app ever knowing.
+4. Realtime `SUBSCRIBED`/reconnect — already covered by the previous
+   round's `useActiveSpeakers` fix, unchanged.
+
+See DECISIONS.md's "Seat-role reconciliation made self-healing" entry
+for the full design.
+
+lint/tsc/build/full suite all pass (661/661, 56 files, +17 new tests
+covering every scenario requested: a missed Realtime delta triggering
+automatic refetch with no tap of any kind; the watchdog reacting only
+to the genuine contradiction and never more than once per episode;
+Speaker View replacing the split layout once reconciled data lands; and
+no duplicate seat claim or media acquisition anywhere in any of these
+paths). Deployed a fresh `feature/social-stage-shell` preview.
+
+**Issue #18 reopened, not closed.** Per explicit instruction, does not
+close until this automatic recovery survives repeated real-device
+testing.
+
 ## 2026-08-27 — Session 30: Issue #18 confirmed clean on real-device retest — final diagnostic cleanup, issue closed
 
 **Goal**: the user's real-device retest of commit `9e9309e` reported no

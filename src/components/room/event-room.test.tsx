@@ -41,12 +41,14 @@ const {
   mockOrientation,
   mockRefetchSpeakers,
   mockJoinOpenSeat,
+  mockCanPublish,
 } = vi.hoisted(() => ({
   mockHasMountedOnClient: vi.fn(() => false),
   mockIsDesktopViewport: vi.fn(() => false),
   mockOrientation: vi.fn(() => "portrait" as "portrait" | "landscape"),
   mockRefetchSpeakers: vi.fn(async () => {}),
   mockJoinOpenSeat: vi.fn(),
+  mockCanPublish: vi.fn(() => false),
 }));
 
 vi.mock("@/hooks/use-has-mounted-on-client", () => ({
@@ -82,7 +84,7 @@ vi.mock("@/hooks/use-live-room-connection", () => ({
     status: "connected",
     participantCount: 1,
     mediaError: null,
-    canPublish: false,
+    canPublish: mockCanPublish(),
     needsMediaActivation: false,
     activateMedia: vi.fn(async () => {}),
     getParticipant: () => undefined,
@@ -383,6 +385,100 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
       await waitFor(() => {
         expect(screen.getByText("Both seats are currently full.")).toBeInTheDocument();
       });
+      expect(mockRefetchSpeakers).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("automatic seat reconciliation — no second Join tap required (issue #18 real-device finding, 2026-08-28: the split-layout bug reproduced again; a second manual Join tap fixed it, proving the reconciliation mechanism existed but nothing triggered it automatically)", () => {
+    afterEach(() => {
+      mockRefetchSpeakers.mockClear();
+      mockJoinOpenSeat.mockClear();
+      mockCanPublish.mockReturnValue(false);
+    });
+
+    it("a missed Realtime delta after a successful seat claim: canPublish becomes true (LiveKit confirms speaker rights) while participantRole still says audience — refetch fires automatically, with no tap of any kind", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockCanPublish.mockReturnValue(false);
+
+      // initialSpeakers=[] models exactly the captured real-device state:
+      // this identity's own seat-claim INSERT never reached this tab's
+      // Realtime subscription, so useActiveSpeakers' client state has no
+      // row for it at all — participantRole resolves to audience even
+      // though the server (and, independently, LiveKit) already know
+      // otherwise.
+      const { rerender } = renderEventRoom([]);
+      expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "audience");
+      expect(mockRefetchSpeakers).not.toHaveBeenCalled();
+
+      // LiveKit's own permission push lands independently of the missed
+      // Postgres Realtime delta — this is the contradiction
+      // useSeatReconciliation's watchdog exists to catch.
+      mockCanPublish.mockReturnValue(true);
+      rerender(
+        <EventRoom
+          event={event}
+          identity={identity}
+          initialPhase="ready"
+          initialToken={null}
+          initialSpeakers={[]}
+          initialMessages={[]}
+          initialReactions={{}}
+          initialHasPendingRequest={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockRefetchSpeakers).toHaveBeenCalledTimes(1);
+      });
+      // No duplicate seat claim — the watchdog only ever reads, it never
+      // re-attempts to join.
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+    });
+
+    it("Speaker View replaces the split layout once the resync's fresh data actually lands, with no tap required at any point in the sequence", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockCanPublish.mockReturnValue(true); // already contradicted from the very first render
+
+      const { rerender } = renderEventRoom([]);
+      expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "audience");
+
+      await waitFor(() => {
+        expect(mockRefetchSpeakers).toHaveBeenCalledTimes(1);
+      });
+
+      // Models what a real refetch() resolving would do: useActiveSpeakers'
+      // own state now includes this identity's seat. EventRoom itself
+      // never has to be told to "switch to Speaker View" — participantRole
+      // and the role router both simply recompute from the corrected data,
+      // same as any other speakers-state update.
+      rerender(
+        <EventRoom
+          event={event}
+          identity={identity}
+          initialPhase="ready"
+          initialToken={null}
+          initialSpeakers={[mySeat()]}
+          initialMessages={[]}
+          initialReactions={{}}
+          initialHasPendingRequest={false}
+        />,
+      );
+      expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+    });
+
+    it("once participantRole already correctly says speaker, canPublish being true triggers no reconciliation at all — the watchdog only reacts to the contradiction, never to the ordinary case", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockCanPublish.mockReturnValue(true);
+
+      renderEventRoom([mySeat()]); // participantRole already "speaker" — no contradiction
+      expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
       expect(mockRefetchSpeakers).not.toHaveBeenCalled();
     });
   });

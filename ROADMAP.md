@@ -232,14 +232,21 @@ PRODUCT.md's testing-phase guest-participation exception.
       a seat stays server-enforced to `ready` only (see DECISIONS.md) so
       the scheduled start time still means something now that
       `RoomControls` is reachable earlier.
-- [x] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
+- [ ] Role-based Audience/Candidate/Speaker UI (issue #18) — a speaker
       gets a purpose-built layout (other speaker prioritized, own preview
       small, controls immediately reachable), not the audience UI with
       their own video added. Preserves the `featuredSlot`/reply-thread
       seams without implementing them. Full design/implementation/
       real-device investigation chain in the "Social Stage (05)
-      interaction shell (issue #21)" entry below and DECISIONS.md;
-      confirmed clean on real-device retest and closed.
+      interaction shell (issue #21)" entry below and DECISIONS.md.
+      **Reopened 2026-08-28**: the split-layout report reproduced again
+      after being confirmed clean — a second manual Join tap fixed it,
+      revealing the reconciliation mechanism worked but nothing
+      automatic triggered it. Seat-role reconciliation made self-healing
+      (successful-claim triggers, a `canPublish`-vs-`isSpeaker`
+      contradiction watchdog, visibility/focus resync). Not checked off
+      — pending real-device confirmation that this survives repeated
+      testing.
 
 ### Video-first participation redesign (issues #19–#27)
 
@@ -635,10 +642,19 @@ different dependencies. Current order:
       (LiveKit disconnect and connected-but-both-media-off both use the
       same 11-second grace period). See DECISIONS.md's 2026-08-25
       through 2026-08-27 entries for the full investigation chain.
-      **Confirmed clean on real-device retest — #18 closed.** Temporary
-      diagnostics added during the investigation (fuchsia/cyan/amber
-      strips, the SpeakerStage instance registry) removed once
-      confirmed.
+      Confirmed clean on a real-device retest and closed — then
+      **reopened 2026-08-28** when the split-layout report reproduced
+      again. Decisive new evidence broke the case: a second manual Join
+      tap immediately fixed it, proving `useActiveSpeakers`' own
+      `refetch()` reconciliation was already correct — nothing automatic
+      ever triggered it. Fixed with `useSeatReconciliation` (a
+      `canPublish`-vs-`isSpeaker` contradiction watchdog, plus
+      visibility/focus resync) and explicit refetch triggers on both
+      seat-claim success paths — reusing the existing canonical
+      `mySeatNumber`-derived role chain throughout, no new role flag.
+      See DECISIONS.md's 2026-08-28 entry. **Not checked off** — pending
+      real-device confirmation this automatic recovery survives repeated
+      testing.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

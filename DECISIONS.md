@@ -3,6 +3,90 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-28 — Seat-role reconciliation made self-healing (issue #18 reopened): the fix already existed, nothing triggered it automatically
+
+**Context**: the split-layout bug reproduced again on the build
+confirmed clean the previous round. New, decisive evidence: tapping
+"Join" a *second* time immediately fixed it. That single observation
+settles the question the previous two rounds were still narrowing down
+— `useActiveSpeakers`' resync mechanism (`refetch()`) is correct and
+sufficient; the only remaining gap is that nothing *automatic* ever
+called it. A user has no reason to know a second, redundant tap is the
+fix, and shouldn't have to discover it by accident.
+
+**Decision — reuse the existing reconciliation path, trigger it from
+more places, never add a second role flag**: `mySeatNumber` (`EventRoom`,
+via `findMySeatNumber`) remains the one canonical value
+`participantRole`/`isSpeaker`/the role routers/self-preview eligibility
+already all derive from — nothing about that architecture changed.
+What changed is *how reliably its data source gets corrected*:
+
+1. **Explicit triggers at the two moments a claim is known to have
+   succeeded** — `handleTapEmptySeat`'s `joinOpenSeat` success branch
+   and `useAutomaticPromotion`'s `claimOpenSeat` success branch (new
+   `onClaimSucceeded` param, passed `refetchSpeakers` directly — not
+   wrapped in a fresh arrow function, since that hook's claim effect
+   depends on it and an unstable identity there would re-schedule its
+   countdown timer on every unrelated `EventRoom` re-render) both now
+   call `refetchSpeakers()` immediately instead of relying solely on
+   `isSpeaker` eventually flipping via Realtime. This is *belt-and-
+   suspenders* with the Realtime delta, not a replacement for it — the
+   INSERT still arrives normally in the common case; this just stops the
+   *first* claim attempt from being silently vulnerable to the exact gap
+   `useActiveSpeakers`' own resync-on-reconnect fix only ever covered for
+   a *subsequent* reconnect.
+
+2. **A contradiction watchdog, not polling** (`useSeatReconciliation`,
+   new hook): `canPublish` (from `useLiveRoomConnection`) is the single
+   most direct "does LiveKit itself currently believe I'm a speaker"
+   signal already live in this component — already-live state, so
+   watching it costs nothing extra, and covers the user's literal
+   "LiveKit permission/publication becoming speaker-capable" and "local
+   camera/mic publication starting" triggers in one signal (actual
+   publishing is always gated on `canPublish` already being true, so
+   there's no publishing state this doesn't already precede). `canPublish
+   && !isSpeaker` is exactly the contradiction the real-device report
+   captured (self-preview live, role said audience) — triggers `refetch`
+   once per contradiction *episode* via a ref, not an interval; React's
+   own effect-dependency comparison already means the effect body can't
+   re-run while `[canPublish, isSpeaker]` haven't changed, so this
+   can't become a tight loop even without the ref, but the ref still
+   guards against a rapid true→false→true flicker re-triggering
+   redundantly.
+
+3. **Visibility/focus restoration**, event-driven
+   (`visibilitychange`/`focus` listeners, not a timer) — a backgrounded
+   mobile tab is exactly where a Realtime WebSocket can silently degrade
+   without the app ever being told; resyncing the moment the tab is
+   looked at again is a cheap, well-targeted place to catch that,
+   independent of whether a local contradiction happens to be visible
+   yet.
+
+4. **Realtime `SUBSCRIBED`/reconnect** — already covered by the previous
+   round's `useActiveSpeakers` fix; unchanged here.
+
+**Once reconciled, nothing else has to be told to "switch to Speaker
+View"** — `participantRole`/the role routers/self-preview eligibility
+were never the problem; they already correctly derive from
+`mySeatNumber` every render. The moment `refetch()`'s fresh data lands,
+the very next render already shows the right composition, with no
+separate "now switch" step anywhere.
+
+**Verification honesty**: automated (tsc, lint, full suite — 661/661
+across 56 files, +17 new tests, production build) all pass, including
+dedicated coverage for every scenario requested: a missed Realtime
+delta after a successful claim triggering automatic refetch with no
+tap of any kind; the watchdog reacting only to the genuine
+`canPublish`-vs-`isSpeaker` contradiction (never the ordinary case, never
+more than once per episode, never latched permanently); Speaker View
+replacing the split layout once reconciled data lands; and no duplicate
+`joinOpenSeat`/`claimOpenSeat` call anywhere in any of these paths — the
+watchdog and the visibility trigger only ever call `refetch`, never a
+claim action. What remains real-device-only, per the user's own explicit
+condition, is whether this automatic recovery actually survives repeated
+phone testing — issue #18 stays open, reopened this round, not closed
+until that's confirmed.
+
 ## 2026-08-27 — Issue #18 confirmed clean on real-device retest; final diagnostic cleanup, issue closed
 
 **Context**: the user's real-device retest of commit `9e9309e` (the
