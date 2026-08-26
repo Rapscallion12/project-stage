@@ -25,6 +25,19 @@ merged to `main`.
   to 3, live); double-tap-to-like on comment rows (reuses the existing
   reactions schema/action, no new backend); grabber-handle
   swipe-to-close. See DECISIONS.md.
+- **Request-to-Speak voting + ranked Top 3 + server-authoritative
+  weighted selection** (issue #21, Phase 1) — the first functional
+  piece of audience-driven speaker selection. A Request-to-Speak's 👍 is
+  now a real, exclusive, transferable vote (new `speaker_request_votes`
+  table); Top Speaker Requests ranks by live vote count instead of
+  arrival order; when a seat opens, the vote-ranked Top 3 is frozen and
+  one candidate is chosen by weighted-random selection (fixed rank
+  weights, leader capped at 50% odds regardless of vote-count margin),
+  server-side, feeding the existing Going Live countdown; a withdrawn
+  pick advances to the next candidate in the same frozen pool; a
+  successful join resets the entire candidate pool. Two new migrations.
+  60-second Continue/Replace voting (Phase 2) is not built yet. See
+  DECISIONS.md.
 
 ## [public-beta-v1] - 2026-08-26
 

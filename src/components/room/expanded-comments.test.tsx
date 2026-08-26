@@ -2,16 +2,17 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExpandedComments } from "./expanded-comments";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
-import type { SpeakerRequest } from "@/lib/repositories/speaker-requests";
+import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 
-const { sendMessage, submitSpeakerRequest, addReaction } = vi.hoisted(() => ({
+const { sendMessage, submitSpeakerRequest, addReaction, voteForSpeakerRequest } = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   submitSpeakerRequest: vi.fn(),
   addReaction: vi.fn(),
+  voteForSpeakerRequest: vi.fn(),
 }));
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({ sendMessage, addReaction }));
-vi.mock("@/app/events/[id]/room/actions", () => ({ submitSpeakerRequest }));
+vi.mock("@/app/events/[id]/room/actions", () => ({ submitSpeakerRequest, voteForSpeakerRequest }));
 
 function makeMessage(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
   return {
@@ -26,7 +27,7 @@ function makeMessage(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
   };
 }
 
-function makeRequest(overrides: Partial<SpeakerRequest> = {}): SpeakerRequest {
+function makeRequest(overrides: Partial<RankedPendingRequest> = {}): RankedPendingRequest {
   return {
     id: "r1",
     event_id: "e1",
@@ -36,6 +37,13 @@ function makeRequest(overrides: Partial<SpeakerRequest> = {}): SpeakerRequest {
     status: "pending",
     created_at: new Date().toISOString(),
     resolved_at: null,
+    selection_round_id: null,
+    frozen_rank: null,
+    frozen_vote_count: null,
+    is_current_candidate: false,
+    selection_failed: false,
+    voteCount: 0,
+    isMyVote: false,
     ...overrides,
   };
 }
@@ -44,7 +52,7 @@ const baseProps = {
   eventId: "e1",
   onClose: vi.fn(),
   reactions: {} as Record<string, ReactionState>,
-  pendingRequests: [] as SpeakerRequest[],
+  pendingRequests: [] as RankedPendingRequest[],
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
   onHasPendingRequestChange: vi.fn(),
@@ -296,6 +304,40 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
       expect(addReaction).not.toHaveBeenCalled();
     });
 
+    it("a request message with no active (voteable) request falls back to an ordinary like — e.g. already resolved", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", is_speaker_request: true })]}
+          pendingRequests={[]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(addReaction).toHaveBeenCalledWith("m1");
+      expect(voteForSpeakerRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Double-tap to vote (Section A — a Request-to-Speak comment's 👍 is a vote, not an ordinary like)", () => {
+    it("double-tapping a voteable request calls voteForSpeakerRequest, never addReaction", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1" })]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(voteForSpeakerRequest).toHaveBeenCalledWith("e1", "m1");
+      expect(addReaction).not.toHaveBeenCalled();
+    });
+
     it("works the same way on a Top Speaker Requests row", () => {
       render(
         <ExpandedComments
@@ -308,7 +350,78 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
       const row = screen.getByTestId("expanded-top-request-row");
       fireEvent.click(row);
       fireEvent.click(row);
+      expect(voteForSpeakerRequest).toHaveBeenCalledWith("e1", "m1");
+    });
+
+    it("re-tapping the request the viewer already voted for still fires — the server decides toggle-off, not a client-side guard", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1", isMyVote: true, voteCount: 1 })]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(voteForSpeakerRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("a fast triple-tap only fires the vote action once", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1" })]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+      fireEvent.click(row);
+      expect(voteForSpeakerRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the live vote count and highlights the viewer's own vote distinctly from an ordinary like", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1", voteCount: 3, isMyVote: true })]}
+        />,
+      );
+      // The same message renders in both Top Speaker Requests and Recent
+      // Comments (it's a real comment too) — every instance of the badge
+      // should agree.
+      const badges = screen.getAllByTestId("expanded-comment-vote");
+      expect(badges.length).toBeGreaterThan(0);
+      for (const badge of badges) {
+        expect(badge).toHaveTextContent("3");
+      }
+      expect(screen.queryByTestId("expanded-comment-like")).not.toBeInTheDocument();
+    });
+
+    it("ordinary comment likes remain completely independent — liking an unrelated comment never calls voteForSpeakerRequest", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[
+            makeMessage({ id: "m1", is_speaker_request: false }),
+            makeMessage({ id: "m2", is_speaker_request: true }),
+          ]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m2" })]}
+        />,
+      );
+      const rows = screen.getAllByTestId("expanded-comment-row");
+      const ordinaryRow = rows.find((r) => r.getAttribute("data-message-id") === "m1")!;
+      fireEvent.click(ordinaryRow);
+      fireEvent.click(ordinaryRow);
       expect(addReaction).toHaveBeenCalledWith("m1");
+      expect(voteForSpeakerRequest).not.toHaveBeenCalled();
     });
   });
 

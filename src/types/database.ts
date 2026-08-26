@@ -243,35 +243,99 @@ export type Database = {
         }
         Relationships: []
       }
+      speaker_request_votes: {
+        Row: {
+          created_at: string
+          event_id: string
+          id: string
+          request_id: string
+          voter_guest_id: string | null
+          voter_profile_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_id: string
+          id?: string
+          request_id: string
+          voter_guest_id?: string | null
+          voter_profile_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_id?: string
+          id?: string
+          request_id?: string
+          voter_guest_id?: string | null
+          voter_profile_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "speaker_request_votes_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_request_votes_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "speaker_requests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_request_votes_voter_profile_id_fkey"
+            columns: ["voter_profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       speaker_requests: {
         Row: {
           created_at: string
           event_id: string
+          frozen_rank: number | null
+          frozen_vote_count: number | null
           guest_id: string | null
           id: string
+          is_current_candidate: boolean
           message_id: string
           profile_id: string | null
           resolved_at: string | null
+          selection_failed: boolean
+          selection_round_id: string | null
           status: string
         }
         Insert: {
           created_at?: string
           event_id: string
+          frozen_rank?: number | null
+          frozen_vote_count?: number | null
           guest_id?: string | null
           id?: string
+          is_current_candidate?: boolean
           message_id: string
           profile_id?: string | null
           resolved_at?: string | null
+          selection_failed?: boolean
+          selection_round_id?: string | null
           status?: string
         }
         Update: {
           created_at?: string
           event_id?: string
+          frozen_rank?: number | null
+          frozen_vote_count?: number | null
           guest_id?: string | null
           id?: string
+          is_current_candidate?: boolean
           message_id?: string
           profile_id?: string | null
           resolved_at?: string | null
+          selection_failed?: boolean
+          selection_round_id?: string | null
           status?: string
         }
         Relationships: [
@@ -294,6 +358,45 @@ export type Database = {
             columns: ["profile_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_requests_selection_round_id_fkey"
+            columns: ["selection_round_id"]
+            isOneToOne: false
+            referencedRelation: "speaker_selection_rounds"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      speaker_selection_rounds: {
+        Row: {
+          event_id: string
+          frozen_at: string
+          id: string
+          resolved_at: string | null
+          status: string
+        }
+        Insert: {
+          event_id: string
+          frozen_at?: string
+          id?: string
+          resolved_at?: string | null
+          status?: string
+        }
+        Update: {
+          event_id?: string
+          frozen_at?: string
+          id?: string
+          resolved_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "speaker_selection_rounds_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
             referencedColumns: ["id"]
           },
         ]
@@ -359,6 +462,18 @@ export type Database = {
       }
     }
     Functions: {
+      cast_speaker_request_vote: {
+        Args: { p_event_id: string; p_message_id: string }
+        Returns: {
+          voted_request_id: string
+        }[]
+      }
+      cast_speaker_request_vote_as_guest: {
+        Args: { p_event_id: string; p_guest_id: string; p_message_id: string }
+        Returns: {
+          voted_request_id: string
+        }[]
+      }
       claim_speaker_seat: {
         Args: {
           p_event_id: string
@@ -413,6 +528,19 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      freeze_speaker_candidates: {
+        Args: { p_event_id: string }
+        Returns: {
+          guest_id: string
+          is_current: boolean
+          message_id: string
+          profile_id: string
+          rank: number
+          request_id: string
+          round_id: string
+          vote_count: number
+        }[]
       }
       is_speaker_seat_active: {
         Args: {
@@ -655,16 +783,29 @@ export type Database = {
           request_id: string
         }[]
       }
+      reset_speaker_candidate_pool: {
+        Args: { p_event_id: string; p_winning_request_id: string }
+        Returns: undefined
+      }
+      set_current_speaker_candidate: {
+        Args: { p_request_id: string; p_round_id: string }
+        Returns: undefined
+      }
       withdraw_speaker_request: {
         Args: { p_event_id: string }
         Returns: {
           created_at: string
           event_id: string
+          frozen_rank: number | null
+          frozen_vote_count: number | null
           guest_id: string | null
           id: string
+          is_current_candidate: boolean
           message_id: string
           profile_id: string | null
           resolved_at: string | null
+          selection_failed: boolean
+          selection_round_id: string | null
           status: string
         }
         SetofOptions: {
@@ -679,11 +820,16 @@ export type Database = {
         Returns: {
           created_at: string
           event_id: string
+          frozen_rank: number | null
+          frozen_vote_count: number | null
           guest_id: string | null
           id: string
+          is_current_candidate: boolean
           message_id: string
           profile_id: string | null
           resolved_at: string | null
+          selection_failed: boolean
+          selection_round_id: string | null
           status: string
         }
         SetofOptions: {

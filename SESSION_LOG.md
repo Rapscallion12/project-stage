@@ -4,6 +4,55 @@ Newest entry first.
 
 ---
 
+## 2026-08-26 — Session 35: Request-to-Speak voting + ranked Top 3 + server-authoritative weighted selection (issue #21, Phase 1)
+
+**Goal**: first functional audience-voting/speaker-selection loop.
+Explicitly instructed to reconcile against existing architecture first
+(flag conflicts, don't guess), resolve whether Continue/Replace is
+per-speaker or per-pairing before touching that schema, and split into
+phases if the full loop (request voting, weighted selection, 60-second
+Continue/Replace blocks, Vote UI emphasis) was too large for one pass.
+
+**Investigation surfaced two real findings, both reported before
+coding**: an earlier per-*pairing* Continue/Replace sketch (2026-08-20)
+conflicts with this prompt's unambiguous per-*speaker* language —
+flagged as superseded per instruction, not silently followed or
+silently discarded. And the existing promotion-eligibility mechanism
+(`decideClaimEligibility`'s top-3-self-claim race) was already
+documented, in its own code, as an explicit placeholder for "something
+more deliberately audience-driven" — confirming this was the right
+seam to replace, not a stable system to route around.
+
+**Implemented (Phase 1 — Sections A–E only, per the user's own suggested
+split)**: request votes with real transfer/toggle exclusivity (new
+`speaker_request_votes` table, genuinely separate from ordinary comment
+likes); Expanded Comments' Top Speaker Requests now ranks by real live
+vote count instead of last round's FIFO placeholder; server-authoritative
+weighted-random selection among the vote-ranked Top 3 when a seat opens
+(`freeze_speaker_candidates` + `selectWeightedCandidate`, isolated
+rank-based `[3,2,1]` weighting, stated before implementing); runner-up
+advancement within the same frozen pool when the current pick withdraws;
+full candidate-pool reset (bulk-expire, vote-clear) the instant a new
+speaker successfully claims the seat, reusing the *existing* Going Live
+countdown — no second winner/join system built.
+
+**Verification**: 11 new integration tests against the real linked
+Supabase project covering the full backend flow end-to-end (caught one
+real test-setup bug of my own — forgetting to mark the winner's request
+'granted' before reset, exactly mirroring what `claimOpenSeat` actually
+does — before it could hide a real ordering bug); 13 unit tests pinning
+the weighted-selection boundary math exactly; full suite (737/737, 60
+files), lint, tsc, build all clean. Two migrations (00000000000019,
+00000000000020) applied to the real linked project — additive only,
+nothing destructive.
+
+**Not built this pass, explicitly**: Sections F–H (60-second
+Continue/Replace protected blocks, the Vote control's compact→emphasized
+UI progression). Fresh preview deployed; stopping here for real-device/
+product review before Phase 2.
+
+---
+
 ## 2026-08-26 — Session 34: Live-stream feed, frozen Expanded snapshot, Top Speaker Requests, likes, swipe-to-close (issue #21)
 
 **Goal**: real-device testing confirmed Discussion Expanded's foundation

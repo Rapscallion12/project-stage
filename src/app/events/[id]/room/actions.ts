@@ -15,7 +15,6 @@ import {
   releaseExpiredInactiveSpeaker,
 } from "@/lib/repositories/event-speakers";
 import type { SeatIdentity } from "@/lib/repositories/event-speakers";
-import { findOpenSeat } from "@/lib/speaker-queue";
 import {
   getPendingRequestForIdentity,
   markSpeakerRequestGranted,
@@ -24,10 +23,16 @@ import {
   requestToSpeakAsGuest,
   withdrawSpeakerRequest as withdrawSpeakerRequestRow,
   withdrawSpeakerRequestAsGuest,
+  castSpeakerRequestVote,
+  castSpeakerRequestVoteAsGuest,
+  freezeSpeakerCandidates,
+  setCurrentSpeakerCandidate,
+  resetSpeakerCandidatePool,
 } from "@/lib/repositories/speaker-requests";
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
-import { decideClaimEligibility, type ClaimDecision } from "@/lib/speaker-queue";
+import { decideClaimEligibility, findOpenSeat, type ClaimDecision } from "@/lib/speaker-queue";
+import { selectWeightedCandidate } from "@/lib/speaker-selection";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 export type GetLiveKitTokenResult = { token: string } | { error: string };
@@ -164,38 +169,115 @@ export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRe
   }
 }
 
+export type VoteForSpeakerRequestResult = { ok: true; voted: boolean } | { error: string };
+
+/**
+ * Issue #21, Phase 1, Section A: casts, transfers, or toggles off the
+ * caller's one active vote for a Request-to-Speak comment. Distinct from
+ * `addReaction` (ordinary comment likes, untouched) — this calls
+ * `cast_speaker_request_vote(_as_guest)`, which enforces the exclusive
+ * "one active vote per viewer, transferable, toggle-off on re-tap"
+ * semantics server-side (migration 00000000000019), not just in this
+ * wrapper. `voted: false` in the result means the tap toggled the vote
+ * off; `voted: true` means it's now active (fresh or transferred) —
+ * the caller doesn't need to separately track which case it was, the
+ * request's own `is_current_candidate`/live vote count (via Realtime)
+ * reflects the outcome either way.
+ *
+ * Guest-eligible unconditionally, not gated on
+ * `PROTOTYPE_CONFIG.guestParticipationEnabled` — that flag scopes
+ * *becoming a guest speaker* specifically; voting is audience-level
+ * engagement, the same tier as `addReaction` (ordinary comment likes),
+ * which has never required an account (PRODUCT.md's progressive
+ * authentication model: guests watch, react, and vote with zero
+ * session).
+ */
+export async function voteForSpeakerRequest(
+  eventId: string,
+  messageId: string,
+): Promise<VoteForSpeakerRequestResult> {
+  const identity = await resolveIdentity();
+
+  try {
+    const { votedRequestId } =
+      identity.type === "profile"
+        ? await castSpeakerRequestVote(eventId, messageId)
+        : await castSpeakerRequestVoteAsGuest(eventId, messageId, identity.id);
+    return { ok: true, voted: votedRequestId !== null };
+  } catch {
+    return { error: "Couldn't record your vote. Try again." };
+  }
+}
+
 const CLAIM_REJECTION_MESSAGES = {
   "no-request": "You don't have an active request to speak.",
   "no-open-seat": "Both seats are currently full.",
-  "not-eligible": "Other requests currently have more support than yours — keep an eye on reactions.",
+  "not-eligible": "You're in the running, but weren't this round's pick — hang tight.",
 } as const;
+
+/**
+ * Issue #21, Phase 1: ensures a seat opening has an active, resolved
+ * selection round before eligibility is checked — the freeze (rank the
+ * current pending pool, snapshot the Top 3) and the weighted-random pick
+ * both happen here, lazily, on first need, rather than via a background
+ * job (this serverless deployment has none — same reasoning every other
+ * "evaluate on next real activity" mechanism in this codebase already
+ * uses, see DECISIONS.md's voting-window entry).
+ *
+ * Safe to call on every poll: `freezeSpeakerCandidates` is itself
+ * idempotent (returns the existing active round's candidates instead of
+ * erroring if one's already in flight — see migration
+ * 00000000000020) — this function only performs the weighted pick when
+ * the round doesn't already have one (`is_current` false on every
+ * returned candidate), so a second/third call never re-rolls the dice
+ * for an already-decided round.
+ *
+ * The weighted pick itself (`selectWeightedCandidate`, `Math.random()`)
+ * runs here — in a Server Action, on the server — never in a client
+ * component, satisfying "the authoritative selection must happen
+ * server-side."
+ */
+async function ensureActiveSelectionRound(eventId: string): Promise<void> {
+  const candidates = await freezeSpeakerCandidates(eventId);
+  if (candidates.length === 0) return;
+  if (candidates.some((c) => c.is_current)) return;
+
+  const winnerId = selectWeightedCandidate(
+    candidates.map((c) => ({ requestId: c.request_id, rank: c.rank })),
+    Math.random(),
+  );
+  if (winnerId) {
+    await setCurrentSpeakerCandidate(candidates[0].round_id, winnerId);
+  }
+}
 
 /**
  * The actual authorization decision, shared by `claimOpenSeat` (which
  * acts on it) and `checkPromotionEligibility` (issue #23, read-only —
  * the automatic-promotion countdown's "should I even start counting
- * down" check). Fetches current state and hands it to
- * `decideClaimEligibility` (the pure, unit-tested decision — see
- * lib/speaker-queue.ts for the top-3-not-top-1 reasoning). Extracted so
- * the eligibility *check* the countdown polls and the eligibility
- * *enforcement* the actual claim performs can never drift apart into two
- * separately-maintained copies of the same rule.
+ * down" check). Ensures a selection round exists for the current
+ * opening, then reads whether the caller's own pending request is that
+ * round's currently-selected candidate — see `lib/speaker-queue.ts`'s
+ * `decideClaimEligibility` for the pure decision, and
+ * `ensureActiveSelectionRound` above for how the round/pick itself gets
+ * created. Extracted so the eligibility *check* the countdown polls and
+ * the eligibility *enforcement* the actual claim performs can never
+ * drift apart into two separately-maintained copies of the same rule.
  */
 async function resolveClaimDecision(
   eventId: string,
   identity: SeatIdentity,
 ): Promise<{ decision: ClaimDecision; myRequestId: string | null }> {
-  const [myRequest, activeSpeakers, ranked] = await Promise.all([
-    getPendingRequestForIdentity(eventId, identity),
-    listActiveSpeakers(eventId),
-    rankPendingSpeakerRequests(eventId),
-  ]);
+  const activeSpeakers = await listActiveSpeakers(eventId);
+  if (findOpenSeat(activeSpeakers) !== null) {
+    await ensureActiveSelectionRound(eventId);
+  }
+
+  const myRequest = await getPendingRequestForIdentity(eventId, identity);
 
   const decision = decideClaimEligibility({
-    identity,
-    hasPendingRequest: myRequest !== null,
+    myPendingRequest: myRequest ? { is_current_candidate: myRequest.is_current_candidate } : null,
     activeSpeakers,
-    rankedRequests: ranked,
   });
 
   return { decision, myRequestId: myRequest?.id ?? null };
@@ -210,18 +292,21 @@ async function resolveClaimDecision(
  * never by the user tapping anything. The authorization logic itself is
  * completely unchanged: only on a favorable decision does this call
  * `claimSpeakerSeat` (service client) on the caller's own behalf and
- * mark their request granted. The client never sees ranking data; it
- * only ever gets a pass/fail from attempting this — and per issue #23's
- * explicit requirement, the countdown that leads up to this call is not
- * itself an eligibility mechanism, just client-side UX; this is still
- * the one and only place eligibility is actually decided and enforced.
+ * mark their request granted. The client never sees vote counts, ranks,
+ * or who else is in the running — it only ever gets a pass/fail from
+ * attempting this — and per issue #23's explicit requirement, the
+ * countdown that leads up to this call is not itself an eligibility
+ * mechanism, just client-side UX; this is still the one and only place
+ * eligibility is actually decided and enforced.
  *
- * Not re-checking seat availability a second time immediately before
- * `claimSpeakerSeat` — `claim_speaker_seat`'s own unique-index race
- * safety (issue #13) is the real backstop if two eligible requesters
- * attempt this at nearly the same moment; the bounded, benign outcome
- * (whichever call lands second replaces the first) is accepted, same
- * reasoning issue #13's own race-safety test documents.
+ * Issue #21, Phase 1: with the weighted-random selection round now in
+ * play, there is at most *one* eligible identity at a time (the round's
+ * `is_current_candidate`) rather than the old top-3-race model's several
+ * simultaneously-eligible requesters — the race-safety note below is
+ * about `claim_speaker_seat`'s own unique-index protection against a
+ * *different* kind of race (two seats opening near-simultaneously,
+ * or a stale client retry), not about multiple candidates racing each
+ * other for the same seat the way the old design allowed.
  *
  * Issue #17: requesting the mic is available from the moment the lobby
  * opens (see requestToSpeak above), but *claiming* a seat — actually
@@ -255,12 +340,22 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
     return { error: "That seat was just taken — try again." };
   }
 
-  // decision.eligible implies hasPendingRequest was true, which implies
-  // myRequestId is non-null — decideClaimEligibility only sees the
-  // boolean, not the row itself, so TypeScript can't correlate the two
-  // on its own.
+  // decision.eligible implies myPendingRequest was non-null, which
+  // implies myRequestId is non-null — decideClaimEligibility only sees
+  // is_current_candidate, not the row itself, so TypeScript can't
+  // correlate the two on its own.
   await markSpeakerRequestGranted(myRequestId!);
   await syncPublishPermission({ eventId, identity, canPublish: true });
+
+  // Issue #21, Phase 1, Section E: the authoritative, race-safe pool
+  // reset — every other still-pending request for this event ends here,
+  // not just the winner's, and every request vote is cleared. Runners-up
+  // do not remain automatically queued; anyone who still wants to speak
+  // (including the speaker who just left, once they do) must submit a
+  // fresh request afterward. Called after markSpeakerRequestGranted (not
+  // before) so the winner's own row is already 'granted', not 'pending',
+  // when reset_speaker_candidate_pool excludes it from the bulk expiry.
+  await resetSpeakerCandidatePool(eventId, myRequestId!);
 
   return { ok: true };
 }

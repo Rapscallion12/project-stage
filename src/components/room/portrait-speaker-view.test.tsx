@@ -447,6 +447,13 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
               status: "pending",
               created_at: new Date().toISOString(),
               resolved_at: null,
+              selection_round_id: null,
+              frozen_rank: null,
+              frozen_vote_count: null,
+              is_current_candidate: false,
+              selection_failed: false,
+              voteCount: 0,
+              isMyVote: false,
             },
           ]}
         />,

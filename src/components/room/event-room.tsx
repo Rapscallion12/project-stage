@@ -113,7 +113,7 @@ export function EventRoom({
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
   const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
-  const { pendingRequests } = useActiveSpeakerRequests(event.id, initialPendingRequests);
+  const { pendingRequests } = useActiveSpeakerRequests(event.id, identity, initialPendingRequests);
 
   // Issue #27: lifted above the orientation branch — like every other
   // piece of state here, this must survive a rotation, and RoomControls/

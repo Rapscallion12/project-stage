@@ -4,10 +4,15 @@ import type { SeatIdentity } from "@/lib/repositories/event-speakers";
 
 /**
  * `status` is a Postgres CHECK-constrained text column, not a native
- * enum — see migration 00000000000011. Kept in sync with that CHECK by
- * hand, same discipline as `LeftReason` in event-speakers.ts.
+ * enum — see migration 00000000000011 (widened by 00000000000019 to add
+ * 'expired'). Kept in sync with that CHECK by hand, same discipline as
+ * `LeftReason` in event-speakers.ts.
+ *
+ * 'expired' (issue #21, Phase 1): the bulk pool-reset outcome — every
+ * other still-pending request when a new speaker successfully joins,
+ * distinct from 'withdrawn' (the requester's own voluntary action).
  */
-export type RequestStatus = "pending" | "granted" | "withdrawn";
+export type RequestStatus = "pending" | "granted" | "withdrawn" | "expired";
 
 export type SpeakerRequest = {
   id: string;
@@ -19,6 +24,37 @@ export type SpeakerRequest = {
   status: RequestStatus;
   created_at: string;
   resolved_at: string | null;
+  /** Issue #21, Phase 1: which frozen selection round (if any) this request was captured into — see freeze_speaker_candidates. Null until frozen. */
+  selection_round_id: string | null;
+  /** 1-indexed rank within its frozen round at the moment of freezing (never recomputed against live votes mid-round) — null until frozen. */
+  frozen_rank: number | null;
+  /** Vote count snapshot at freeze time — null until frozen. */
+  frozen_vote_count: number | null;
+  /** True for exactly one request per active round — the current weighted-random pick, or the current runner-up after an advance. */
+  is_current_candidate: boolean;
+  /** True once this request was the current candidate and failed to claim the seat (withdrew) — excluded from future re-selection within the same round, per Section D. */
+  selection_failed: boolean;
+};
+
+export type SpeakerRequestVote = {
+  id: string;
+  event_id: string;
+  voter_profile_id: string | null;
+  voter_guest_id: string | null;
+  request_id: string;
+  created_at: string;
+};
+
+export type FrozenCandidate = {
+  round_id: string;
+  request_id: string;
+  profile_id: string | null;
+  guest_id: string | null;
+  message_id: string;
+  rank: number;
+  vote_count: number;
+  /** Whether this candidate is already the round's committed current pick — lets the caller skip re-selecting when freeze_speaker_candidates returns an already-resolved round (its own idempotent-repeat-call path). */
+  is_current: boolean;
 };
 
 export type RankedSpeakerRequest = {
@@ -212,6 +248,103 @@ export async function markSpeakerRequestGranted(requestId: string): Promise<void
     .update({ status: "granted", resolved_at: new Date().toISOString() })
     .eq("id", requestId)
     .eq("status", "pending");
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Issue #21, Phase 1: casts/transfers/toggles the caller's one active
+ * vote for an event onto the currently-pending request behind a given
+ * message — see migration 00000000000019's `cast_speaker_request_vote`
+ * for the actual transfer/toggle semantics (Section A: voting for B
+ * removes the vote from A; re-voting for the same request removes it
+ * entirely). Self-service, auth.uid()-derived, same tier as
+ * `requestToSpeak`.
+ */
+export async function castSpeakerRequestVote(
+  eventId: string,
+  messageId: string,
+): Promise<{ votedRequestId: string | null }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("cast_speaker_request_vote", {
+    p_event_id: eventId,
+    p_message_id: messageId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return { votedRequestId: data?.[0]?.voted_request_id ?? null };
+}
+
+/** A guest's own vote (issue #16-style exception) — service-role-only, same tier as `requestToSpeakAsGuest`. */
+export async function castSpeakerRequestVoteAsGuest(
+  eventId: string,
+  messageId: string,
+  guestId: string,
+): Promise<{ votedRequestId: string | null }> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("cast_speaker_request_vote_as_guest", {
+    p_event_id: eventId,
+    p_message_id: messageId,
+    p_guest_id: guestId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return { votedRequestId: data?.[0]?.voted_request_id ?? null };
+}
+
+/**
+ * Issue #21, Phase 1: ranks currently-pending requests by vote count and
+ * freezes the Top 3 into a new selection round — see migration
+ * 00000000000019's `freeze_speaker_candidates`. Trusted-server-only
+ * (writes selection state); returns an empty array when there are no
+ * pending requests at all (Section C's "0 candidates" case — the caller
+ * creates no round and leaves the seat open normally).
+ */
+export async function freezeSpeakerCandidates(eventId: string): Promise<FrozenCandidate[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("freeze_speaker_candidates", { p_event_id: eventId });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => ({
+    round_id: row.round_id,
+    request_id: row.request_id,
+    profile_id: row.profile_id,
+    guest_id: row.guest_id,
+    message_id: row.message_id,
+    rank: row.rank,
+    vote_count: row.vote_count,
+    is_current: row.is_current,
+  }));
+}
+
+/** Commits the weighted-random pick (or a runner-up advancement) computed in application code — see lib/speaker-selection.ts. Trusted-server-only. */
+export async function setCurrentSpeakerCandidate(roundId: string, requestId: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("set_current_speaker_candidate", {
+    p_round_id: roundId,
+    p_request_id: requestId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Issue #21, Phase 1, Section E: the authoritative, race-safe candidate-
+ * pool reset — called once, immediately after a successful claim/grant.
+ * See migration 00000000000019's `reset_speaker_candidate_pool` for the
+ * exact bulk-expire + vote-clear behavior. Trusted-server-only.
+ */
+export async function resetSpeakerCandidatePool(eventId: string, winningRequestId: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("reset_speaker_candidate_pool", {
+    p_event_id: eventId,
+    p_winning_request_id: winningRequestId,
+  });
   if (error) {
     throw new Error(error.message);
   }

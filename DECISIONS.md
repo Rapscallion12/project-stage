@@ -3,6 +3,132 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-26 — Request-to-Speak voting + ranked Top 3 + authoritative weighted selection (issue #21, Phase 1 of the audience voting loop)
+
+**Context**: the user asked for the first functional audience-voting/
+speaker-selection loop — Request-to-Speak votes determining who speaks
+next, plus (a later phase) Continue/Replace voting on the current
+speaker's time. Explicitly instructed to reconcile against existing
+docs/architecture first and flag any conflict rather than guess, and to
+split into phases if the full loop was too large for one pass. It was:
+implemented Phase 1 only (Sections A–E — request voting, ranked Top 3,
+weighted selection, runner-up on failure, pool reset). Sections F–H
+(60-second Continue/Replace blocks, Vote UI emphasis) are not built.
+
+**Section I resolved, conflict flagged**: an earlier sketch (2026-08-20,
+"Video-first room redesign finalized") described a *per-pairing*
+Continue/Replace model — one shared window recurring via modular
+arithmetic on `pairing_start_time`, evaluated by both seated clients
+together. Never built (Vote has stayed an inert placeholder since). This
+prompt's Section F/G unambiguously describe *per-speaker* state instead
+("each speaker receives a 60-second... block," "the speaker's turn
+ends"). Per instruction ("the rules in this prompt represent the current
+product decisions"), the old sketch is treated as superseded, not
+preserved — Phase 2 will build per-speaker blocks. Reported now since
+Phase 2 wasn't started this pass but the resolution needed to happen
+before any further schema work.
+
+**A second load-bearing find**: `decideClaimEligibility`'s existing
+top-3-self-claim-race model (issue #14) — every top-3-ranked requester's
+client independently polls its own eligibility and races
+`claimOpenSeat`, first-to-land wins — was already explicitly documented
+as a placeholder in `lib/speaker-queue.ts`'s own comment: "not meant to
+make this a click-speed competition by product intent... may evolve
+into something more deliberately audience-driven." Section C's single
+server-picked winner needed a genuinely different selection mechanism,
+not just a different ranking input — that placeholder is what got
+replaced.
+
+**Weighting formula, stated before implementing**: fixed rank-based
+weights `[3, 2, 1]` (`SELECTION_RANK_WEIGHTS`,
+`lib/speaker-selection.ts`) — not raw vote-count-proportional. With 3
+candidates the leader wins exactly 50% of selections (3/6) regardless of
+how large the actual vote gap is, 2nd gets 33%, 3rd 17%; 2 candidates,
+60/40; 1 candidate, 100%. Rank position (which requires more votes to
+reach) always yields strictly better odds, but no landslide can approach
+determinism — a raw-count-proportional weighting wouldn't have that
+property. Isolated in one module, taking an externally-supplied
+`randomValue` (never generating its own randomness) so every boundary is
+exactly reproducible in tests.
+
+**Schema (migrations 00000000000019, 00000000000020)**:
+- `speaker_request_votes` — a genuinely separate table from
+  `event_chat_message_reactions`, not a reuse: a vote's exclusivity (one
+  active vote per viewer per event, transferable, toggle-off) is
+  structurally different from an ordinary like's per-message independent
+  toggle, and forcing it into the reactions table would need bolting on
+  cross-row exclusivity logic that table's schema/RLS was never designed
+  for. `unique(event_id, coalesce(voter_profile_id, voter_guest_id))` is
+  the real race-safety backstop; `cast_speaker_request_vote(_as_guest)`
+  is the friendly transfer/toggle wrapper around it.
+- `speaker_selection_rounds` + new columns on `speaker_requests`
+  (`selection_round_id`, `frozen_rank`, `frozen_vote_count`,
+  `is_current_candidate`, `selection_failed`) rather than a second
+  `speaker_selection_candidates` table — simpler to query/test, and the
+  "frozen at selection time" snapshot lives right on the row it
+  describes. `freeze_speaker_candidates` is idempotent (migration
+  00000000000020's follow-up): calling it while a round is already
+  active returns that round's existing candidates instead of erroring,
+  with a `unique_violation` exception handler as the last-resort race
+  backstop — safe to call on every eligibility poll, the same
+  "every evaluation independently recomputes and re-verifies" discipline
+  #13's disconnect cleanup and #23's promotion already established.
+- `speaker_requests.status` gains `'expired'` (Section E's bulk
+  pool-reset outcome — every other still-pending request when a new
+  speaker joins, not just the winner's) — distinct from `'withdrawn'`
+  (the requester's own voluntary action). `rank_pending_speaker_requests`
+  (the old reputation-tiebreak ranking RPC) is left in place, unused by
+  the new eligibility flow but not dropped — still a valid read, no
+  reason to delete working infrastructure that costs nothing to keep.
+
+**Selection orchestration split between SQL and TypeScript,
+deliberately**: `freeze_speaker_candidates` (SQL) ranks and freezes;
+`selectWeightedCandidate` (pure TS, unit-tested) picks; `commit_speaker_selection`
+(SQL) records the pick. The actual `Math.random()` call happens in
+`ensureActiveSelectionRound` (`room/actions.ts`, a Server Action) — on
+the server, never in a client component, satisfying "the authoritative
+selection must happen server-side" — while keeping probability logic
+in one isolated, swappable module rather than embedded in a SQL
+function where it would be harder to unit-test exhaustively.
+
+**Runner-up advancement folded into the existing withdrawal RPCs**
+(`withdraw_speaker_request(_as_guest)`, `CREATE OR REPLACE`, same
+signature): withdrawing the round's current candidate is this pass's
+only practical "failure" signal (no background heartbeat/timeout
+infrastructure exists in this serverless deployment to detect a
+selected candidate going silent any other way) — marks that candidate
+`selection_failed`, promotes the next unfailed candidate by
+`frozen_rank` within the *same* frozen round (never re-ranks from live
+votes mid-round), or marks the round `exhausted` if none remain.
+Scoping decision, reported: a genuinely silent selected candidate (no
+withdrawal, just never claims) isn't detected this pass — acceptable for
+Phase 1, a real gap to flag for Phase 2/3 if it matters in practice.
+
+**Pool reset (`reset_speaker_candidate_pool`) called from `claimOpenSeat`
+after `markSpeakerRequestGranted`, not before** — the winner's own row
+must already be `'granted'` when the bulk-expire runs, or it would
+itself get swept up (a bug this exact test caught in the real-database
+integration suite before it ever reached the room code).
+
+**Verification**: all backend RPCs tested against the real linked
+Supabase project (11 integration tests, `speaker-request-voting.test.ts`
+— vote transfer/toggle/independence-from-likes, idempotent freeze,
+ranking, runner-up advancement, pool reset including the former winner's
+immediate ability to re-request, permission boundaries). Weighted
+selection's exact boundary math unit-tested (13 tests). Full suite
+(737/737, 60 files), lint, tsc, build all clean.
+
+**Rollback**: work continues on `feature/expanded-comments`, still not
+merged — `main`/production untouched by this pass. The two new
+migrations (`00000000000019`, `00000000000020`) are already applied to
+the real linked Supabase project (per this project's standing rule that
+schema changes go through the CLI immediately, not gated behind a
+branch merge) — this is schema-additive only (new tables/columns/RPCs,
+one widened CHECK constraint), nothing existing was removed or altered
+destructively, and the old top-3-race eligibility path is simply
+unreachable now that `resolveClaimDecision` no longer calls it, not
+deleted.
+
 ## 2026-08-26 — Live-stream regular feed, frozen Expanded snapshot, Top Speaker Requests, double-tap likes, swipe-to-close (issue #21, refinement pass)
 
 **Context**: real-device testing confirmed the Discussion Expanded

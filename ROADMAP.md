@@ -697,14 +697,42 @@ different dependencies. Current order:
       newest→oldest snapshot (captured on open/refresh only, never
       mutated by background arrivals) with a "↻ N new comments" refresh
       control, replacing the live-follow/jump-to-latest design entirely.
-      New "Top Speaker Requests" section (up to 3, FIFO-ordered —
-      documented temporary signal, see DECISIONS.md — kept live rather
-      than frozen, a deliberate, reported choice). Double-tap-to-like on
-      comment rows, reusing the fully-existing `event_chat_message_reactions`
+      New "Top Speaker Requests" section (up to 3, FIFO-ordered at the
+      time — later superseded by real vote-based ranking the same day,
+      see immediately below — kept live rather than frozen, a
+      deliberate, reported choice). Double-tap-to-like on comment rows,
+      reusing the fully-existing `event_chat_message_reactions`
       schema/RLS/`addReaction` action verbatim — investigated first, no
       schema or backend expansion needed. Grabber-handle swipe-to-close,
       scoped to the handle only so list scrolling can never trigger a
       dismiss. See DECISIONS.md's matching entry for the full reasoning.
+      **Request voting + ranked Top 3 + weighted selection (issue #21,
+      Phase 1 of the audience voting loop, 2026-08-26, same branch)**:
+      first functional piece of "the audience decides who speaks next."
+      Request-to-Speak 👍 is now a real vote — one active vote per
+      viewer per event, transferable, toggle-off on re-tap (new
+      `speaker_request_votes` table, deliberately not a reuse of
+      ordinary comment likes — different exclusivity semantics). Top
+      Speaker Requests now ranks by real live vote count, not FIFO. When
+      a seat opens, the current pool freezes and one candidate is picked
+      by weighted-random selection among the vote-ranked Top 3 (fixed
+      rank weights `[3,2,1]` — the leader never exceeds 50% odds
+      regardless of vote-count magnitude), authoritatively server-side,
+      committed via the *existing* Going Live countdown (no second
+      winner/join system). A failed pick (withdrawal, this pass's only
+      practical failure signal) advances to the next unfailed candidate
+      in the same frozen pool; exhausting it returns the seat to normal
+      open/request state. A successful join resets the *entire*
+      candidate pool (bulk-expire every other pending request, clear
+      every vote) — runners-up don't stay queued, the former speaker can
+      request again immediately, no cooldown. Two new migrations
+      (00000000000019/20), 11 real-database integration tests + 13
+      weighted-selection boundary unit tests. **Not built this pass**:
+      60-second Continue/Replace protected blocks and the Vote control's
+      emphasis UI (Sections F–H) — explicitly phased out per the user's
+      own suggested split; see DECISIONS.md's matching entry, including
+      the flagged per-speaker-vs-per-pairing conflict resolution Phase 2
+      will need.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

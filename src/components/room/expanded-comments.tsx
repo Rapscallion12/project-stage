@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type PointerEvent as ReactPointerEvent } from "react";
 import { addReaction } from "@/app/events/[id]/lobby/actions";
+import { voteForSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
-import type { SpeakerRequest } from "@/lib/repositories/speaker-requests";
+import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 
 /** Two taps on the same row within this window count as a double-tap-to-like — long enough for a real double-tap, short enough not to pair up two unrelated taps. */
 const DOUBLE_TAP_MS = 350;
@@ -45,30 +46,33 @@ const TOP_REQUESTS_LIMIT = 3;
  * `messages` array for each request's own display content — never the
  * frozen `snapshot`.
  *
- * **Ranking signal for "Top 3" (documented per explicit instruction)**:
- * FIFO by `created_at`, oldest pending request first — see
- * `listPendingSpeakerRequests`' own doc comment for why (the one real
- * signal that exists, `rank_pending_speaker_requests`, is a
- * trusted-server-only reputation RPC already explicitly decided *not*
- * to be a public leaderboard when issue #23 built it). `topRequests`
- * below is computed as one isolated `.slice(0, 3)` on an already-ordered
- * array — a future pass can swap that ordering/selection (e.g. by a
- * like count once one exists) without touching how this component
- * renders a request row at all.
+ * **Ranking signal for "Top 3" (issue #21, Phase 2 update)**: real vote
+ * count, descending — `pendingRequests` arrives from
+ * `useActiveSpeakerRequests` already ranked this way (see that hook's
+ * own doc comment), so `topRequests` here is just an isolated
+ * `.slice(0, 3)` on an already-ordered array. Ranking previously used a
+ * FIFO placeholder before request voting existed; superseded, not
+ * layered on top of.
  *
- * **Double-tap-to-like, reusing what already exists**: `event_chat_message_reactions`
- * already has a public-select/self-insert RLS policy, a
- * `(message_id, emoji, identity)` uniqueness constraint (server-side
- * dedup for free), and is already in the Realtime publication —
- * `MessageItem` (the lobby's own message list) already reacts through
- * exactly this table via the existing `addReaction` action. Nothing new
- * was added to the schema or the action; `CommentRow` below just adds a
- * double-tap gesture that calls the same `addReaction(messageId)`.
- * Local per-row `lastTapRef`/optimistic-`liked` state (same shape as
- * `MessageItem`'s own reaction handling) — consuming the tap pair after
- * a detected double-tap (resetting the ref) is what stops a fast
- * triple/quadruple tap from re-firing; the server's own unique
- * constraint is a second, independent guard even if it somehow did.
+ * **Double-tap gesture, two different meanings depending on the row**:
+ * an ordinary comment's 👍 (reusing `event_chat_message_reactions` /
+ * `addReaction` verbatim, exactly as before — nothing changed there) vs.
+ * a Request-to-Speak comment's 👍, which is now a *vote*
+ * (`voteForSpeakerRequest`, migration 00000000000019) — exclusive across
+ * all active requests, transferable, toggle-off on re-tap. `CommentRow`
+ * tells the two apart via whether `requestVote` was resolved for that
+ * message (a lookup against the live `pendingRequests`, independent of
+ * whether the row itself is being rendered from the frozen `snapshot` or
+ * the live Top Speaker Requests section) — never by guessing from
+ * `is_speaker_request` alone, since a request that's already resolved
+ * (granted/withdrawn/expired) is no longer voteable and correctly falls
+ * back to having no `requestVote` at all. Local per-row
+ * `lastTapRef`/optimistic-`liked` state (same shape as `MessageItem`'s
+ * own reaction handling) for the ordinary-like path — consuming the tap
+ * pair after a detected double-tap (resetting the ref) is what stops a
+ * fast triple/quadruple tap from re-firing either interaction; the
+ * server's own unique constraints are a second, independent guard
+ * either way.
  *
  * **Grabber drag-to-close**: pointer handlers are attached to the
  * handle/header region only (`handleDragProps` below), never to
@@ -112,7 +116,7 @@ export function ExpandedComments({
   eventId: string;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
-  pendingRequests: SpeakerRequest[];
+  pendingRequests: RankedPendingRequest[];
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
@@ -151,9 +155,23 @@ export function ExpandedComments({
   const topRequests = useMemo(() => {
     const withContent = pendingRequests
       .map((request) => ({ request, message: messages.find((m) => m.id === request.message_id) }))
-      .filter((entry): entry is { request: SpeakerRequest; message: LobbyMessage } => entry.message !== undefined);
+      .filter(
+        (entry): entry is { request: RankedPendingRequest; message: LobbyMessage } => entry.message !== undefined,
+      );
     return withContent.slice(0, TOP_REQUESTS_LIMIT);
   }, [pendingRequests, messages]);
+
+  // Message id -> live request vote info, for both sections — a request
+  // row (Top Speaker Requests or one that happens to appear in Recent
+  // Comments) is voteable exactly when its message still has an active
+  // pending request; once resolved, it correctly has no entry here and
+  // CommentRow falls back to no vote affordance at all (not an ordinary
+  // like — see this component's own doc comment).
+  const voteByMessageId = useMemo(() => {
+    const map = new Map<string, RankedPendingRequest>();
+    for (const request of pendingRequests) map.set(request.message_id, request);
+    return map;
+  }, [pendingRequests]);
 
   // --- Grabber drag-to-close (handle/header region only — see doc comment) ---
   const [dragY, setDragY] = useState(0);
@@ -187,6 +205,10 @@ export function ExpandedComments({
 
   function handleLike(messageId: string) {
     void addReaction(messageId);
+  }
+
+  function handleVote(messageId: string) {
+    void voteForSpeakerRequest(eventId, messageId);
   }
 
   if (!open) return null;
@@ -235,7 +257,9 @@ export function ExpandedComments({
                   key={message.id}
                   message={message}
                   reaction={reactions[message.id]}
+                  requestVote={voteByMessageId.get(message.id)}
                   onLike={handleLike}
+                  onVote={handleVote}
                   testId="expanded-top-request-row"
                 />
               ))}
@@ -265,7 +289,9 @@ export function ExpandedComments({
               key={message.id}
               message={message}
               reaction={reactions[message.id]}
+              requestVote={voteByMessageId.get(message.id)}
               onLike={handleLike}
+              onVote={handleVote}
               testId="expanded-comment-row"
             />
           ))
@@ -294,12 +320,17 @@ export function ExpandedComments({
 function CommentRow({
   message,
   reaction,
+  requestVote,
   onLike,
+  onVote,
   testId,
 }: {
   message: LobbyMessage;
   reaction: ReactionState | undefined;
+  /** Present exactly when this message's request is still active/voteable — see voteByMessageId's own comment for why this, not is_speaker_request, is the source of truth. */
+  requestVote: RankedPendingRequest | undefined;
   onLike: (messageId: string) => void;
+  onVote: (messageId: string) => void;
   testId: string;
 }) {
   const [, startTransition] = useTransition();
@@ -323,12 +354,28 @@ function CommentRow({
       return;
     }
     // Consume the pair so a fast triple/quadruple tap can't re-fire —
-    // the server's own unique constraint is a second, independent guard.
+    // the server's own unique constraints are a second, independent
+    // guard either way.
     lastTapRef.current = 0;
-    if (liked) return;
-    setOptimisticallyLiked(true);
     setJustLiked(true);
     setTimeout(() => setJustLiked(false), 400);
+
+    if (requestVote) {
+      // Vote path: always fires — transfer, fresh vote, or toggle-off
+      // are all valid outcomes the server decides; no optimistic local
+      // override here since the live vote count/isMyVote already comes
+      // back over the same Realtime pipe within about as long as an
+      // optimistic guess would need reconciling anyway.
+      startTransition(() => {
+        onVote(message.id);
+      });
+      return;
+    }
+
+    // Ordinary like path: idempotent guard against re-liking (this
+    // project's comment likes don't toggle off on re-tap, unlike votes).
+    if (liked) return;
+    setOptimisticallyLiked(true);
     startTransition(() => {
       onLike(message.id);
     });
@@ -355,13 +402,25 @@ function CommentRow({
       </div>
       <div className="flex items-end justify-between gap-2">
         <p className="break-words text-sm text-white/80">{message.body}</p>
-        {(liked || count > 0) && (
-          <span
-            data-testid="expanded-comment-like"
-            className={`shrink-0 text-xs ${liked ? "text-accent" : "text-white/40"}`}
-          >
-            👍{count > 0 ? ` ${count}` : ""}
-          </span>
+        {requestVote ? (
+          (requestVote.isMyVote || requestVote.voteCount > 0) && (
+            <span
+              data-testid="expanded-comment-vote"
+              className={`shrink-0 text-xs ${requestVote.isMyVote ? "font-medium text-accent" : "text-white/40"}`}
+              title={requestVote.isMyVote ? "Your vote" : undefined}
+            >
+              {requestVote.isMyVote ? "✓ " : ""}👍{requestVote.voteCount > 0 ? ` ${requestVote.voteCount}` : ""}
+            </span>
+          )
+        ) : (
+          (liked || count > 0) && (
+            <span
+              data-testid="expanded-comment-like"
+              className={`shrink-0 text-xs ${liked ? "text-accent" : "text-white/40"}`}
+            >
+              👍{count > 0 ? ` ${count}` : ""}
+            </span>
+          )
         )}
       </div>
     </div>

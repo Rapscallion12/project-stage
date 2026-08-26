@@ -1,35 +1,4 @@
-import type { EventSpeaker, SeatIdentity } from "@/lib/repositories/event-speakers";
-import type { RankedSpeakerRequest } from "@/lib/repositories/speaker-requests";
-
-/**
- * How many top-ranked pending requests are eligible to self-claim an open
- * seat — not strictly rank 1. This is an explicit **MVP selection
- * policy, not a permanent product rule**.
- *
- * A strict "only rank 1 may claim" rule has a real failure mode: an
- * absent top-ranked requester would block the seat forever — there's no
- * background-job infrastructure in this serverless setup to expire or
- * skip them. Widening eligibility to the top few, with
- * `claim_speaker_seat`'s own existing race-safety (issue #13) as the
- * tiebreak if more than one eligible requester claims at once, solves
- * that without adding any new infrastructure (no expiry timers, no
- * presence tracking).
- *
- * This is not meant to make "who becomes the next speaker" a
- * click-speed competition by product intent — only by current
- * implementation. The durable concepts this stands in for: audience
- * support determines which requests rise (already true — ranking is
- * reaction-count-driven, see `rank_pending_speaker_requests`), only
- * sufficiently elevated requests become eligible (already true — this
- * constant), and the final promotion mechanism among eligible requests
- * may evolve into something more deliberately audience-driven than
- * "first click wins." See DECISIONS.md.
- */
-export const TOP_ELIGIBLE_COUNT = 3;
-
-export function isEligibleToClaim(rank: number): boolean {
-  return rank <= TOP_ELIGIBLE_COUNT;
-}
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 /**
  * The lowest-numbered currently-unoccupied seat, or `null` if both are
@@ -48,23 +17,33 @@ export type ClaimDecision =
   | { eligible: false; reason: "no-request" | "no-open-seat" | "not-eligible" };
 
 /**
- * The actual authorization decision behind `claimOpenSeat` (the Server
- * Action in room/actions.ts) — extracted as a pure function, over
- * already-fetched data, so it's unit-testable without a live LiveKit/DB
- * fixture or a Next.js request context (the action itself can't be
- * called directly in a test the way this can, since `resolveIdentity()`
- * needs `next/headers`' `cookies()`). Same reasoning as
+ * Issue #21, Phase 1: the actual authorization decision behind
+ * `claimOpenSeat` — extracted as a pure function, same reasoning as
  * `determineCanPublish`/`shouldPublish`/`applySpeakerChange` elsewhere in
- * this codebase: keep the decision pure, keep the I/O in a thin wrapper.
+ * this codebase (keep the decision pure, keep the I/O in a thin
+ * wrapper). Testable without a live DB fixture or Next.js request
+ * context.
+ *
+ * **Replaces the earlier "top-3 self-claim race" model outright**
+ * (see this file's git history and DECISIONS.md): that design's own doc
+ * comment already called it a placeholder — "not meant to make this a
+ * click-speed competition by product intent... may evolve into
+ * something more deliberately audience-driven." It now reads one
+ * already-computed fact instead of re-deriving eligibility from a
+ * ranking: whether the caller's own pending request is the *currently
+ * selected* candidate of an active weighted-random selection round (see
+ * `lib/speaker-selection.ts` for how that pick is made, and
+ * `resolveClaimDecision` in room/actions.ts for how the round itself
+ * gets created/ensured before this runs). No identity-matching against a
+ * ranked list is needed here anymore — the caller already fetched their
+ * *own* request row.
  */
 export function decideClaimEligibility(params: {
-  /** Issue #16: either identity shape — a guest's own requests are matched by guest_id, never profile_id. */
-  identity: SeatIdentity;
-  hasPendingRequest: boolean;
+  /** The caller's own pending request row, or null if they have none. Only `is_current_candidate` is read — the caller already scoped this to their own identity. */
+  myPendingRequest: { is_current_candidate: boolean } | null;
   activeSpeakers: Pick<EventSpeaker, "seat_number">[];
-  rankedRequests: Pick<RankedSpeakerRequest, "profile_id" | "guest_id" | "rank">[];
 }): ClaimDecision {
-  if (!params.hasPendingRequest) {
+  if (!params.myPendingRequest) {
     return { eligible: false, reason: "no-request" };
   }
 
@@ -73,10 +52,7 @@ export function decideClaimEligibility(params: {
     return { eligible: false, reason: "no-open-seat" };
   }
 
-  const myEntry = params.rankedRequests.find((r) =>
-    params.identity.type === "profile" ? r.profile_id === params.identity.id : r.guest_id === params.identity.id,
-  );
-  if (!myEntry || !isEligibleToClaim(myEntry.rank)) {
+  if (!params.myPendingRequest.is_current_candidate) {
     return { eligible: false, reason: "not-eligible" };
   }
 
