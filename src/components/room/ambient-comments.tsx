@@ -46,13 +46,19 @@ type VisibleEntry = { message: LobbyMessage };
  * ancestor) — this component itself has no opinion on where it sits,
  * only what it shows and for how long.
  *
- * **Future click-target seam (issue #21, Discussion Expanded, not built
- * yet)**: each bubble carries `data-message-id` so a later phase can
- * attach a tap handler to an existing, already-identifiable DOM node —
- * deliberately no `onClick`/`onCommentSelect` prop yet; adding one only
- * needs this attribute, not a rewrite of how bubbles render.
+ * **Discussion Expanded's tap target, now wired**: `onExpand`, when
+ * provided, is called on tap of any bubble — this is the seam the doc
+ * comment above used to describe as "not built yet." Each bubble already
+ * carried `data-message-id` for exactly this; no rewrite of how bubbles
+ * render was needed, only this one prop and its `onClick`.
  */
-export function AmbientComments({ messages }: { messages: LobbyMessage[] }) {
+export function AmbientComments({
+  messages,
+  onExpand,
+}: {
+  messages: LobbyMessage[];
+  onExpand?: () => void;
+}) {
   const [visible, setVisible] = useState<VisibleEntry[]>([]);
   const shownIds = useRef(new Set<string>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -98,16 +104,17 @@ export function AmbientComments({ messages }: { messages: LobbyMessage[] }) {
   return (
     <div data-testid="ambient-comments" className="flex flex-col gap-1.5">
       {visible.map(({ message }) => (
-        <div
+        <button
           key={message.id}
+          type="button"
           data-testid="ambient-comment"
           data-message-id={message.id}
-          // pointer-events-auto even though nothing listens yet — see
-          // this component's own doc comment on the future click-target
-          // seam. The caller wraps this whole component in a
-          // pointer-events-none margin, same click-through pattern used
-          // everywhere else in this room; each bubble opts back in.
-          className="animate-[ambient-comment-fade_7s_ease-out_forwards] pointer-events-auto max-w-[220px] truncate rounded-full px-3 py-1.5 text-xs text-white"
+          onClick={onExpand}
+          // pointer-events-auto so a tap actually reaches this button —
+          // the caller wraps the whole component in a pointer-events-none
+          // margin, same click-through pattern used everywhere else in
+          // this room; each bubble opts back in.
+          className="animate-[ambient-comment-fade_7s_ease-out_forwards] pointer-events-auto max-w-[220px] truncate rounded-full px-3 py-1.5 text-left text-xs text-white"
           style={{
             backgroundColor: message.is_speaker_request ? "rgb(251 146 60 / 0.22)" : "rgb(0 0 0 / 0.32)",
             border: message.is_speaker_request ? "1px solid rgb(251 146 60 / 0.5)" : undefined,
@@ -121,7 +128,7 @@ export function AmbientComments({ messages }: { messages: LobbyMessage[] }) {
           <span className="font-medium">{message.author_display_name}</span>
           {": "}
           {message.body}
-        </div>
+        </button>
       ))}
     </div>
   );

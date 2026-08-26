@@ -5,6 +5,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
@@ -327,6 +328,59 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       render(<PortraitSpeakerView {...baseProps} needsMediaActivation={true} activateMedia={activateMedia} />);
       screen.getByTestId("speaker-view-activate-media").click();
       expect(activateMedia).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Discussion Expanded (issue #21) — Speaker View compatibility", () => {
+    function message(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
+      return {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+        ...overrides,
+      };
+    }
+
+    it("tapping an ambient comment bubble opens the sheet for a seated speaker too", () => {
+      render(<PortraitSpeakerView {...baseProps} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
+
+    it("opening and closing it never changes role, mic/camera, or LiveKit-adjacent state — no callback passed through this view fires", () => {
+      const activateMedia = vi.fn(async () => {});
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      const onPrepareMedia = vi.fn(async () => {});
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message()]}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+          onPrepareMedia={onPrepareMedia}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+      expect(onPrepareMedia).not.toHaveBeenCalled();
+    });
+
+    it("Speaker View's expanded composer never offers a mic-request affordance — the seat is already held", () => {
+      render(<PortraitSpeakerView {...baseProps} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
     });
   });
 });

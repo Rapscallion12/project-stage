@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
+import { ExpandedComments } from "@/components/room/expanded-comments";
 import { CountdownOverlay } from "@/components/room/countdown-overlay";
 import { PortraitSpeakerView } from "@/components/room/portrait-speaker-view";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
@@ -41,14 +43,21 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * `useAutomaticPromotion`/`withdrawSpeakerRequest`/
  * `useRoleTransitionReset`, not here — see DECISIONS.md.
  *
+ * **Discussion Expanded** (issue #21, "05d"): tapping an ambient comment
+ * bubble opens `ExpandedComments`, a tap-open bottom sheet for
+ * intentionally browsing the live comment stream. Deliberately *not*
+ * wired to the composer's own focus/tap — an earlier version of this
+ * feature tried that and it broke the already-approved "tap the
+ * composer, type, send" flow (every composer tap opened the full sheet
+ * first). `commentsOpen` is plain local state here, never lifted to
+ * `EventRoom`, so it has no causal path to role/seat/media state at all.
+ * See `ExpandedComments`' own doc comment.
+ *
  * **What still doesn't exist yet** (later phases, each gated on the
  * user's own real-device approval of the previous one):
- * - There is no way to *read* comments or open a discussion surface
- *   yet (Discussion Expanded is Phase 4) — only sending is live.
- * - No ambient comment/reaction layers yet (Phases 3, 5, 6).
+ * - No ambient comment/reaction layers yet (Phases 5, 6).
  * - React/Vote/Gift emblems are still inert (Phases 5/6, 7).
- * - Desktop and mobile landscape are untouched — this file only
- *   affects `PortraitRoom`.
+ * - Desktop is untouched (it already has a persistent chat sidebar).
  *
  * **Minimal top chrome**: a small translucent status pill (live dot +
  * room title, appending a connection-status word only when it's not
@@ -94,6 +103,13 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * and doesn't include yet.
  */
 export function PortraitRoom(props: RoomLayoutProps) {
+  // Issue #21: must be called before the role-router's early return below
+  // — React's rules of hooks require every hook to run unconditionally on
+  // every render, regardless of which composition ultimately renders.
+  // Unused if participantRole is "speaker" (PortraitSpeakerView owns its
+  // own instance instead), but still has to be called here.
+  const [commentsOpen, setCommentsOpen] = useState(false);
+
   // Issue #18, Speaker View Phase 1 — see this component's own doc
   // comment above. Checked before any of this component's own
   // destructuring/JSX, so a seated speaker never sees so much as a
@@ -218,7 +234,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
       ) : (
         <>
           <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
-            <AmbientComments messages={messages} />
+            <AmbientComments messages={messages} onExpand={() => setCommentsOpen(true)} />
           </div>
 
           <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
@@ -266,6 +282,19 @@ export function PortraitRoom(props: RoomLayoutProps) {
               }
             />
           </StageOverlayShell>
+
+          <ExpandedComments
+            open={commentsOpen}
+            onClose={() => setCommentsOpen(false)}
+            eventId={event.id}
+            messages={messages}
+            micRequestMode={micRequestMode}
+            onMicRequestModeChange={onMicRequestModeChange}
+            onHasPendingRequestChange={onHasPendingRequestChange}
+            onPrepareMedia={onPrepareMedia}
+            hasPendingRequest={!isSpeaker && hasPendingRequest}
+            onCancelPendingRequest={onCancelPromotion}
+          />
         </>
       )}
     </div>

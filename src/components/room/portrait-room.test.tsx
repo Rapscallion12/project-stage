@@ -4,6 +4,7 @@ import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
   vi.hoisted(() => ({
@@ -432,6 +433,56 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       );
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(onCancelPromotion).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Discussion Expanded (issue #21) — audience compatibility", () => {
+    function message(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
+      return {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+        ...overrides,
+      };
+    }
+
+    it("is closed by default", () => {
+      render(<PortraitRoom {...baseProps} messages={[message()]} />);
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+    });
+
+    it("tapping an ambient comment bubble opens the sheet", () => {
+      render(<PortraitRoom {...baseProps} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
+
+    it("closing the sheet returns to the ordinary Watch Mode view, with no role/media/seat side effects", () => {
+      const onTapEmptySeat = vi.fn();
+      const activateMedia = vi.fn(async () => {});
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitRoom
+          {...baseProps}
+          messages={[message()]}
+          onTapEmptySeat={onTapEmptySeat}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
     });
   });
 });

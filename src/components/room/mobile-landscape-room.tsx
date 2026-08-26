@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
+import { ExpandedComments } from "@/components/room/expanded-comments";
 import { CountdownOverlay } from "@/components/room/countdown-overlay";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { MobileLandscapeSpeakerView } from "@/components/room/mobile-landscape-speaker-view";
@@ -70,6 +72,12 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * concern left to satisfy here — the role check can sit at the very top.
  */
 export function MobileLandscapeRoom(props: RoomLayoutProps) {
+  // Issue #21: must run before the role-router's early return below —
+  // React's rules of hooks require every hook to run unconditionally on
+  // every render. Unused if participantRole is "speaker"
+  // (MobileLandscapeSpeakerView owns its own instance instead).
+  const [commentsOpen, setCommentsOpen] = useState(false);
+
   // Issue #18 consistency fix: keys off `participantRole`, the one
   // derived value both this composition choice and the bottom control
   // row are meant to share — see lib/participant-role.ts.
@@ -139,7 +147,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
       ) : (
         <>
           <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
-            <AmbientComments messages={messages} />
+            <AmbientComments messages={messages} onExpand={() => setCommentsOpen(true)} />
           </div>
 
           <StageOverlayShell
@@ -169,6 +177,19 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
               }
             />
           </StageOverlayShell>
+
+          <ExpandedComments
+            open={commentsOpen}
+            onClose={() => setCommentsOpen(false)}
+            eventId={event.id}
+            messages={messages}
+            micRequestMode={micRequestMode}
+            onMicRequestModeChange={onMicRequestModeChange}
+            onHasPendingRequestChange={onHasPendingRequestChange}
+            onPrepareMedia={onPrepareMedia}
+            hasPendingRequest={!isSpeaker && hasPendingRequest}
+            onCancelPendingRequest={onCancelPromotion}
+          />
         </>
       )}
     </div>

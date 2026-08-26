@@ -5,6 +5,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
@@ -272,6 +273,34 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       );
       screen.getByTestId("speaker-view-activate-media").click();
       expect(activateMedia).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Discussion Expanded (issue #21) — landscape Speaker View compatibility", () => {
+    it("tapping an ambient comment bubble opens the sheet, with no media/role side effects", () => {
+      const message: LobbyMessage = {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      };
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          messages={[message]}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AmbientComments } from "./ambient-comments";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
@@ -48,11 +48,22 @@ describe("AmbientComments (issue #21, '05 — Social Stage' Phase 3)", () => {
     expect(screen.getByTitle("Requested the mic")).toBeInTheDocument();
   });
 
-  it("carries a stable data-message-id per bubble — the future Discussion Expanded click-target seam, no click handler yet", () => {
+  it("carries a stable data-message-id per bubble — the Discussion Expanded click-target seam", () => {
     render(<AmbientComments messages={[makeMessage({ id: "abc123" })]} />);
     const bubble = screen.getByTestId("ambient-comment");
     expect(bubble).toHaveAttribute("data-message-id", "abc123");
-    expect(bubble.onclick).toBeNull();
+  });
+
+  it("does not throw when tapped without an onExpand handler (every existing caller before issue #21's Discussion Expanded)", () => {
+    render(<AmbientComments messages={[makeMessage({ id: "m1" })]} />);
+    expect(() => fireEvent.click(screen.getByTestId("ambient-comment"))).not.toThrow();
+  });
+
+  it("calls onExpand when a bubble is tapped — the Discussion Expanded entry point", () => {
+    const onExpand = vi.fn();
+    render(<AmbientComments messages={[makeMessage({ id: "m1" })]} onExpand={onExpand} />);
+    fireEvent.click(screen.getByTestId("ambient-comment"));
+    expect(onExpand).toHaveBeenCalledTimes(1);
   });
 
   it("never shows more than 3 at once — a burst evicts the oldest immediately rather than stacking the feed taller", () => {

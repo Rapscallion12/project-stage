@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { SpeakerMediaActivationPrompt } from "@/components/room/speaker-media-activation-prompt";
@@ -6,6 +7,7 @@ import { SpeakerMediaToggles } from "@/components/room/speaker-media-toggles";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
+import { ExpandedComments } from "@/components/room/expanded-comments";
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import type { RoomLayoutProps } from "@/components/room/types";
 
@@ -79,6 +81,13 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * `renderTile()` used for the ordinary two-tile layout, which already
  * renders the existing "Seat open" placeholder when that seat has no
  * occupant. No separate "waiting for a partner" UI.
+ *
+ * **Discussion Expanded works here too** (issue #21): the same
+ * `ExpandedComments` sheet `PortraitRoom` uses, with `commentsOpen` as
+ * this component's own local state — a seated speaker can browse
+ * comments exactly like an audience member, and opening/closing it never
+ * touches `isSpeaker`, `canPublish`, mic/camera, or LiveKit at all (it
+ * has no reference to any of them).
  */
 export function PortraitSpeakerView({
   event,
@@ -105,6 +114,8 @@ export function PortraitSpeakerView({
   toggleMicrophone,
   toggleCamera,
 }: RoomLayoutProps) {
+  const [commentsOpen, setCommentsOpen] = useState(false);
+
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
       <SpeakerStage
@@ -135,7 +146,7 @@ export function PortraitSpeakerView({
       />
 
       <div className="pointer-events-none absolute bottom-32 left-3 z-10 max-w-[70%]">
-        <AmbientComments messages={messages} />
+        <AmbientComments messages={messages} onExpand={() => setCommentsOpen(true)} />
       </div>
 
       <StageOverlayShell
@@ -169,6 +180,18 @@ export function PortraitSpeakerView({
           }
         />
       </StageOverlayShell>
+
+      <ExpandedComments
+        open={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        eventId={event.id}
+        messages={messages}
+        micRequestMode={false}
+        onMicRequestModeChange={() => {}}
+        onHasPendingRequestChange={() => {}}
+        onPrepareMedia={onPrepareMedia}
+        allowMicRequest={false}
+      />
     </div>
   );
 }

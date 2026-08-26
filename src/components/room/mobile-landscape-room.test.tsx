@@ -4,6 +4,7 @@ import { MobileLandscapeRoom } from "./mobile-landscape-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction } = vi.hoisted(
   () => ({
@@ -354,6 +355,23 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(() =>
         rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={false} mySeatNumber={null} participantRole="audience" />),
       ).not.toThrow();
+    });
+  });
+
+  describe("Discussion Expanded (issue #21) — landscape audience compatibility", () => {
+    it("tapping an ambient comment bubble opens the sheet", () => {
+      const message: LobbyMessage = {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      };
+      render(<MobileLandscapeRoom {...baseProps} messages={[message]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
     });
   });
 });

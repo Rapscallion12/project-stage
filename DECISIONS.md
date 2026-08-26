@@ -3,6 +3,65 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-26 — Discussion Expanded (issue #21): opened from the ambient bubble, not the composer
+
+**Context**: post-public-beta continuation of #21 — an intentional,
+tap-opened surface for browsing the live comment stream, without
+replacing Watch Mode's ambient default. Two candidate entry points
+existed, both reusable without new permanent UI: the ambient comment
+bubbles (already carrying a `data-message-id` seam explicitly left for
+this since Phase 3) and the compact composer's own input.
+
+**What happened**: I implemented the composer-focus trigger first (tap
+the "Add a comment…" input outside mic-request mode → open the sheet,
+blur the underlying input). Running the existing, already real-device-
+approved test suite immediately surfaced the problem: tests like
+"sending a comment calls the existing sendMessage action" now opened
+the full sheet before the send even happened, because focusing the
+composer is exactly what those tests (and normal usage) do to type a
+quick comment. That's a real regression, not a test-assumption
+mismatch — it silently turns "tap, type, send" (approved, tested
+behavior) into "tap, wait for a 70vh sheet, then type, send."
+
+**Decision**: reverted the composer-focus trigger entirely. The sole
+entry point for this pass is tapping an ambient comment bubble — the
+seam that was purpose-built for exactly this. `ChatPanel`'s compact
+composer is untouched; no new prop, no behavior change for any existing
+caller.
+
+**Tradeoff, accepted**: a viewer can't open the sheet while zero ambient
+bubbles are currently visible (a silent room, or between a burst's 7s
+fade cycles). Judged acceptable for a narrow first pass — a silent room
+also has nothing new to browse — and easy to extend later (a small
+dedicated affordance) if real-device review finds this actually matters
+for discoverability.
+
+**Other decisions this pass**:
+- **No drag-to-resize on the sheet.** This project already tried and
+  retired gesture-driven reveal twice (the original dead-zone drag
+  design, then Watch Mode/Comments Mode). A fixed-height, tap-open/
+  tap-close sheet stays consistent with that established direction —
+  "obvious close/collapse button" is satisfied by an actual button.
+- **`commentsOpen` stays local state in each room composition**, never
+  lifted to `EventRoom`. This is the deliberate way to satisfy "must not
+  recreate issue #18's role-synchronization problems": rather than
+  carefully avoiding a causal path from this feature to role/seat/media
+  state, it has *no* causal path at all — it never reads or writes any
+  of that state.
+- **Replies deferred, per instruction, after checking first**:
+  `event_chat_messages` has no self-referencing column in any migration
+  or in `database.ts` — real migration + RLS + query work, not a small
+  additive change. The new comment list renders a flat array keyed by
+  `message.id`, structured so a future `repliesByParentId` grouping can
+  be added without restructuring the component.
+- **Desktop untouched** — it already has a persistent, non-overlay chat
+  sidebar (`RoomChatPanel`), a fundamentally different, already-approved
+  pattern; explicitly out of scope per instruction.
+
+**Rollback**: work happened on `feature/expanded-comments`, branched
+from `main` at `public-beta-v1-stable` (`cc76a45`) — `main`/production
+untouched by this pass.
+
 ## 2026-08-26 — First production release (public-beta-v1)
 
 **Context**: `feature/social-stage-shell` HEAD (`c647cf6`) passed the

@@ -662,6 +662,33 @@ different dependencies. Current order:
       done and shipped in public-beta-v1. The outer checkbox above stays
       unchecked because it belongs to #21's still-open mega-entry, not to
       this sub-item.
+      **Discussion Expanded built (issue #21, 2026-08-26, on
+      `feature/expanded-comments` — post-public-beta, not yet merged to
+      `main`)**: a tap-opened bottom sheet (`ExpandedComments`) for
+      intentionally browsing the live comment stream, without turning
+      the default room into a conventional chat screen. Opened only from
+      an ambient comment bubble's tap — the `data-message-id` seam
+      `AmbientComments` carried since Phase 3 specifically for this;
+      an earlier version tried opening from the composer's own
+      focus/tap instead and that broke the already-approved "tap,
+      type, send" flow, so it was reverted. Live-follow vs.
+      reading-history: auto-scrolls while at/near the newest comment;
+      scrolling up preserves position and shows a "new comments · jump
+      to latest" indicator instead of yanking back down; scrolling back
+      near the bottom (or tapping the indicator) resumes following.
+      Reuses the same `messages`/`ChatPanel` compact composer every
+      collapsed composition already has — no new backend, no duplicated
+      send path. `commentsOpen` is local `useState` in each of the four
+      room compositions (portrait/landscape × audience/speaker), never
+      lifted to `EventRoom` — no causal path to role/seat/media state at
+      all. Schema checked for one-level replies first, per instruction:
+      `event_chat_messages` has no self-referencing column anywhere in
+      the migrations or `database.ts` — real migration work, not a small
+      additive change — so replies are deliberately deferred; the
+      comment list is structured (flat, keyed by `message.id`) so a
+      future `repliesByParentId` grouping can slot in without a
+      rewrite. Desktop untouched (existing persistent sidebar, out of
+      scope per instruction). See DECISIONS.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

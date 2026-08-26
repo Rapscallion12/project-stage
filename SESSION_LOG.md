@@ -4,6 +4,42 @@ Newest entry first.
 
 ---
 
+## 2026-08-26 — Session 33: Discussion Expanded (issue #21), post-public-beta
+
+**Goal**: continue #21 on a feature branch after the public-beta-v1
+release — an intentional, tap-opened surface for browsing the live
+comment stream without permanently covering the stage or turning the
+default mobile room into a conventional chat screen.
+
+**Inspection first, per instruction**: checked `event_chat_messages`
+(no self-referencing column anywhere in migrations or `database.ts`) —
+one-level replies would need real migration/RLS/query work, not a small
+additive change, so deferred; the new comment list is still structured
+(flat, keyed by `message.id`) so a future `repliesByParentId` grouping
+can slot in later.
+
+**Built**: `ExpandedComments`, a tap-open bottom sheet — stage visible
+above, independent scroll, its own composer instance reusing the exact
+`ChatPanel`/`sendMessage`/`submitSpeakerRequest` path every collapsed
+composition already has. Live-follow vs. reading-history: auto-scrolls
+while at/near the newest comment; scrolling up preserves position and
+shows a "new comments · jump to latest" indicator; scrolling back near
+the bottom resumes following automatically. Opened from an ambient
+comment bubble's tap (the `data-message-id` seam left for exactly this
+since Phase 3) — a composer-focus trigger was tried first and reverted
+after it broke the already-approved "tap, type, send" flow (see
+DECISIONS.md). Wired into all four room compositions (portrait/
+landscape × audience/speaker); desktop untouched (already has a
+persistent sidebar). `commentsOpen` is local state per composition,
+never lifted to `EventRoom` — no causal path to role/seat/media state,
+so it can't recreate issue #18's synchronization bugs.
+
+**Verification**: lint/tsc/full suite (681/681, 57 files, +30 new
+tests) /build all clean. Fresh feature-branch preview deployed for
+real-device review — not merged to `main`, production untouched.
+
+---
+
 ## 2026-08-26 — Session 32: Production release — public-beta-v1
 
 **Goal**: the user confirmed real-device testing of
