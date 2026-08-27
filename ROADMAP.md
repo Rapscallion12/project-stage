@@ -773,6 +773,16 @@ different dependencies. Current order:
       tests for the decision logic, resolution hook, countdown display,
       vote panel, and simulator gating/actions/panel. See DECISIONS.md's
       matching entry.
+      **Simulator UI real-device follow-up (2026-08-27, same branch)**:
+      the panel was too large on a phone, covering most of the app.
+      Added a minimize control (collapses to a small "SIM" pill without
+      stopping the simulation running behind it), shrank the expanded
+      panel to a `dvh`-based max-height with internal scroll and
+      safe-area-aware positioning, and made it draggable by its header
+      (Pointer Events, touch and mouse alike) clamped so it can never go
+      fully offscreen and re-clamped on resize/orientation/collapse.
+      Presentation-only — no change to simulation behavior, voting,
+      round logic, or any production code path. See DECISIONS.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

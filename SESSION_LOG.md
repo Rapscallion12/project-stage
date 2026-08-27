@@ -4,6 +4,52 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 37: Session Simulator UI — compact, collapsible, draggable (issue #21, real-device follow-up)
+
+**Goal**: real-device testing of Session 36's work surfaced that the
+simulator panel was too large on a phone, covering most of the actual
+app and getting in the way of testing the room itself. Scoped
+explicitly and narrowly: fix the simulator's presentation only — no
+change to simulation behavior, voting logic, speaker-round logic,
+comments, candidate selection, or any production code path.
+
+**Implemented**: a minimize control (header `−` button) collapses the
+panel to a small floating "SIM" pill (with a "•" dot while a simulation
+is running, so it's clear at a glance whether one is active without
+reopening); tapping the pill restores the full panel. Collapsing does
+not stop the simulation — the running/audience/timer state lives outside
+the collapsed/expanded render branch entirely, so generated comments,
+votes, and requests keep arriving in the background exactly as before.
+The expanded panel shrank from `70vh`/`w-80` to `min(55dvh,26rem)`/`w-64`
+with an internally scrollable, `overscroll-contain`ed content region
+(so scrolling the panel's log never chains into scrolling the room
+behind it) and `env(safe-area-inset-*)`-aware positioning/padding so it
+never sits under Safari's home-indicator area. The panel is now
+draggable by its header using Pointer Events (works identically for
+touch and mouse, no separate handlers), clamped to the visible viewport
+on every move and re-clamped on resize/orientation change/collapse-
+toggle so it can never be dragged or stranded fully offscreen.
+
+**Verification**: 10 new component tests (minimize/restore, active dot
+only while running, collapsing doesn't halt background activity under
+fake timers, state survives collapse→expand, dragging repositions via
+inline styles, drag is clamped at both extremes, minimize button doesn't
+trigger a drag, orientation change re-clamps an existing position) plus
+all 12 existing panel tests still passing unmodified — confirming no
+behavior change to any deterministic/realistic-mode button. One
+test-environment gap found (jsdom doesn't implement Pointer Capture
+methods) and fixed with a defensive `typeof` guard in the component
+itself, not papered over in the test. Full suite 829/829 (70 files),
+lint, tsc, build all clean. No schema/migration changes this pass.
+
+**Not built this pass**: dragging support on the collapsed pill itself
+(only the expanded panel's header is a drag handle, per "do not overbuild
+this"); an accelerated-timing simulator mode (still out of scope, not
+requested here either). Fresh preview deployed; stopping here for the
+user's review per explicit instruction — not merged to main.
+
+---
+
 ## 2026-08-26 — Session 36: Per-speaker Continue/Replace rounds + preview-only Session Simulator (issue #21, Phase 2)
 
 **Goal**: build the first real Continue/Replace round system (Sections

@@ -218,4 +218,149 @@ describe("SessionSimulatorPanel (issue #21, Part 5)", () => {
     expect(status).toHaveTextContent("round #3");
     expect(status).toHaveTextContent("active");
   });
+
+  describe("collapse/minimize (real-device follow-up — must not obstruct the app or the simulation)", () => {
+    it("minimizing hides the expanded panel and shows only the compact SIM control", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-minimize"));
+      expect(screen.queryByTestId("sim-header")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("sim-start")).not.toBeInTheDocument();
+      expect(screen.getByTestId("sim-collapsed-toggle")).toBeInTheDocument();
+    });
+
+    it("tapping SIM restores the expanded panel", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-minimize"));
+      fireEvent.click(screen.getByTestId("sim-collapsed-toggle"));
+      expect(screen.getByTestId("sim-header")).toBeInTheDocument();
+      expect(screen.getByTestId("sim-start")).toBeInTheDocument();
+    });
+
+    it("the collapsed SIM control shows an active dot only while the simulation is running", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-minimize"));
+      expect(screen.queryByTestId("sim-collapsed-active-dot")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("sim-collapsed-toggle"));
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-minimize"));
+
+      expect(screen.getByTestId("sim-collapsed-active-dot")).toBeInTheDocument();
+    });
+
+    it("collapsing does NOT stop the simulation — generated activity continues in the background", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      const callsBeforeCollapse = simulateComment.mock.calls.length + simulateLike.mock.calls.length;
+
+      fireEvent.click(screen.getByTestId("sim-minimize"));
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      const callsAfterCollapse = simulateComment.mock.calls.length + simulateLike.mock.calls.length;
+      expect(callsAfterCollapse).toBeGreaterThan(callsBeforeCollapse);
+    });
+
+    it("expanding again preserves simulator state — running status and activity log survive collapse/expand", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-generate-comments"));
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Generated 5 comments");
+
+      fireEvent.click(screen.getByTestId("sim-minimize"));
+      fireEvent.click(screen.getByTestId("sim-collapsed-toggle"));
+
+      expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
+      expect(screen.getByTestId("sim-start")).toBeDisabled();
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Generated 5 comments");
+    });
+
+    it("moving the panel does not restart the session — audience/log state is unaffected by a drag", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-generate-comments"));
+
+      const header = screen.getByTestId("sim-header");
+      fireEvent.pointerDown(header, { pointerId: 1, clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(header, { pointerId: 1, clientX: 40, clientY: 40 });
+      fireEvent.pointerUp(header, { pointerId: 1, clientX: 40, clientY: 40 });
+
+      expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Generated 5 comments");
+    });
+  });
+
+  describe("dragging the panel by its header (real-device follow-up)", () => {
+    it("dragging the header repositions the panel via inline left/top styles", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const panel = screen.getByTestId("session-simulator-panel");
+      const header = screen.getByTestId("sim-header");
+
+      expect(panel.style.left).toBe("");
+
+      fireEvent.pointerDown(header, { pointerId: 1, clientX: 200, clientY: 200 });
+      fireEvent.pointerMove(header, { pointerId: 1, clientX: 150, clientY: 130 });
+      fireEvent.pointerUp(header, { pointerId: 1, clientX: 150, clientY: 130 });
+
+      expect(panel.style.left).not.toBe("");
+      expect(panel.style.top).not.toBe("");
+    });
+
+    it("the panel can never be dragged fully offscreen — position stays within the viewport bounds", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const panel = screen.getByTestId("session-simulator-panel");
+      const header = screen.getByTestId("sim-header");
+
+      fireEvent.pointerDown(header, { pointerId: 1, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(header, { pointerId: 1, clientX: -100_000, clientY: -100_000 });
+      fireEvent.pointerUp(header, { pointerId: 1, clientX: -100_000, clientY: -100_000 });
+
+      expect(parseFloat(panel.style.left)).toBeGreaterThanOrEqual(0);
+      expect(parseFloat(panel.style.top)).toBeGreaterThanOrEqual(0);
+
+      fireEvent.pointerDown(header, { pointerId: 2, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(header, { pointerId: 2, clientX: 100_000, clientY: 100_000 });
+      fireEvent.pointerUp(header, { pointerId: 2, clientX: 100_000, clientY: 100_000 });
+
+      expect(parseFloat(panel.style.left)).toBeLessThanOrEqual(window.innerWidth);
+      expect(parseFloat(panel.style.top)).toBeLessThanOrEqual(window.innerHeight);
+    });
+
+    it("clicking the minimize button does not initiate a drag", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const panel = screen.getByTestId("session-simulator-panel");
+      const minimizeButton = screen.getByTestId("sim-minimize");
+
+      fireEvent.pointerDown(minimizeButton, { pointerId: 1, clientX: 200, clientY: 200 });
+      fireEvent.pointerMove(screen.getByTestId("sim-header"), { pointerId: 1, clientX: 40, clientY: 40 });
+      fireEvent.pointerUp(minimizeButton, { pointerId: 1, clientX: 40, clientY: 40 });
+
+      expect(panel.style.left).toBe("");
+    });
+
+    it("orientation change re-clamps an already-dragged position instead of stranding it offscreen", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const panel = screen.getByTestId("session-simulator-panel");
+      const header = screen.getByTestId("sim-header");
+
+      fireEvent.pointerDown(header, { pointerId: 1, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(header, { pointerId: 1, clientX: 900, clientY: 700 });
+      fireEvent.pointerUp(header, { pointerId: 1, clientX: 900, clientY: 700 });
+      const xBeforeResize = parseFloat(panel.style.left);
+
+      Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 375 });
+      Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: 667 });
+      fireEvent(window, new Event("orientationchange"));
+
+      expect(parseFloat(panel.style.left)).toBeLessThanOrEqual(375);
+      expect(parseFloat(panel.style.top)).toBeLessThanOrEqual(667);
+      expect(xBeforeResize).toBeGreaterThanOrEqual(0);
+
+      Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1024 });
+      Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: 768 });
+    });
+  });
 });

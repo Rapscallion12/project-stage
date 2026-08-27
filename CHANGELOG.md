@@ -59,6 +59,18 @@ merged to `main`.
   force each round outcome for guided testing. Not part of the consumer
   product UI. See DECISIONS.md.
 
+### Changed
+
+- **Session Simulator panel — compact, collapsible, draggable** (issue
+  #21, real-device follow-up) — the preview-only panel above was too
+  large on a phone, covering most of the app. It now has a minimize
+  control that collapses it to a small "SIM" pill (without stopping the
+  simulation running behind it), is substantially smaller and internally
+  scrollable when expanded, respects safe-area insets, and can be
+  dragged by its header (touch and mouse) without ever going fully
+  offscreen. Presentation-only — no change to simulation behavior,
+  voting, round logic, or any production code path. See DECISIONS.md.
+
 ## [public-beta-v1] - 2026-08-26
 
 First production release of Virtual Stage to the live site

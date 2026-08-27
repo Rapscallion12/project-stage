@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   simulateComment,
   simulateLike,
@@ -70,6 +70,17 @@ export function SessionSimulatorPanel({
   const [roundVoteTallies, setRoundVoteTallies] = useState<Record<string, { continue: number; replace: number }>>({});
   const [poolResetCount, setPoolResetCount] = useState(0);
   const prevPendingCountRef = useRef(0);
+
+  // Presentation-only state (real-device follow-up, same issue #21): whether
+  // the panel is collapsed to a small "SIM" pill, and its dragged screen
+  // position. Deliberately separate from every piece of state above —
+  // collapsing/moving the panel must never touch `running`/`audience`/
+  // timers, so a real device can be used around the panel without
+  // interrupting the simulated session underneath it.
+  const [collapsed, setCollapsed] = useState(false);
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   const runningRef = useRef(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -149,6 +160,84 @@ export function SessionSimulatorPanel({
     for (const timer of timersRef.current) clearTimeout(timer);
     timersRef.current = [];
   }
+
+  // Real-device follow-up: keep the panel draggable but never fully
+  // offscreen, on a phone that can rotate or resize its visual viewport
+  // mid-session. A small margin (not 0) so it's never glued flush to the
+  // very edge, where it'd be hard to grab again.
+  const DRAG_MARGIN = 8;
+  function clampToViewport(x: number, y: number, width: number, height: number) {
+    const maxX = Math.max(window.innerWidth - width - DRAG_MARGIN, DRAG_MARGIN);
+    const maxY = Math.max(window.innerHeight - height - DRAG_MARGIN, DRAG_MARGIN);
+    return {
+      x: Math.min(Math.max(x, DRAG_MARGIN), maxX),
+      y: Math.min(Math.max(y, DRAG_MARGIN), maxY),
+    };
+  }
+
+  function handleHeaderPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest("[data-drag-ignore]")) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: rect.left,
+      originY: rect.top,
+    };
+    // Guarded rather than called unconditionally: jsdom (this component's
+    // own test environment) doesn't implement the Pointer Capture methods
+    // at all, unlike every real target browser.
+    if (typeof event.currentTarget.setPointerCapture === "function") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+  }
+
+  function handleHeaderPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragStateRef.current;
+    const panel = panelRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !panel) return;
+    const rect = panel.getBoundingClientRect();
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    setPosition(clampToViewport(drag.originX + dx, drag.originY + dy, rect.width, rect.height));
+  }
+
+  function handleHeaderPointerEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = null;
+    if (typeof event.currentTarget.hasPointerCapture === "function" && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  // Re-clamp an existing dragged position whenever the viewport itself
+  // changes shape (device rotation, mobile browser chrome show/hide) or
+  // the panel's own size changes (collapse/expand) — otherwise a position
+  // valid for a wide landscape panel could strand the panel off a
+  // narrower portrait one. Presentation-only; never touches simulation
+  // state.
+  useEffect(() => {
+    function reclamp() {
+      const panel = panelRef.current;
+      if (!panel) return;
+      setPosition((prev) => {
+        if (!prev) return prev;
+        const rect = panel.getBoundingClientRect();
+        return clampToViewport(prev.x, prev.y, rect.width, rect.height);
+      });
+    }
+    reclamp();
+    window.addEventListener("resize", reclamp);
+    window.addEventListener("orientationchange", reclamp);
+    return () => {
+      window.removeEventListener("resize", reclamp);
+      window.removeEventListener("orientationchange", reclamp);
+    };
+  }, [collapsed]);
 
   async function startSimulation() {
     const newAudience = createSimulatedAudience(AUDIENCE_SIZE);
@@ -302,15 +391,66 @@ export function SessionSimulatorPanel({
     appendLog("Seeded 2 simulated speakers directly (bootstrap only — real claim_speaker_seat RPC)");
   }
 
+  const positionStyle = position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined;
+
+  if (collapsed) {
+    return (
+      <div
+        ref={panelRef}
+        data-testid="session-simulator-panel"
+        style={positionStyle}
+        className="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.5rem,env(safe-area-inset-right))] z-50"
+      >
+        <button
+          type="button"
+          data-testid="sim-collapsed-toggle"
+          onClick={() => setCollapsed(false)}
+          aria-label="Restore Session Simulator"
+          className="flex items-center gap-1 rounded-full border border-yellow-500/50 bg-black/95 px-3 py-2 text-xs font-semibold text-yellow-400 shadow-2xl"
+        >
+          <span>SIM</span>
+          {running && (
+            <span aria-hidden="true" data-testid="sim-collapsed-active-dot" className="text-emerald-400">
+              •
+            </span>
+          )}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
+      ref={panelRef}
       data-testid="session-simulator-panel"
-      className="fixed bottom-2 right-2 z-50 max-h-[70vh] w-80 overflow-y-auto rounded-xl border border-yellow-500/50 bg-black/95 p-3 text-xs text-white shadow-2xl"
+      style={positionStyle}
+      className="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.5rem,env(safe-area-inset-right))] z-50 flex max-h-[min(55dvh,26rem)] w-64 max-w-[85vw] flex-col overflow-hidden rounded-xl border border-yellow-500/50 bg-black/95 text-xs text-white shadow-2xl"
     >
-      <div className="mb-2 flex items-center justify-between">
+      <div
+        data-testid="sim-header"
+        onPointerDown={handleHeaderPointerDown}
+        onPointerMove={handleHeaderPointerMove}
+        onPointerUp={handleHeaderPointerEnd}
+        onPointerCancel={handleHeaderPointerEnd}
+        className="flex shrink-0 touch-none cursor-grab items-center justify-between rounded-t-xl bg-white/5 px-2 py-1.5 active:cursor-grabbing"
+      >
         <span className="font-semibold text-yellow-400">Session Simulator (preview only)</span>
+        <button
+          type="button"
+          data-testid="sim-minimize"
+          data-drag-ignore
+          onClick={() => setCollapsed(true)}
+          aria-label="Minimize Session Simulator"
+          className="rounded px-1.5 text-sm font-bold text-white/70 hover:bg-white/10"
+        >
+          −
+        </button>
       </div>
 
+      <div
+        className="flex-1 overflow-y-auto overscroll-contain p-2"
+        style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+      >
       <div className="mb-3 flex flex-wrap gap-1.5">
         <button
           type="button"
@@ -411,6 +551,7 @@ export function SessionSimulatorPanel({
         {log.map((line, i) => (
           <p key={i}>{line}</p>
         ))}
+      </div>
       </div>
     </div>
   );

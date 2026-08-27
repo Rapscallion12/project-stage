@@ -3,6 +3,71 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — Session Simulator: compact, collapsible, draggable panel (issue #21, real-device follow-up)
+
+**Context**: real-device follow-up to the Phase 2 pass above — the
+Session Simulator panel was too large on a phone, covering most of the
+actual app and making real-device testing of the room itself difficult.
+Explicitly scoped to simulator *presentation* only: no change to
+simulation behavior, voting logic, speaker-round logic, comments,
+candidate selection, or any production code path.
+
+**Decision — presentation state kept fully separate from simulation
+state**: `collapsed` (bool) and `position` (`{x,y} | null`, `null` meaning
+"use the default CSS-anchored corner") are new `useState`s alongside the
+existing `running`/`audience`/`log`/timer refs, but nothing in
+collapse/expand/drag touches any of those existing pieces of state. The
+collapsed vs. expanded panel is a render-time branch inside one component
+that never unmounts — `running`, `audienceRef`, and the independent
+`setTimeout` loops keep executing regardless of which branch is on
+screen, and the 3-second round-vote-tally poll effect is unconditional
+too. This is what makes "collapsing must not stop the simulation" true
+by construction rather than by extra bookkeeping.
+
+**Dragging — Pointer Events, not separate touch/mouse handlers**: the
+header uses `onPointerDown`/`onPointerMove`/`onPointerUp`/
+`onPointerCancel` plus `setPointerCapture`, which redirects all
+subsequent pointer events to the header regardless of where the pointer
+moves — no `document`-level listeners needed, and touch and mouse are
+handled by the same code path. `touch-action: none` (Tailwind
+`touch-none`) on the header stops the browser's own touch-scroll gesture
+from fighting the drag. Position is tracked as absolute pixels
+(`left`/`top`) computed from `getBoundingClientRect()` at drag-start and
+clamped into the viewport (`window.innerWidth/innerHeight` minus the
+panel's own current size, with a small fixed margin) on every move — so
+the panel can never be dragged fully offscreen. The same clamp re-runs on
+`resize`/`orientationchange` and whenever `collapsed` toggles (since the
+panel's own footprint changes size), so a position valid in landscape
+can't strand the panel off a narrower portrait viewport, and expanding a
+previously-collapsed pill back to full size can't push it past the
+screen edge either.
+
+**Sizing**: `max-h-[min(55dvh,26rem)]` (was a flat `70vh`) with an
+internal `overflow-y-auto overscroll-contain` content region —
+`overscroll-contain` specifically so scrolling the panel's own content to
+its end doesn't chain into scrolling the room behind it. `dvh` (dynamic
+viewport height) rather than `vh` so the cap tracks the real visible area
+as mobile Safari's browser chrome shows/hides, instead of sizing against
+a taller value that then sits under the address bar. Width dropped from
+`w-80` (320px) to `w-64` (256px) with a `max-w-[85vw]` backstop for very
+narrow phones. Both the default anchor and the panel's padding use
+`env(safe-area-inset-*)` (via `max(0.5rem, env(...))`) so the panel and
+its bottom-most content never sit under the home-indicator/notch area.
+
+**One test-environment gap found and worked around, not silently
+ignored**: jsdom (this component's own Vitest environment) doesn't
+implement `Element.setPointerCapture`/`hasPointerCapture`/
+`releasePointerCapture` at all, unlike every real target browser — so the
+handlers guard each call with a `typeof … === "function"` check. This
+is defensive code that happens to be required for the test suite to run
+clean, not a behavior change for any real browser.
+
+**Not touched**: `isPreviewOrDevBuild()` gating (still the only thing
+deciding whether this component renders at all, unchanged), every
+`simulator-actions.ts` function, `speaker-round.ts`, and every existing
+button's `onClick` — only the outer container/header/state around them
+changed.
+
 ## 2026-08-26 — Per-speaker Continue/Replace rounds + preview-only Session Simulator (issue #21, Phase 2)
 
 **Context**: Phase 2 of #21 — the first real Continue/Replace round system
