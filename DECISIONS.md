@@ -3,6 +3,87 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — Session Simulator: round-testing presentation (timer, occupied placeholder, per-seat forcing) (issue #21, second real-device follow-up)
+
+**Context**: the compact/collapsible/draggable pass above made the panel
+usable on mobile, but the user still couldn't clearly *test the round
+system itself* through it — no visible per-seat timer on the actual
+stage, no obvious "this seat is occupied" signal for a seeded fake
+speaker (LiveKit never actually connects for a simulated identity, so
+the tile fell into the same "Camera off" placeholder a real permission
+failure would), and one ambiguous global Force Continue/Narrow Loss/
+Decisive-Replace control that operated on "whichever round happens to be
+active first" — unusable once two independent per-speaker rounds exist
+simultaneously. Scoped explicitly to simulator/test presentation and
+deterministic controls only — no change to voting, round-resolution, or
+selection logic.
+
+**Round-number badge**: `SpeakerRoundDisplay` (useSpeakerRoundCountdown)
+gained a `roundNumber` field, read straight from the seat's own
+`round_number` — no new state, no separate simulator-only timer. The
+badge now reads "Round N · Ns" while active, "Final Ns" while closing,
+still fully suppressed until the final ~10s in production and shown for
+the whole round on preview builds exactly as before. This is the *same*
+authoritative deadline the real Vote control's countdown and the round-
+resolution hook already read — explicitly not a second, simulator-owned
+clock.
+
+**"Simulated speaker" placeholder — cosmetic only, not a new occupancy
+system**: a seeded/promoted simulated identity is a real `event_speakers`
+row (via the real `claimSpeakerSeat` RPC, unchanged); it just never
+opens a LiveKit connection, so it already fell through to SpeakerTile's
+existing no-participant branch. The only change is *which* placeholder
+that branch shows: a new `isSimulated` prop (cosmetic, presentation-only)
+swaps "Camera off" for an unambiguous "Simulated speaker" label, so a
+seeded seat can never be mistaken for a real technical failure while
+testing. `isSimulated` is computed from a `simulatedGuestIds` set that
+lives in `EventRoom` (only meaningfully populated in preview builds,
+since `SessionSimulatorPanel` — the only thing that ever calls the
+registration callback — isn't mounted otherwise) and threaded through
+`RoomLayoutProps` → `SpeakerStage` → `SpeakerTile`, the same 5-layer
+prop-threading shape `isPreviewBuild` already established. Deliberately
+**not** authoritative or synced: a different browser tab that never
+opened the simulator won't have these ids and will just see the ordinary
+placeholder — acceptable, since this is a solo testing aid, not a piece
+of shared room state, and reported as such rather than over-built into a
+cross-tab-synced signal.
+
+**Per-speaker force controls, not one global control**: `forceRoundDeadline`
+(the simulator's one clock-skipping adapter) now returns the real
+resolver's own outcome (`ResolveSpeakerRoundOutcome`) instead of `void`,
+so the panel's forced-outcome feedback always reflects what
+`resolveSpeakerRoundAction` actually decided — never just an echo of the
+intended vote split. Every Force Continue/Narrow Loss/Replace button now
+lives inside that specific seat's own round-status block and is called
+with that seat's `event_speakers.id` directly — there is no shared
+"first active round" lookup left anywhere in the panel. A seat already in
+its closing phase shows a single "Force Replace Now" instead (no new
+vote — the real RPC rejects votes once `round_phase != 'active'`, so
+offering the three-way choice there would just fail silently). The
+per-seat block also gained a "what would happen if this round ended
+right now" projection, computed via the exact same pure
+`resolveRoundOutcome` the real RPC mirrors — never a separately-invented
+guess.
+
+**Stable seed identities**: `SessionSimulatorPanel` now generates two
+dedicated seed-speaker identities once per `Start Simulated Session` run
+(stored in a ref), and every subsequent "Seed 2 Speakers" click reuses
+the same two rather than drawing a fresh random pair from the general
+audience pool — satisfying "the same two stable identities for that
+simulation run" without inventing a second identity-generation path.
+
+**One incidental fix, not scope creep**: fixing this pass required
+touching `speakersRef`/`pendingRequestsRef`/`messagesRef`'s prop-mirror
+assignments and a `Date.now()` read inside the observability block —
+both pre-existing patterns that a stricter `react-hooks/purity`/
+`react-hooks/refs` lint pass (apparently newly enforced since the prior
+pass, not something either of the last two rounds introduced) now
+flags. Fixed in place with this codebase's own established idioms (an
+effect for the ref mirror, `useNow()` for the clock read, matching
+`speaker-vote-panel.tsx`'s prior fix for the identical class of issue) —
+reported here since it's a real, if incidental, code-health fix bundled
+into an otherwise presentation-only pass.
+
 ## 2026-08-27 — Session Simulator: compact, collapsible, draggable panel (issue #21, real-device follow-up)
 
 **Context**: real-device follow-up to the Phase 2 pass above — the

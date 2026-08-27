@@ -441,7 +441,7 @@ describe("SpeakerTile", () => {
           isPreviewBuild={true}
         />,
       );
-      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("45s");
+      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Round 1 · 45s");
     });
 
     it("hides the round timer by default (production), far from the deadline", () => {
@@ -480,7 +480,48 @@ describe("SpeakerTile", () => {
           isPreviewBuild={true}
         />,
       );
-      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("final 20s");
+      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Final 20s");
+    });
+
+    it("shows the current round number in the badge, distinct from a later round", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "active", round_number: 3, round_ends_at: new Date(Date.now() + 12_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={true}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Round 3 · 12s");
+    });
+  });
+
+  describe("simulated speaker placeholder (Session Simulator real-device follow-up)", () => {
+    it("renders an unambiguous 'Simulated speaker' placeholder, not the generic 'Camera off' one, when isSimulated is true", () => {
+      render(
+        <SpeakerTile speaker={speaker({ display_name: "Curious Fox" })} participant={undefined} isLocal={false} isSimulated={true} />,
+      );
+      expect(screen.getByTestId("simulated-speaker-placeholder")).toBeInTheDocument();
+      expect(screen.getByTestId("simulated-speaker-label")).toHaveTextContent("Simulated speaker");
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+      // The name/avatar is still shown via the ordinary identity bar, same as any other occupied seat.
+      expect(screen.getAllByText("Curious Fox").length).toBeGreaterThan(0);
+    });
+
+    it("falls back to the ordinary 'Camera off' placeholder when isSimulated is false (default)", () => {
+      render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+      expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("never shows the simulated placeholder for the local participant's own live seat, even if isSimulated is somehow true", () => {
+      // Defensive: a real signed-in/guest local speaker is never also a
+      // simulated identity in practice, but isSimulated shouldn't override
+      // the isLocal/hasVideo branches that take priority above it.
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} isSimulated={true} />);
+      expect(screen.getByTestId("own-seat-live")).toBeInTheDocument();
+      expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
     });
   });
 });

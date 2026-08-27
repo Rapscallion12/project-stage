@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionSimulatorPanel } from "./session-simulator-panel";
-import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
@@ -22,7 +22,7 @@ const {
   simulateRoundVote: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateSeedSpeaker: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateOpenSeat: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
-  forceRoundDeadline: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  forceRoundDeadline: vi.fn<(...args: unknown[]) => Promise<ResolveSpeakerRoundOutcome>>(async () => "decisive-replace"),
 }));
 
 vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
@@ -98,7 +98,15 @@ const baseProps = {
   messages: [] as LobbyMessage[],
 };
 
-describe("SessionSimulatorPanel (issue #21, Part 5)", () => {
+/** Finds the specific per-seat round-status block for a given seat number — the redesign (real-device follow-up) scopes every force/open control inside this block, one per occupied seat, never a single ambiguous global control. */
+function roundStatusForSeat(seatNumber: number): HTMLElement {
+  const blocks = screen.getAllByTestId("sim-round-status");
+  const match = blocks.find((block) => block.textContent?.includes(`seat ${seatNumber}`));
+  if (!match) throw new Error(`No sim-round-status block found for seat ${seatNumber}`);
+  return match;
+}
+
+describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
@@ -118,6 +126,16 @@ describe("SessionSimulatorPanel (issue #21, Part 5)", () => {
       expect(screen.getByTestId("sim-start")).toBeDisabled();
       expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
     });
+  });
+
+  it("Start reports every generated identity (audience + 2 stable seed speakers) via onSimulatedIdentitiesCreated", async () => {
+    const onSimulatedIdentitiesCreated = vi.fn();
+    render(<SessionSimulatorPanel {...baseProps} onSimulatedIdentitiesCreated={onSimulatedIdentitiesCreated} />);
+    fireEvent.click(screen.getByTestId("sim-start"));
+    await waitFor(() => expect(onSimulatedIdentitiesCreated).toHaveBeenCalled());
+    const ids: string[] = onSimulatedIdentitiesCreated.mock.calls[0][0];
+    expect(ids.length).toBe(22); // 20 audience + 2 stable seed speakers
+    expect(new Set(ids).size).toBe(22); // all distinct
   });
 
   it("deterministic actions before Start are safe no-ops (no audience pool yet) — no crash, nothing called", () => {
@@ -159,36 +177,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5)", () => {
     expect(simulateRequestVote.mock.calls[0][1]).toBe("m1");
   });
 
-  it("Force Decisive Replace casts replace votes then calls forceRoundDeadline for the active round", async () => {
-    render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "round-1" })]} />);
-    fireEvent.click(screen.getByTestId("sim-start"));
-    await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-
-    fireEvent.click(screen.getByTestId("sim-force-decisive"));
-    await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("round-1"));
-    expect(simulateRoundVote).toHaveBeenCalled();
-    expect(simulateRoundVote.mock.calls.every((call) => call[0] === "round-1")).toBe(true);
-  });
-
-  it("Force Continue Outcome reports when there is no active round instead of throwing", async () => {
-    render(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
-    fireEvent.click(screen.getByTestId("sim-start"));
-    await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-
-    fireEvent.click(screen.getByTestId("sim-force-continue"));
-    expect(forceRoundDeadline).not.toHaveBeenCalled();
-    expect(screen.getByTestId("sim-log")).toHaveTextContent("no speaker currently in an active round");
-  });
-
-  it("Open Speaker Seat calls simulateOpenSeat for a simulated (guest-held) seat", async () => {
-    render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ guest_id: "g-speaker-1", profile_id: null })]} />);
-    fireEvent.click(screen.getByTestId("sim-start"));
-    await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-
-    fireEvent.click(screen.getByTestId("sim-open-seat"));
-    expect(simulateOpenSeat).toHaveBeenCalledWith("e1", "g-speaker-1");
-  });
-
   it("Stop Simulation disables Stop and re-enables Start", async () => {
     render(<SessionSimulatorPanel {...baseProps} />);
     fireEvent.click(screen.getByTestId("sim-start"));
@@ -211,12 +199,165 @@ describe("SessionSimulatorPanel (issue #21, Part 5)", () => {
     expect(callsAfterAdvance).toBe(callsAtStop);
   });
 
-  it("shows the observability panel with round status for an occupied seat", () => {
+  it("shows the observability panel with round status, vote tallies, and a projected outcome for an occupied seat", () => {
     render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ display_name: "Alex", round_number: 3 })]} />);
     const status = screen.getByTestId("sim-round-status");
     expect(status).toHaveTextContent("Alex");
     expect(status).toHaveTextContent("round #3");
     expect(status).toHaveTextContent("active");
+    expect(within(status).getByTestId("sim-projected-outcome")).toHaveTextContent("Continue +60s");
+  });
+
+  describe("Seed 2 Speakers (Part 5 — deterministic, stable identities)", () => {
+    it("uses the same two identities on every click within one run", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-seed-speakers"));
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      const firstRun = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
+
+      simulateSeedSpeaker.mockClear();
+      fireEvent.click(screen.getByTestId("sim-seed-speakers"));
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      const secondRun = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
+
+      expect(secondRun).toEqual(firstRun);
+    });
+
+    it("assigns seat 1 and seat 2 explicitly", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-seed-speakers"));
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      const seatNumbers = simulateSeedSpeaker.mock.calls.map((call) => call[3]);
+      expect(seatNumbers.sort()).toEqual([1, 2]);
+    });
+  });
+
+  describe("per-seat round-outcome forcing (real-device follow-up — never one ambiguous global control)", () => {
+    it("shows no force controls at all when no seat is occupied", () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
+      expect(screen.queryByTestId("sim-force-continue")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("sim-force-narrow-loss")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("sim-force-replace")).not.toBeInTheDocument();
+    });
+
+    it("Force Continue on seat 1 targets only seat 1, even with a second occupied seat", async () => {
+      forceRoundDeadline.mockResolvedValueOnce("continue");
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[
+            speaker({ id: "seat-1-round", seat_number: 1, display_name: "Speaker A" }),
+            speaker({ id: "seat-2-round", seat_number: 2, display_name: "Speaker B" }),
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      const seat1 = roundStatusForSeat(1);
+      fireEvent.click(within(seat1).getByTestId("sim-force-continue"));
+
+      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("seat-1-round"));
+      expect(forceRoundDeadline).not.toHaveBeenCalledWith("seat-2-round");
+      expect(simulateRoundVote.mock.calls.every((call) => call[0] === "seat-1-round")).toBe(true);
+    });
+
+    it("Force Narrow Loss on seat 2 targets only seat 2", async () => {
+      forceRoundDeadline.mockResolvedValueOnce("narrow-loss");
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[
+            speaker({ id: "seat-1-round", seat_number: 1 }),
+            speaker({ id: "seat-2-round", seat_number: 2 }),
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      const seat2 = roundStatusForSeat(2);
+      fireEvent.click(within(seat2).getByTestId("sim-force-narrow-loss"));
+
+      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("seat-2-round"));
+      expect(forceRoundDeadline).not.toHaveBeenCalledWith("seat-1-round");
+      expect(simulateRoundVote.mock.calls.every((call) => call[0] === "seat-2-round")).toBe(true);
+    });
+
+    it("Force Replace on a seat casts a decisive replace split and reports the real resolved outcome", async () => {
+      forceRoundDeadline.mockResolvedValueOnce("decisive-replace");
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "round-1", seat_number: 1 })]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(within(roundStatusForSeat(1)).getByTestId("sim-force-replace"));
+      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("round-1"));
+
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 → Decisive Replace (100% Replace)");
+    });
+
+    it("forced-outcome feedback reflects the resolver's real return value, not just the intended split", async () => {
+      // Even though this button casts a narrow-loss split, the mocked
+      // resolver below returns "continue" — the log must show what the
+      // real resolver decided, proving the outcome isn't just echoed back.
+      forceRoundDeadline.mockResolvedValueOnce("continue");
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "round-1", seat_number: 1 })]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(within(roundStatusForSeat(1)).getByTestId("sim-force-narrow-loss"));
+      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalled());
+
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 → Continue");
+    });
+
+    it("a seat in its closing phase shows only Force Replace Now — no new vote is cast", async () => {
+      forceRoundDeadline.mockResolvedValueOnce("replaced-after-closing");
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "round-1", seat_number: 1, round_phase: "closing", closing_ends_at: new Date(Date.now() + 20_000).toISOString() })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      const status = roundStatusForSeat(1);
+      expect(within(status).queryByTestId("sim-force-continue")).not.toBeInTheDocument();
+      expect(within(status).queryByTestId("sim-force-narrow-loss")).not.toBeInTheDocument();
+      expect(within(status).getByTestId("sim-projected-outcome")).toHaveTextContent("Replace");
+
+      fireEvent.click(within(status).getByTestId("sim-force-replace-now"));
+      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("round-1"));
+      expect(simulateRoundVote).not.toHaveBeenCalled();
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 → Replaced");
+    });
+  });
+
+  describe("per-seat Open Seat (real-device follow-up)", () => {
+    it("Open Seat on a specific seat calls simulateOpenSeat for that seat's simulated (guest-held) occupant", async () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[
+            speaker({ id: "seat-1", seat_number: 1, guest_id: "g-speaker-1", profile_id: null, display_name: "Speaker A" }),
+            speaker({ id: "seat-2", seat_number: 2, guest_id: "g-speaker-2", profile_id: null, display_name: "Speaker B" }),
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(within(roundStatusForSeat(2)).getByTestId("sim-open-seat"));
+      expect(simulateOpenSeat).toHaveBeenCalledWith("e1", "g-speaker-2");
+      expect(simulateOpenSeat).not.toHaveBeenCalledWith("e1", "g-speaker-1");
+    });
   });
 
   describe("collapse/minimize (real-device follow-up — must not obstruct the app or the simulation)", () => {

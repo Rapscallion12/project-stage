@@ -12,12 +12,65 @@ import {
   forceRoundDeadline,
 } from "@/app/events/[id]/room/simulator-actions";
 import { createClient } from "@/lib/supabase/client";
-import { createSimulatedAudience, randomIdentity, randomSubset, type SimulatedIdentity } from "@/lib/simulator/identities";
+import {
+  createSimulatedAudience,
+  createSimulatedIdentity,
+  randomIdentity,
+  randomSubset,
+  type SimulatedIdentity,
+} from "@/lib/simulator/identities";
 import { jitteredDelayMs, randomOrdinaryComment, randomSpeakerRequestComment } from "@/lib/simulator/content";
-import { replacePercentage } from "@/lib/speaker-round";
+import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
+import { useNow } from "@/hooks/use-now";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
-import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
+
+/**
+ * `Math.random()` wrapped in named, module-level helpers (never called
+ * inline in the component body) — react-hooks/purity flags a direct
+ * impure call reachable from a component's render path; every one of
+ * these is only ever invoked from an event handler or a scheduled
+ * callback, never render itself, but the helper indirection is what lets
+ * the linter (and a reader) see that at a glance.
+ */
+function randomElement<T>(items: readonly T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+function randomVoterCount(min: number, maxExclusive: number): number {
+  return min + Math.floor(Math.random() * (maxExclusive - min));
+}
+function randomRoundChoice(continueBias: number): "continue" | "replace" {
+  return Math.random() < continueBias ? "continue" : "replace";
+}
+
+/** Maps the real resolver's outcome to the short label the log/feedback lines show — see this file's own doc comment on why the outcome itself always comes from the real resolver, never invented here. */
+function resolvedOutcomeLabel(outcome: ResolveSpeakerRoundOutcome): string {
+  switch (outcome) {
+    case "continue":
+      return "Continue";
+    case "narrow-loss":
+      return "Narrow Loss";
+    case "decisive-replace":
+      return "Decisive Replace";
+    case "replaced-after-closing":
+      return "Replaced";
+    default:
+      return outcome;
+  }
+}
+
+/** "What would happen if this round ended right now" — Part 4's projected-outcome observability line, computed with the exact same pure decision function the real RPC mirrors (`lib/speaker-round.ts`), never a separate guess. */
+function projectedOutcomeLabel(outcome: ReturnType<typeof resolveRoundOutcome>): string {
+  switch (outcome) {
+    case "continue":
+      return "Continue +60s";
+    case "narrow-loss":
+      return "Final 30s then replace";
+    case "decisive-replace":
+      return "Replace";
+  }
+}
 
 const AUDIENCE_SIZE = 20;
 
@@ -58,11 +111,14 @@ export function SessionSimulatorPanel({
   speakers,
   pendingRequests,
   messages,
+  onSimulatedIdentitiesCreated,
 }: {
   eventId: string;
   speakers: EventSpeaker[];
   pendingRequests: RankedPendingRequest[];
   messages: LobbyMessage[];
+  /** Real-device follow-up: reports every guest id this panel generates, once, at creation — the caller (EventRoom) uses this purely cosmetically, to let SpeakerTile render an obviously-simulated placeholder. Optional so this component still works standalone in tests that don't care. */
+  onSimulatedIdentitiesCreated?: (ids: string[]) => void;
 }) {
   const [running, setRunning] = useState(false);
   const [audience, setAudience] = useState<SimulatedIdentity[]>([]);
@@ -70,6 +126,12 @@ export function SessionSimulatorPanel({
   const [roundVoteTallies, setRoundVoteTallies] = useState<Record<string, { continue: number; replace: number }>>({});
   const [poolResetCount, setPoolResetCount] = useState(0);
   const prevPendingCountRef = useRef(0);
+  // react-hooks/purity: the round-status "remaining seconds" display below
+  // needs the current time, but reading Date.now() directly during render
+  // is an impure call — useNow() is this codebase's existing ticking-clock
+  // hook (see its own doc comment), same fix speaker-vote-panel.tsx already
+  // uses for the identical class of issue.
+  const now = useNow();
 
   // Presentation-only state (real-device follow-up, same issue #21): whether
   // the panel is collapsed to a small "SIM" pill, and its dragged screen
@@ -88,10 +150,25 @@ export function SessionSimulatorPanel({
   const pendingRequestsRef = useRef(pendingRequests);
   const messagesRef = useRef(messages);
   const audienceRef = useRef<SimulatedIdentity[]>([]);
+  // Part 5: "Seed 2 Speakers should create the same two stable simulated
+  // identities for that simulation run" — generated once in
+  // startSimulation, reused by every subsequent Seed 2 Speakers click in
+  // the same run, never re-randomized per click.
+  const seedSpeakersRef = useRef<[SimulatedIdentity, SimulatedIdentity] | null>(null);
 
-  speakersRef.current = speakers;
-  pendingRequestsRef.current = pendingRequests;
-  messagesRef.current = messages;
+  // react-hooks/refs: writing a ref during render is disallowed even for
+  // this "mirror the latest prop for later async callbacks" pattern — the
+  // assignment has to happen after commit, in an effect, not inline in
+  // the render body. These refs are still never *read* during render
+  // (only from scheduled timers/event handlers below), so this doesn't
+  // change when the mirrored value becomes visible to anything that
+  // matters — one render's worth of lag on a ref nothing reads
+  // synchronously is invisible.
+  useEffect(() => {
+    speakersRef.current = speakers;
+    pendingRequestsRef.current = pendingRequests;
+    messagesRef.current = messages;
+  }, [speakers, pendingRequests, messages]);
 
   function appendLog(line: string) {
     setLog((prev) => [`${new Date().toLocaleTimeString()} — ${line}`, ...prev].slice(0, 30));
@@ -243,6 +320,9 @@ export function SessionSimulatorPanel({
     const newAudience = createSimulatedAudience(AUDIENCE_SIZE);
     audienceRef.current = newAudience;
     setAudience(newAudience);
+    const seedSpeakers: [SimulatedIdentity, SimulatedIdentity] = [createSimulatedIdentity(), createSimulatedIdentity()];
+    seedSpeakersRef.current = seedSpeakers;
+    onSimulatedIdentitiesCreated?.([...newAudience, ...seedSpeakers].map((identity) => identity.id));
     runningRef.current = true;
     setRunning(true);
     appendLog(`Started — ${AUDIENCE_SIZE} simulated audience identities generated`);
@@ -258,7 +338,7 @@ export function SessionSimulatorPanel({
       const ordinary = messagesRef.current.filter((m) => !m.is_speaker_request);
       if (ordinary.length === 0) return;
       const identity = randomIdentity(audienceRef.current);
-      const target = ordinary[Math.floor(Math.random() * ordinary.length)];
+      const target = randomElement(ordinary);
       void simulateLike(target.id, identity.id);
     }, 2000, 6000);
 
@@ -273,7 +353,7 @@ export function SessionSimulatorPanel({
       const pending = pendingRequestsRef.current;
       if (pending.length === 0) return;
       const identity = randomIdentity(audienceRef.current);
-      const target = pending[Math.floor(Math.random() * pending.length)];
+      const target = randomElement(pending);
       void simulateRequestVote(eventId, target.message_id, identity.id);
     }, 4000, 10000);
 
@@ -283,10 +363,9 @@ export function SessionSimulatorPanel({
     schedule(() => {
       const activeRounds = speakersRef.current.filter((s) => s.round_phase === "active");
       for (const round of activeRounds) {
-        const voters = randomSubset(audienceRef.current, 3 + Math.floor(Math.random() * 5));
+        const voters = randomSubset(audienceRef.current, randomVoterCount(3, 8));
         for (const voter of voters) {
-          const choice = Math.random() < 0.72 ? "continue" : "replace";
-          void simulateRoundVote(round.id, choice, voter.id);
+          void simulateRoundVote(round.id, randomRoundChoice(0.72), voter.id);
         }
       }
     }, 3000, 7000);
@@ -338,57 +417,62 @@ export function SessionSimulatorPanel({
     }
     for (let i = 0; i < count; i++) {
       const identity = randomIdentity(pool);
-      const target = pending[Math.floor(Math.random() * pending.length)];
+      const target = randomElement(pending);
       void simulateRequestVote(eventId, target.message_id, identity.id);
     }
     appendLog(`Shifted ${count} request votes`);
   }
 
-  function firstActiveRound(): EventSpeaker | null {
-    return speakersRef.current.find((s) => s.round_phase === "active") ?? null;
-  }
-
-  async function castVotesAndForce(continueCount: number, replaceCount: number, label: string) {
+  /**
+   * Part 3: scoped to one specific seat's `event_speakers` row — never
+   * "whichever round happens to be active first" (the old ambiguous
+   * global version). Casts the requested vote split for *that* seat only,
+   * backdates *that* seat's deadline, then lets the real
+   * `resolveSpeakerRoundAction` (via `forceRoundDeadline`) decide the
+   * actual outcome — the returned outcome, not our intended split, is
+   * what the log line and the round-status "if ended now" projection
+   * ultimately reflect.
+   */
+  async function castVotesAndForceForSeat(speaker: EventSpeaker, continueCount: number, replaceCount: number) {
     const pool = requireAudience();
-    const round = firstActiveRound();
-    if (!pool || !round) {
-      appendLog(`${label}: no speaker currently in an active round`);
-      return;
-    }
+    if (!pool) return;
     const voters = randomSubset(pool, continueCount + replaceCount);
     for (let i = 0; i < continueCount; i++) {
-      void simulateRoundVote(round.id, "continue", voters[i].id);
+      void simulateRoundVote(speaker.id, "continue", voters[i].id);
     }
     for (let i = 0; i < replaceCount; i++) {
-      void simulateRoundVote(round.id, "replace", voters[continueCount + i].id);
+      void simulateRoundVote(speaker.id, "replace", voters[continueCount + i].id);
     }
     await new Promise((resolve) => setTimeout(resolve, 300)); // let votes land before forcing the deadline
-    await forceRoundDeadline(round.id);
-    appendLog(`${label}: cast ${continueCount}c/${replaceCount}r for ${round.display_name}, forced deadline`);
+    const outcome = await forceRoundDeadline(speaker.id);
+    const pct = replacePercentage(continueCount, replaceCount);
+    appendLog(`Seat ${speaker.seat_number} → ${resolvedOutcomeLabel(outcome)} (${pct !== null ? pct.toFixed(0) : "0"}% Replace)`);
   }
 
-  function openSeat() {
-    const occupied = speakersRef.current[0];
-    if (!occupied) {
-      appendLog("Open Speaker Seat: no seat is currently occupied");
+  /** The closing-phase equivalent — no further voting is accepted once a seat is in its 30s closing period (Part 3's "no new Continue/Replace vote during those 30s"), so this just backdates and resolves without casting anything. */
+  async function forceClosingNow(speaker: EventSpeaker) {
+    const outcome = await forceRoundDeadline(speaker.id);
+    appendLog(`Seat ${speaker.seat_number} → ${resolvedOutcomeLabel(outcome)}`);
+  }
+
+  function openSeat(speaker: EventSpeaker) {
+    const guestId = speaker.profile_id ? null : speaker.guest_id;
+    if (!guestId) {
+      appendLog(`Seat ${speaker.seat_number}: real account-held seats aren't touched by the simulator — pick a simulated speaker instead`);
       return;
     }
-    const identity = occupied.profile_id ? null : { type: "guest" as const, id: occupied.guest_id! };
-    if (!identity) {
-      appendLog("Open Speaker Seat: real account-held seats aren't touched by the simulator — pick a simulated speaker instead");
-      return;
-    }
-    void simulateOpenSeat(eventId, identity.id);
-    appendLog(`Opened seat ${occupied.seat_number} (${occupied.display_name})`);
+    void simulateOpenSeat(eventId, guestId);
+    appendLog(`Opened seat ${speaker.seat_number} (${speaker.display_name})`);
   }
 
   async function seedTwoSpeakers() {
     const pool = requireAudience();
-    if (!pool) return;
-    const [a, b] = randomSubset(pool, 2);
-    if (a) await simulateSeedSpeaker(eventId, a.id, a.displayName, 1);
-    if (b) await simulateSeedSpeaker(eventId, b.id, b.displayName, 2);
-    appendLog("Seeded 2 simulated speakers directly (bootstrap only — real claim_speaker_seat RPC)");
+    const seedSpeakers = seedSpeakersRef.current;
+    if (!pool || !seedSpeakers) return;
+    const [a, b] = seedSpeakers;
+    await simulateSeedSpeaker(eventId, a.id, a.displayName, 1);
+    await simulateSeedSpeaker(eventId, b.id, b.displayName, 2);
+    appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2 (real claim_speaker_seat RPC)`);
   }
 
   const positionStyle = position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined;
@@ -482,33 +566,6 @@ export function SessionSimulatorPanel({
         <button type="button" data-testid="sim-shift-votes" onClick={() => shiftRequestVotes()} className="rounded bg-white/10 px-2 py-1">
           Shift Request Votes
         </button>
-        <button
-          type="button"
-          data-testid="sim-force-continue"
-          onClick={() => void castVotesAndForce(3, 0, "Force Continue")}
-          className="rounded bg-white/10 px-2 py-1"
-        >
-          Force Continue Outcome
-        </button>
-        <button
-          type="button"
-          data-testid="sim-force-narrow-loss"
-          onClick={() => void castVotesAndForce(2, 3, "Force Narrow Loss")}
-          className="rounded bg-white/10 px-2 py-1"
-        >
-          Force Narrow Loss
-        </button>
-        <button
-          type="button"
-          data-testid="sim-force-decisive"
-          onClick={() => void castVotesAndForce(0, 2, "Force Decisive Replace")}
-          className="rounded bg-white/10 px-2 py-1"
-        >
-          Force Decisive Replace
-        </button>
-        <button type="button" data-testid="sim-open-seat" onClick={openSeat} className="rounded bg-white/10 px-2 py-1">
-          Open Speaker Seat
-        </button>
       </div>
 
       <div data-testid="sim-observability" className="mb-3 flex flex-col gap-2 rounded-lg bg-white/5 p-2">
@@ -518,7 +575,8 @@ export function SessionSimulatorPanel({
           const tally = roundVoteTallies[s.id] ?? { continue: 0, replace: 0 };
           const pct = replacePercentage(tally.continue, tally.replace);
           const deadline = s.round_phase === "closing" ? s.closing_ends_at : s.round_ends_at;
-          const remaining = deadline ? Math.max(0, Math.ceil((new Date(deadline).getTime() - Date.now()) / 1000)) : null;
+          const remaining = deadline && now !== null ? Math.max(0, Math.ceil((new Date(deadline).getTime() - now) / 1000)) : null;
+          const projected = s.round_phase === "closing" ? projectedOutcomeLabel("decisive-replace") : projectedOutcomeLabel(resolveRoundOutcome(tally.continue, tally.replace));
           return (
             <div key={s.id} data-testid="sim-round-status" className="border-t border-white/10 pt-1">
               <p className="font-medium">
@@ -529,6 +587,49 @@ export function SessionSimulatorPanel({
                 continue: {tally.continue} · replace: {tally.replace}
                 {pct !== null ? ` (${pct.toFixed(0)}% replace)` : ""}
               </p>
+              <p data-testid="sim-projected-outcome">if ended now: {projected}</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {s.round_phase === "active" ? (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="sim-force-continue"
+                      onClick={() => void castVotesAndForceForSeat(s, 3, 0)}
+                      className="rounded bg-white/10 px-1.5 py-0.5"
+                    >
+                      Force Continue
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="sim-force-narrow-loss"
+                      onClick={() => void castVotesAndForceForSeat(s, 2, 3)}
+                      className="rounded bg-white/10 px-1.5 py-0.5"
+                    >
+                      Force Narrow Loss
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="sim-force-replace"
+                      onClick={() => void castVotesAndForceForSeat(s, 0, 2)}
+                      className="rounded bg-white/10 px-1.5 py-0.5"
+                    >
+                      Force Replace
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="sim-force-replace-now"
+                    onClick={() => void forceClosingNow(s)}
+                    className="rounded bg-white/10 px-1.5 py-0.5"
+                  >
+                    Force Replace Now
+                  </button>
+                )}
+                <button type="button" data-testid="sim-open-seat" onClick={() => openSeat(s)} className="rounded bg-white/10 px-1.5 py-0.5">
+                  Open Seat
+                </button>
+              </div>
             </div>
           );
         })}

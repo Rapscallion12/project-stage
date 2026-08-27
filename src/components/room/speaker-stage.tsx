@@ -132,6 +132,7 @@ export function SpeakerStage({
   reconnectingIdentities,
   soloMode = false,
   isPreviewBuild = false,
+  simulatedGuestIds,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -159,6 +160,8 @@ export function SpeakerStage({
   soloMode?: boolean;
   /** Issue #21, Part 1: threaded straight through to each SpeakerTile — see that component's own doc comment. Defaults to false, same "additive, existing callers unaffected" shape as every other optional prop here. */
   isPreviewBuild?: boolean;
+  /** Session Simulator real-device follow-up: guest ids the simulator generated in this tab — see RoomLayoutProps' own doc comment. Optional so every non-preview caller/test can omit it; treated as empty when absent. */
+  simulatedGuestIds?: ReadonlySet<string>;
 }) {
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
     // Issue #18 consistency fix: soloMode and isSpeaker are two props
@@ -214,6 +217,7 @@ export function SpeakerStage({
           orientation={orientation}
           clearTopChrome={seatNumber === 1}
           isPreviewBuild={isPreviewBuild}
+          isSimulated={Boolean(seat?.guest_id && simulatedGuestIds?.has(seat.guest_id))}
         />
       </div>
     );

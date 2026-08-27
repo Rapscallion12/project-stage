@@ -4,6 +4,71 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 38: Session Simulator round-testing presentation — timer, occupied placeholder, per-seat forcing (issue #21, second real-device follow-up)
+
+**Goal**: the compact/collapsible panel from Session 37 was usable on
+mobile, but still didn't let the user clearly *test the round system* —
+no visible per-seat round timer on the stage itself, no obvious signal
+that a seeded fake speaker's seat was occupied (it fell into the same
+"Camera off" placeholder a real permission failure shows, since a
+simulated identity never opens a LiveKit connection), and one ambiguous
+global Force Continue/Narrow Loss/Decisive-Replace control that acted on
+"whichever round happens to be active first" — unworkable with two
+independent per-speaker rounds. Scoped explicitly to simulator/test
+presentation and deterministic controls — no voting, round-resolution,
+or selection logic changed.
+
+**Implemented**: the round-timer badge now shows "Round N · Ns" (active)
+or "Final Ns" (closing) — added a `roundNumber` field to the existing
+`useSpeakerRoundCountdown` display, still reading the seat's own
+authoritative deadline, never a second timer. A new `isSimulated` prop on
+`SpeakerTile` swaps the no-video placeholder's "Camera off" for an
+unambiguous "Simulated speaker" label — purely cosmetic, driven by a
+`simulatedGuestIds` set that lives in `EventRoom` (populated only via
+`SessionSimulatorPanel`'s new `onSimulatedIdentitiesCreated` callback,
+so it's always empty in production) and threaded through
+`RoomLayoutProps` the same way `isPreviewBuild` already is. Every Force
+Continue/Narrow Loss/Replace control now lives inside its own seat's
+round-status block and targets that seat's `event_speakers.id` directly
+— no shared "first active round" lookup left anywhere. A closing-phase
+seat shows a single "Force Replace Now" instead (the real RPC rejects
+votes once phase isn't 'active', so a three-way choice there would just
+fail). `forceRoundDeadline` now returns the real resolver's own outcome
+so the panel's forced-outcome feedback (e.g. "Seat 1 → Narrow Loss (60%
+Replace)") always reflects what was actually decided, never just the
+intended vote split. Added a "what would happen if this round ended now"
+projection per seat, using the same pure decision function the real RPC
+mirrors. "Seed 2 Speakers" now generates two dedicated identities once
+per simulation run and reuses them on every subsequent click, instead of
+drawing a fresh random pair each time.
+
+**Incidental fix**: a stricter `react-hooks/purity`/`react-hooks/refs`
+lint pass (newly enforced since the prior session, not introduced by
+either recent round) flagged the panel's pre-existing prop-mirror ref
+assignments and a direct `Date.now()` read. Fixed with this codebase's
+own established idioms — an effect for the ref mirror, `useNow()` for
+the clock read — the same fix `speaker-vote-panel.tsx` already used for
+the identical issue class.
+
+**Verification**: rewrote/extended `session-simulator-panel.test.tsx`
+(29 tests — per-seat force-button isolation across two independent
+seats, forced-outcome feedback matching the resolver's real return
+value, closing-phase-only "Force Replace Now," stable seed-identity
+reuse across clicks, `onSimulatedIdentitiesCreated` reporting every
+generated id); extended `speaker-tile.test.tsx` (new round-number badge
+case, three new "Simulated speaker" placeholder cases including a
+defensive local-seat-never-shows-it case) and `speaker-stage.test.tsx`
+(three new `simulatedGuestIds` threading cases). Full suite 844/844 (70
+files), lint, tsc, build all clean.
+
+**Not built this pass**: no change to real production authorization,
+voting, or selection paths, per instruction; drag support on the
+collapsed pill remains out of scope (unchanged from Session 37). Fresh
+preview deployed; stopping here for the user's review — not merged to
+main.
+
+---
+
 ## 2026-08-27 — Session 37: Session Simulator UI — compact, collapsible, draggable (issue #21, real-device follow-up)
 
 **Goal**: real-device testing of Session 36's work surfaced that the

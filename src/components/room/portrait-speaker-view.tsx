@@ -107,6 +107,7 @@ export function PortraitSpeakerView({
   isJoiningSeat,
   reconnectingIdentities,
   isPreviewBuild,
+  simulatedGuestIds,
   messages,
   reactions,
   pendingRequests,
@@ -135,6 +136,7 @@ export function PortraitSpeakerView({
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
         isPreviewBuild={isPreviewBuild}
+        simulatedGuestIds={simulatedGuestIds}
         soloMode
       />
 

@@ -77,6 +77,7 @@ const baseProps: RoomLayoutProps = {
   reactions: {},
   pendingRequests: [],
   isPreviewBuild: false,
+  simulatedGuestIds: new Set(),
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),

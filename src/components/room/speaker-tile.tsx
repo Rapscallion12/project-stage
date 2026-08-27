@@ -66,6 +66,7 @@ export function SpeakerTile({
   orientation = "landscape",
   clearTopChrome = false,
   isPreviewBuild = false,
+  isSimulated = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -130,6 +131,19 @@ export function SpeakerTile({
   clearTopChrome?: boolean;
   /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`) and threaded down unchanged — see lib/preview-mode.ts. Governs only whether the round timer badge below reveals early (full-round, for testing) or waits for the real product's final-~10s window; never changes the deadline itself. */
   isPreviewBuild?: boolean;
+  /**
+   * Session Simulator real-device follow-up: true when this occupied
+   * seat's `guest_id` is one the simulator generated in this browser tab
+   * (see RoomLayoutProps' own doc comment). Purely cosmetic — swaps the
+   * ordinary "Camera off" no-video placeholder for an unambiguous
+   * "Simulated speaker" one, so it's never mistaken for a real technical
+   * problem while testing. No fake LiveKit video, no change to `hasVideo`/
+   * `participant` handling — a simulated identity never actually connects
+   * to LiveKit, so it always falls through to the same no-video branch a
+   * real speaker who hasn't turned their camera on would; this only
+   * changes what that branch says.
+   */
+  isSimulated?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -282,6 +296,18 @@ export function SpeakerTile({
               : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
           </p>
         </div>
+      ) : isSimulated ? (
+        <div
+          data-testid="simulated-speaker-placeholder"
+          className="flex h-full w-full flex-col items-center justify-center gap-2 border-2 border-dashed border-accent/40 bg-accent/5 text-accent"
+        >
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/20 text-lg font-semibold">
+            {initials(speaker.display_name)}
+          </div>
+          <p className="text-xs font-medium" data-testid="simulated-speaker-label">
+            Simulated speaker
+          </p>
+        </div>
       ) : (
         <div
           data-testid="no-video-placeholder"
@@ -330,13 +356,17 @@ export function SpeakerTile({
  * guaranteed-outcome grace window, not another survival round, and
  * showing it identically to an ordinary round would misrepresent that.
  */
-function SpeakerRoundBadge({ display }: { display: { remainingSeconds: number; phase: "active" | "closing" } }) {
+function SpeakerRoundBadge({
+  display,
+}: {
+  display: { remainingSeconds: number; phase: "active" | "closing"; roundNumber: number };
+}) {
   return (
     <span
       data-testid="speaker-round-timer"
       className="shrink-0 rounded-full bg-black/40 px-1.5 py-0.5 text-[10px] font-medium text-white/80 [text-shadow:none]"
     >
-      {display.phase === "closing" ? `final ${display.remainingSeconds}s` : `${display.remainingSeconds}s`}
+      {display.phase === "closing" ? `Final ${display.remainingSeconds}s` : `Round ${display.roundNumber} · ${display.remainingSeconds}s`}
     </span>
   );
 }

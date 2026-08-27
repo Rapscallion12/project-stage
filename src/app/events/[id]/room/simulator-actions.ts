@@ -36,6 +36,7 @@ import { isPreviewOrDevBuild } from "@/lib/preview-mode";
 import { insertMessage, insertReaction } from "@/lib/repositories/chat";
 import { requestToSpeakAsGuest, castSpeakerRequestVoteAsGuest } from "@/lib/repositories/speaker-requests";
 import { claimSpeakerSeat, endSpeakerSeat, castSpeakerRoundVoteAsGuest } from "@/lib/repositories/event-speakers";
+import type { ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
 import { resolveSpeakerRoundAction } from "./actions";
 
 function assertSimulatorAvailable(): void {
@@ -97,9 +98,13 @@ export async function simulateOpenSeat(eventId: string, guestId: string) {
  * both unconditionally, which would violate the row's own
  * `closing_ends_at_matches_phase` CHECK constraint (closing_ends_at must
  * stay null while phase is 'active'). Then calls the real
- * `resolveSpeakerRoundAction` so the round resolves immediately.
+ * `resolveSpeakerRoundAction` so the round resolves immediately — its
+ * return value (the real resolver's own outcome, never a value this
+ * function invents) is returned here too, so the simulator panel's
+ * forced-outcome feedback always reflects what the actual resolution
+ * logic decided, not just what the caller intended to force.
  */
-export async function forceRoundDeadline(eventSpeakersId: string): Promise<void> {
+export async function forceRoundDeadline(eventSpeakersId: string): Promise<ResolveSpeakerRoundOutcome> {
   assertSimulatorAvailable();
   const supabase = createServiceClient();
   const past = new Date(Date.now() - 1000).toISOString();
@@ -116,5 +121,5 @@ export async function forceRoundDeadline(eventSpeakersId: string): Promise<void>
     await supabase.from("event_speakers").update({ round_ends_at: past }).eq("id", eventSpeakersId);
   }
 
-  await resolveSpeakerRoundAction(eventSpeakersId);
+  return resolveSpeakerRoundAction(eventSpeakersId);
 }

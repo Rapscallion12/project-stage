@@ -70,6 +70,19 @@ merged to `main`.
   dragged by its header (touch and mouse) without ever going fully
   offscreen. Presentation-only — no change to simulation behavior,
   voting, round logic, or any production code path. See DECISIONS.md.
+- **Session Simulator — round-testing presentation** (issue #21, second
+  real-device follow-up) — the round-timer badge now shows "Round N ·
+  Ns" / "Final Ns" on the stage itself; a seeded simulated speaker's tile
+  now shows an unambiguous "Simulated speaker" placeholder instead of
+  the generic "Camera off" one; the round-outcome force controls are now
+  per-seat (Force Continue/Narrow Loss/Replace, or "Force Replace Now"
+  during closing) instead of one ambiguous global control, each with
+  live vote tallies and a "what would happen if this round ended now"
+  projection; forced-outcome feedback now reflects the real resolver's
+  return value; "Seed 2 Speakers" reuses the same two identities for the
+  whole run instead of a fresh random pair per click. Presentation/
+  test-control only — no change to voting, round-resolution, or
+  selection logic. See DECISIONS.md.
 
 ## [public-beta-v1] - 2026-08-26
 

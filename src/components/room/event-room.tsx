@@ -129,6 +129,18 @@ export function EventRoom({
   const [joinSeatMessage, setJoinSeatMessage] = useState<string | null>(null);
   const [isJoiningSeat, startJoiningSeat] = useTransition();
 
+  // Session Simulator real-device follow-up: guest ids the simulator has
+  // generated in this tab, so SpeakerTile can render an unambiguous
+  // "Simulated speaker" placeholder instead of the ordinary "Camera off"
+  // one — see RoomLayoutProps' own doc comment. Stays empty (and the
+  // registration callback below is never invoked) outside `isPreviewBuild`,
+  // since SessionSimulatorPanel — the only caller of it — isn't mounted
+  // then either.
+  const [simulatedGuestIds, setSimulatedGuestIds] = useState<ReadonlySet<string>>(new Set());
+  function registerSimulatedGuestIds(ids: string[]) {
+    setSimulatedGuestIds((prev) => new Set([...prev, ...ids]));
+  }
+
   function handleTapEmptySeat() {
     // Issue #18, Speaker View real-device finding: `SpeakerStage`'s own
     // `viewerIsSpeaking` check already omits `onTapEmptySeat` entirely
@@ -503,6 +515,7 @@ export function EventRoom({
     toggleMicrophone: connection.toggleMicrophone,
     toggleCamera: connection.toggleCamera,
     isPreviewBuild,
+    simulatedGuestIds,
   };
 
   return (
@@ -567,6 +580,7 @@ export function EventRoom({
           speakers={speakers}
           pendingRequests={pendingRequests}
           messages={messages}
+          onSimulatedIdentitiesCreated={registerSimulatedGuestIds}
         />
       )}
     </div>

@@ -101,4 +101,17 @@ export type RoomLayoutProps = {
   toggleCamera: () => Promise<void>;
   /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`), never re-derived client-side — see lib/preview-mode.ts. Governs the full-time speaker-round timer test presentation only; the real product default is final-~10s-only. */
   isPreviewBuild: boolean;
+  /**
+   * Issue #21, Session Simulator real-device follow-up: guest ids the
+   * Session Simulator has generated *in this browser tab* — cosmetic-only,
+   * lets SpeakerTile render an obviously-simulated placeholder ("Simulated
+   * speaker") instead of the ambiguous generic "Camera off" state for a
+   * seat it knows is fake. Never authoritative (a different tab that never
+   * opened the simulator won't have these ids and will show the ordinary
+   * placeholder instead — acceptable since this is a testing aid for
+   * whoever is running the simulator, not a synced piece of room state).
+   * Always an empty set outside `isPreviewBuild` — SessionSimulatorPanel
+   * (the only thing that ever populates it) isn't mounted in production.
+   */
+  simulatedGuestIds: ReadonlySet<string>;
 };

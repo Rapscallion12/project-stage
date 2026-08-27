@@ -83,6 +83,7 @@ export function MobileLandscapeSpeakerView({
   isJoiningSeat,
   reconnectingIdentities,
   isPreviewBuild,
+  simulatedGuestIds,
   messages,
   reactions,
   pendingRequests,
@@ -111,6 +112,7 @@ export function MobileLandscapeSpeakerView({
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
         isPreviewBuild={isPreviewBuild}
+        simulatedGuestIds={simulatedGuestIds}
         soloMode
       />
 

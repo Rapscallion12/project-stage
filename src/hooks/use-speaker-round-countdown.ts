@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { ROUND_TIMER_REVEAL_SECONDS } from "@/lib/speaker-round";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
-export type SpeakerRoundDisplay = { remainingSeconds: number; phase: "active" | "closing" };
+export type SpeakerRoundDisplay = { remainingSeconds: number; phase: "active" | "closing"; roundNumber: number };
 
 /**
  * Issue #21, Part 1: what a speaker's round-timer badge should show
@@ -20,7 +20,7 @@ export type SpeakerRoundDisplay = { remainingSeconds: number; phase: "active" | 
  * testing so the round's actual start/end is directly observable.
  */
 export function speakerRoundDisplay(
-  speaker: Pick<EventSpeaker, "round_phase" | "round_ends_at" | "closing_ends_at"> | null,
+  speaker: Pick<EventSpeaker, "round_phase" | "round_ends_at" | "closing_ends_at" | "round_number"> | null,
   now: number,
   isPreviewBuild: boolean,
 ): SpeakerRoundDisplay | null {
@@ -31,7 +31,7 @@ export function speakerRoundDisplay(
   const remainingSeconds = Math.max(0, Math.ceil((new Date(deadline).getTime() - now) / 1000));
   if (!isPreviewBuild && remainingSeconds > ROUND_TIMER_REVEAL_SECONDS) return null;
 
-  return { remainingSeconds, phase: speaker.round_phase };
+  return { remainingSeconds, phase: speaker.round_phase, roundNumber: speaker.round_number };
 }
 
 /**
@@ -45,7 +45,7 @@ export function speakerRoundDisplay(
  * schedule.
  */
 export function useSpeakerRoundCountdown(
-  speaker: Pick<EventSpeaker, "round_phase" | "round_ends_at" | "closing_ends_at"> | null,
+  speaker: Pick<EventSpeaker, "round_phase" | "round_ends_at" | "closing_ends_at" | "round_number"> | null,
   isPreviewBuild: boolean,
 ): SpeakerRoundDisplay | null {
   const [now, setNow] = useState(() => Date.now());

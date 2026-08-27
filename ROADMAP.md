@@ -783,6 +783,19 @@ different dependencies. Current order:
       fully offscreen and re-clamped on resize/orientation/collapse.
       Presentation-only — no change to simulation behavior, voting,
       round logic, or any production code path. See DECISIONS.md.
+      **Round-testing presentation follow-up (2026-08-27, same branch)**:
+      the panel still didn't let the user clearly test the round system
+      itself. Round-timer badge now reads "Round N · Ns"/"Final Ns" on
+      the stage; a seeded simulated speaker's tile shows an unambiguous
+      "Simulated speaker" placeholder instead of the generic "Camera
+      off" one (cosmetic only, via a `simulatedGuestIds` set threaded
+      the same way as `isPreviewBuild`); the round-outcome force
+      controls are now per-seat (never one ambiguous global control),
+      each with live vote tallies and a projected-outcome line;
+      `forceRoundDeadline` now returns the real resolver's outcome so
+      forced-outcome feedback always matches what was actually decided;
+      "Seed 2 Speakers" reuses the same two stable identities for the
+      whole run. Presentation/test-control only. See DECISIONS.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

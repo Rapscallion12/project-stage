@@ -500,6 +500,49 @@ describe("SpeakerStage", () => {
     });
   });
 
+  describe("simulatedGuestIds (Session Simulator real-device follow-up)", () => {
+    it("marks only the seat whose guest_id is in the set as simulated", () => {
+      render(
+        <SpeakerStage
+          speakers={[
+            speaker({ id: "s1", seat_number: 1, profile_id: null, guest_id: "sim-guest-1" }),
+            speaker({ id: "s2", seat_number: 2, profile_id: null, guest_id: "real-guest-2" }),
+          ]}
+          orientation="portrait"
+          {...baseProps}
+          simulatedGuestIds={new Set(["sim-guest-1"])}
+        />,
+      );
+      expect(screen.getAllByTestId("simulated-speaker-placeholder")).toHaveLength(1);
+      expect(screen.getAllByTestId("no-video-placeholder")).toHaveLength(1);
+    });
+
+    it("marks no seat as simulated when the set is omitted (every existing caller unaffected)", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: null, guest_id: "some-guest" })]}
+          orientation="portrait"
+          {...baseProps}
+        />,
+      );
+      expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+    });
+
+    it("never marks a real profile-held seat as simulated, even if its id happened to appear in the set", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "p1", guest_id: null })]}
+          orientation="portrait"
+          {...baseProps}
+          simulatedGuestIds={new Set(["p1"])}
+        />,
+      );
+      expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+    });
+  });
+
   describe("inactivity grace period (real-device finding)", () => {
     it("passes isInactive through to the matching seat's tile only", () => {
       render(
