@@ -131,6 +131,7 @@ export function SpeakerStage({
   scrimInstant = false,
   reconnectingIdentities,
   soloMode = false,
+  isPreviewBuild = false,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -156,6 +157,8 @@ export function SpeakerStage({
   reconnectingIdentities: ReadonlySet<string>;
   /** Issue #18, Speaker View Phase 1 — see this component's own doc comment above. Defaults to false: every existing caller (MobileLandscapeRoom, DesktopRoom, PortraitRoom's Audience/Candidate path) is completely unaffected. */
   soloMode?: boolean;
+  /** Issue #21, Part 1: threaded straight through to each SpeakerTile — see that component's own doc comment. Defaults to false, same "additive, existing callers unaffected" shape as every other optional prop here. */
+  isPreviewBuild?: boolean;
 }) {
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
     // Issue #18 consistency fix: soloMode and isSpeaker are two props
@@ -210,6 +213,7 @@ export function SpeakerStage({
           isInactive={identity !== null && reconnectingIdentities.has(identity)}
           orientation={orientation}
           clearTopChrome={seatNumber === 1}
+          isPreviewBuild={isPreviewBuild}
         />
       </div>
     );

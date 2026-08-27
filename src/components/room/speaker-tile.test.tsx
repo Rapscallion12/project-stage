@@ -18,6 +18,11 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
@@ -423,6 +428,59 @@ describe("SpeakerTile", () => {
         />,
       );
       expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("Speaker inactive…");
+    });
+  });
+
+  describe("round-timer badge (issue #21, Part 1)", () => {
+    it("shows the round timer when isPreviewBuild is true, even far from the deadline", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 45_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={true}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("45s");
+    });
+
+    it("hides the round timer by default (production), far from the deadline", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 45_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={false}
+        />,
+      );
+      expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
+    });
+
+    it("reveals the round timer within the final ~10s even in production", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 8_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={false}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toBeInTheDocument();
+    });
+
+    it("labels the closing period distinctly ('final Ns')", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({
+            round_phase: "closing",
+            closing_ends_at: new Date(Date.now() + 20_000).toISOString(),
+          })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={true}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("final 20s");
     });
   });
 });

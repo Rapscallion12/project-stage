@@ -166,6 +166,11 @@ function mySeat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
@@ -182,6 +187,7 @@ function renderEventRoom(initialSpeakers: EventSpeaker[]) {
       initialReactions={{}}
       initialHasPendingRequest={false}
       initialPendingRequests={[]}
+      isPreviewBuild={false}
     />,
   );
 }
@@ -266,6 +272,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialReactions={{}}
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
+          isPreviewBuild={false}
         />,
       );
 
@@ -291,6 +298,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialReactions={{}}
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
+          isPreviewBuild={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -316,6 +324,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialReactions={{}}
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
+          isPreviewBuild={false}
         />,
       );
       expect(screen.queryByTestId("portrait-room")).not.toBeInTheDocument();
@@ -333,6 +342,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialReactions={{}}
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
+          isPreviewBuild={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -432,6 +442,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialReactions={{}}
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
+          isPreviewBuild={false}
         />,
       );
 
@@ -472,6 +483,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialReactions={{}}
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
+          isPreviewBuild={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");

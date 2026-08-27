@@ -64,6 +64,7 @@ const baseProps: RoomLayoutProps = {
   messages: [],
   reactions: {},
   pendingRequests: [],
+  isPreviewBuild: false,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),

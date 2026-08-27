@@ -73,6 +73,24 @@ export type EventSpeaker = {
    * collapse into the single `speakerPresence` concept the UI uses.
    */
   media_inactive_since: string | null;
+  /** Issue #21, Part 1: which protected 60-second block this is for the current occupant — 1 at claim time, incremented each time a round resolves to "continue". */
+  round_number: number;
+  round_started_at: string;
+  /** Authoritative round deadline — see `resolve_speaker_round` (migration 00000000000021) and `useSpeakerRoundResolution`. Client countdowns display this; they never own it. */
+  round_ends_at: string;
+  /** 'active': normal round, voting open. 'closing': a narrow Replace loss already decided the outcome — this is the 30s grace period to finish speaking, not another survival vote. */
+  round_phase: "active" | "closing";
+  /** Set only while round_phase is 'closing' — the guaranteed-replacement deadline. */
+  closing_ends_at: string | null;
+};
+
+export type SpeakerRoundVote = {
+  id: string;
+  event_speakers_id: string;
+  voter_profile_id: string | null;
+  voter_guest_id: string | null;
+  choice: "continue" | "replace";
+  created_at: string;
 };
 
 /**
@@ -427,4 +445,96 @@ export async function releaseExpiredInactiveSpeaker(
   }
   const row = data as EventSpeaker | null;
   return row?.id ? row : null;
+}
+
+/**
+ * Issue #21, Part 2: casts/transfers/changes the caller's one active
+ * Continue/Replace vote for a specific speaker's current round. Rejected
+ * server-side (not just hidden in the UI) once the round has moved to
+ * `'closing'` — see migration 00000000000021's `cast_speaker_round_vote`
+ * for why: a narrow-loss outcome is already decided, and accepting more
+ * votes at that point would be meaningless.
+ */
+export async function castSpeakerRoundVote(eventSpeakersId: string, choice: "continue" | "replace"): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("cast_speaker_round_vote", {
+    p_event_speakers_id: eventSpeakersId,
+    p_choice: choice,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/** A guest's own round vote — service-role-only, same tier as `castSpeakerRequestVoteAsGuest`. */
+export async function castSpeakerRoundVoteAsGuest(
+  eventSpeakersId: string,
+  choice: "continue" | "replace",
+  guestId: string,
+): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("cast_speaker_round_vote_as_guest", {
+    p_event_speakers_id: eventSpeakersId,
+    p_choice: choice,
+    p_guest_id: guestId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export type ResolveSpeakerRoundOutcome =
+  | "no-active-occupancy"
+  | "active-not-yet-expired"
+  | "closing-not-yet-expired"
+  | "continue"
+  | "narrow-loss"
+  | "decisive-replace"
+  | "replaced-after-closing";
+
+export type ResolveSpeakerRoundResult = {
+  outcome: ResolveSpeakerRoundOutcome;
+  /** The occupancy row's own identity — returned unconditionally (even for a no-op outcome), so callers that need to react to a replacement (e.g. revoking LiveKit publish rights) never need a second fetch. Null only when outcome is 'no-active-occupancy'. */
+  eventId: string | null;
+  identity: SeatIdentity | null;
+};
+
+/**
+ * Issue #21, Part 1: the one authoritative round state transition — see
+ * migration 00000000000021/00000000000022's `resolve_speaker_round` for
+ * the full decision (mirrors `lib/speaker-round.ts`'s
+ * `resolveRoundOutcome` exactly). Trusted-server-only; always safe to
+ * call early, late, or repeatedly — it re-derives everything from the
+ * row's own timestamps and the real vote tally, and is a pure no-op if
+ * it's not actually time yet. See `useSpeakerRoundResolution` for how
+ * every connected client independently schedules a call to this at the
+ * real deadline, so resolution never depends on any one browser staying
+ * open.
+ */
+export async function resolveSpeakerRound(eventSpeakersId: string): Promise<ResolveSpeakerRoundResult> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("resolve_speaker_round", { p_event_speakers_id: eventSpeakersId });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const row = data?.[0];
+  const outcome = (row?.outcome ?? "no-active-occupancy") as ResolveSpeakerRoundOutcome;
+  if (!row || (row.profile_id === null && row.guest_id === null)) {
+    return { outcome, eventId: null, identity: null };
+  }
+  return {
+    outcome,
+    eventId: row.event_id,
+    identity: row.profile_id ? { type: "profile", id: row.profile_id } : { type: "guest", id: row.guest_id! },
+  };
+}
+
+/** Live vote tally for a speaker's current round — publicly readable, same tier as `listActiveSpeakers`. */
+export async function listSpeakerRoundVotes(eventSpeakersId: string): Promise<SpeakerRoundVote[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("speaker_round_votes")
+    .select("*")
+    .eq("event_speakers_id", eventSpeakersId);
+  return (data as SpeakerRoundVote[] | null) ?? [];
 }

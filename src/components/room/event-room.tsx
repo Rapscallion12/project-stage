@@ -14,6 +14,7 @@ import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
 import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
 import { useOwnSeatExpirationConfirmation } from "@/hooks/use-own-seat-expiration-confirmation";
 import { useSeatReconciliation } from "@/hooks/use-seat-reconciliation";
+import { useSpeakerRoundResolution } from "@/hooks/use-speaker-round-resolution";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -21,6 +22,7 @@ import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
 import { RoomDiagnostics } from "@/components/room/room-diagnostics";
+import { SessionSimulatorPanel } from "@/components/room/session-simulator-panel";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { formatCountdown, getEventPhase, type EventPhase } from "@/lib/events";
@@ -97,6 +99,7 @@ export function EventRoom({
   initialReactions,
   initialHasPendingRequest,
   initialPendingRequests,
+  isPreviewBuild,
 }: {
   event: Event;
   identity: Identity;
@@ -110,6 +113,8 @@ export function EventRoom({
   initialHasPendingRequest: boolean;
   /** Issue #21: every currently-pending speaker request, for "Top Speaker Requests" — see useActiveSpeakerRequests' own doc comment. */
   initialPendingRequests: SpeakerRequest[];
+  /** Issue #21, Parts 1 & 5: computed server-side (`isPreviewOrDevBuild()`) — never re-derived here, since `VERCEL_ENV` isn't reliably readable in a client component. Governs the full-time round-timer test presentation and the Session Simulator panel's mere existence in the tree. */
+  isPreviewBuild: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
   const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
@@ -391,6 +396,14 @@ export function EventRoom({
     enabled: canConnect,
   });
 
+  // Issue #21, Part 1/15: schedules the authoritative Continue/Replace
+  // round deadline trigger for every currently-occupied seat — runs
+  // unconditionally (not gated on canConnect/isSpeaker), so any
+  // connected client, audience included, can be the one whose timer
+  // fires and keeps a round resolving even if neither seated speaker's
+  // own tab is around to do it. See the hook's own doc comment.
+  useSpeakerRoundResolution(speakers);
+
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
   // media-presence transitions to the server, which owns the actual
@@ -489,6 +502,7 @@ export function EventRoom({
     cameraMuted: connection.cameraMuted,
     toggleMicrophone: connection.toggleMicrophone,
     toggleCamera: connection.toggleCamera,
+    isPreviewBuild,
   };
 
   return (
@@ -536,6 +550,23 @@ export function EventRoom({
           needsMediaActivation={connection.needsMediaActivation}
           mediaError={connection.mediaError}
           participantCount={connection.participantCount}
+        />
+      )}
+      {/*
+       * Issue #21, Part 5: the actual security boundary is
+       * `isPreviewBuild` itself (computed server-side, `VERCEL_ENV !==
+       * "production"` — see lib/preview-mode.ts) plus every simulator
+       * Server Action independently re-checking the same thing — this
+       * conditional render is defense in depth, not the enforcement.
+       * Deliberately outside the main room div, same reasoning as
+       * RoomDiagnostics above: tooling, not part of the consumer room UI.
+       */}
+      {isPreviewBuild && (
+        <SessionSimulatorPanel
+          eventId={event.id}
+          speakers={speakers}
+          pendingRequests={pendingRequests}
+          messages={messages}
         />
       )}
     </div>

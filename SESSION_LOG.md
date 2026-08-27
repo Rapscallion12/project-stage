@@ -4,6 +4,87 @@ Newest entry first.
 
 ---
 
+## 2026-08-26 — Session 36: Per-speaker Continue/Replace rounds + preview-only Session Simulator (issue #21, Phase 2)
+
+**Goal**: build the first real Continue/Replace round system (Sections
+F–H deferred from Phase 1), plus a preview-only Session Simulator so the
+user can exercise a near-real active session solo, ahead of scheduling
+real multi-person testing of Phase 1 candidate promotion. Explicitly
+instructed to architect round authority (deadlines, race-safety,
+refresh-doesn't-restart, connection to Phase 1 selection) before writing
+schema, and to stop and propose an alternative rather than add any
+production-accessible testing backdoor if the simulator seemed to need
+one.
+
+**Architecture investigated and reported before coding**: round
+authority reuses #18's exact `release_if_expired`/reconnect-grace
+pattern — a deadline lives in the row, a trusted server RPC re-derives
+the outcome from Postgres's clock, no client owns the decision. Rounds
+are per-speaker (independent state per occupied seat), confirming and
+finalizing the conflict flagged-but-not-yet-resolved-in-schema at the end
+of Session 35. A genuine gap was found in the existing dev-tools gate:
+it checks `NODE_ENV`, which Next.js force-sets to `production` for every
+build including Vercel previews — meaning the simulator would have been
+untestable on any deployed preview URL. Fixed with a new
+`VERCEL_ENV`-based gate (`isPreviewOrDevBuild`), enforced server-side in
+every simulator action; concluded no backdoor was needed.
+
+**Implemented — round system**: `event_speakers` gained round columns
+(migrations 00000000000021/22); `resolve_speaker_round` RPC decides
+Continue (0 votes or Replace ≤50%, +60s, votes reset) / narrow-loss
+(Replace >50% and <66%, 30s closing period, no further voting, guaranteed
+replace after) / decisive-replace (Replace ≥66%, replaced at the round
+boundary, no closing period) using integer cross-multiplication
+thresholds, mirrored exactly in `lib/speaker-round.ts` for the pure
+decision logic and centralized config
+(`ROUND_DURATION_SECONDS`/`CLOSING_DURATION_SECONDS`/threshold
+percentages/`ROUND_TIMER_REVEAL_SECONDS`). Replacement hands off to the
+*existing* Phase 1 freeze/rank/weighted-selection/Going-Live path — no
+second candidate system. `useSpeakerRoundResolution` schedules the
+resolving action per seat's live deadline (tracking the deadline value,
+not just the timer, since a Continue outcome reschedules on the same row
+id). The Vote control is now real (`SpeakerVotePanel`, wired via a new
+narrow `voteSlot` slot on `WatchModeControls` so Speaker View's separate
+`micCameraSlot` path stays untouched) — compact by default, one current
+Continue/Replace choice per speaker per round, changeable, reset on new
+rounds. Round countdown display (`SpeakerRoundBadge`) is hidden in
+production until the final 10 seconds, shown for the full round on
+preview/dev builds via the new `isPreviewBuild` prop threaded through 5
+layers.
+
+**Implemented — Session Simulator**: preview-only panel
+(`SessionSimulatorPanel`) generating a ~20-person simulated audience that
+drives real production pathways — comments, likes, Request-to-Speak,
+request voting (same exclusive-vote semantics as real users), and round
+voting — via the same repository functions/Server Actions a real guest
+uses, just with a generated identity instead of a cookie-derived one.
+Deterministic buttons force each round outcome and open a seat for
+guided testing. The single simulation-specific adapter,
+`forceRoundDeadline`, backdates a round's deadline via the service client
+then calls the real resolution action — the clock is faked, the decision
+never is. Real-time (not accelerated) timing by default, per instruction.
+
+**Verification**: 10 real-database integration tests for the round state
+machine (caught two of my own test-authoring vote-math bugs, not RPC
+bugs, via a shared `castNarrowLossVotes` helper); unit/component tests
+for the decision logic, resolution hook, countdown display/hook, vote
+panel, simulator pure-logic modules, simulator action gating, and the
+simulator panel itself (Start/Stop, deterministic buttons calling the
+correct real actions with correct arguments, stop halting future
+scheduled activity). Full suite 819/819 (70 files), lint, tsc, build all
+clean. Two migrations (00000000000021, 00000000000022) applied to the
+real linked project — additive only.
+
+**Not built this pass**: a seated speaker still has no UI to vote on a
+co-speaker's round (Speaker View's `voteSlot` wasn't wired this pass,
+reported as an explicit scoping limit); no accelerated-timing simulator
+mode (left for later per instruction, real-time is the default and only
+mode this pass). Fresh preview deployed; stopping here for the user's
+review per explicit instruction — not merged to main, no further feature
+work started.
+
+---
+
 ## 2026-08-26 — Session 35: Request-to-Speak voting + ranked Top 3 + server-authoritative weighted selection (issue #21, Phase 1)
 
 **Goal**: first functional audience-voting/speaker-selection loop.

@@ -6,6 +6,7 @@ import { getEventById } from "@/lib/repositories/events";
 import { listActiveSpeakers } from "@/lib/repositories/event-speakers";
 import { listRecentMessages, listReactionsForMessages } from "@/lib/repositories/chat";
 import { getPendingRequestForIdentity, listPendingSpeakerRequests } from "@/lib/repositories/speaker-requests";
+import { isPreviewOrDevBuild } from "@/lib/preview-mode";
 import { getLiveKitToken } from "./room/actions";
 import type { ReactionState } from "@/hooks/use-lobby-realtime";
 
@@ -65,6 +66,7 @@ export default async function EventPage(props: PageProps<"/events/[id]">) {
         initialReactions={initialReactions}
         initialHasPendingRequest={myPendingRequest !== null}
         initialPendingRequests={pendingRequests}
+        isPreviewBuild={isPreviewOrDevBuild()}
       />
     </div>
   );

@@ -99,4 +99,6 @@ export type RoomLayoutProps = {
   /** Toggles mute in place on the already-published track — see useLiveRoomConnection's own doc comment for why this is never setMicrophoneEnabled/setCameraEnabled. */
   toggleMicrophone: () => Promise<void>;
   toggleCamera: () => Promise<void>;
+  /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`), never re-derived client-side — see lib/preview-mode.ts. Governs the full-time speaker-round timer test presentation only; the real product default is final-~10s-only. */
+  isPreviewBuild: boolean;
 };

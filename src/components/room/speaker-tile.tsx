@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { Track, type Participant } from "livekit-client";
 import { cn } from "@/lib/utils";
 import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { useSpeakerRoundCountdown } from "@/hooks/use-speaker-round-countdown";
 import { inactiveSince } from "@/lib/speaker-presence";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -64,6 +65,7 @@ export function SpeakerTile({
   isInactive: isInactiveProp = false,
   orientation = "landscape",
   clearTopChrome = false,
+  isPreviewBuild = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -126,6 +128,8 @@ export function SpeakerTile({
   orientation?: Orientation;
   /** Only meaningful in portrait: true for whichever tile renders visually first (seat 1, or the promoted-open-seat's sibling when reordered) — offsets the identity label below the room's own top-chrome status pill/guest chip so they don't overlap. The second tile has nothing above it and needs no offset. */
   clearTopChrome?: boolean;
+  /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`) and threaded down unchanged — see lib/preview-mode.ts. Governs only whether the round timer badge below reveals early (full-round, for testing) or waits for the real product's final-~10s window; never changes the deadline itself. */
+  isPreviewBuild?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -149,6 +153,13 @@ export function SpeakerTile({
   // disagree and why this field must win. Only ever adds true, never
   // suppresses a true the caller already passed.
   const isInactive = isInactiveProp || mySeatInactiveSince !== null;
+
+  // Issue #21, Part 1: the same "read the row's own authoritative
+  // deadline, never invent a fresh one" discipline as
+  // reconnectSecondsRemaining above — null whenever there's nothing to
+  // show (no speaker, or the real product's reveal window hasn't been
+  // reached yet).
+  const roundDisplay = useSpeakerRoundCountdown(speaker, isPreviewBuild);
 
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
@@ -296,15 +307,36 @@ export function SpeakerTile({
             {speaker.display_name}
             {isLocal ? " (you)" : ""}
           </p>
+          {roundDisplay && <SpeakerRoundBadge display={roundDisplay} />}
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
           <p className="truncate text-sm font-medium text-white">
             {speaker.display_name}
             {isLocal ? " (you)" : ""}
           </p>
+          {roundDisplay && <SpeakerRoundBadge display={roundDisplay} />}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Issue #21, Part 1: the round-timer badge — deliberately tiny and
+ * neutral (no color-shift/pulse here; that emphasis intensification is
+ * the Vote *control*'s job per Part 2/H, not this identity-area badge).
+ * `closing` gets a distinct label ("final Ns") since that period is a
+ * guaranteed-outcome grace window, not another survival round, and
+ * showing it identically to an ordinary round would misrepresent that.
+ */
+function SpeakerRoundBadge({ display }: { display: { remainingSeconds: number; phase: "active" | "closing" } }) {
+  return (
+    <span
+      data-testid="speaker-round-timer"
+      className="shrink-0 rounded-full bg-black/40 px-1.5 py-0.5 text-[10px] font-medium text-white/80 [text-shadow:none]"
+    >
+      {display.phase === "closing" ? `final ${display.remainingSeconds}s` : `${display.remainingSeconds}s`}
+    </span>
   );
 }

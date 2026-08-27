@@ -29,13 +29,24 @@ import type { ReactNode } from "react";
  * `Gift` stays in place either way, still inert. Ordinary Watch Mode
  * (every existing caller) never passes this, so the row stays exactly
  * Comment/React/Vote/Gift, unchanged — this is purely additive.
+ *
+ * **`voteSlot`** (issue #21, Part 2): activates the Vote position with
+ * the real `SpeakerVotePanel` for ordinary Watch Mode callers — only
+ * meaningful when `micCameraSlot` is *not* provided (Speaker View's
+ * mic/camera pair already fully occupies this pair's position; a seated
+ * speaker has no Vote UI this pass, a known, reported scoping choice).
+ * Defaults to the original inert placeholder, so every caller that
+ * doesn't pass it is unaffected — React stays inert either way, this
+ * only ever swaps the Vote half of the pair.
  */
 export function WatchModeControls({
   composer,
   micCameraSlot,
+  voteSlot,
 }: {
   composer?: ReactNode;
   micCameraSlot?: ReactNode;
+  voteSlot?: ReactNode;
 }) {
   return (
     <div className="flex items-center gap-2.5">
@@ -43,7 +54,7 @@ export function WatchModeControls({
       {micCameraSlot ?? (
         <>
           <ControlEmblem testId="watch-emoji-emblem" emoji="🙂" label="React" />
-          <ControlEmblem testId="watch-vote-emblem" emoji="🗳" label="Vote" />
+          {voteSlot ?? <ControlEmblem testId="watch-vote-emblem" emoji="🗳" label="Vote" />}
         </>
       )}
       <ControlEmblem testId="watch-gift-emblem" emoji="🎁" label="Gift" />

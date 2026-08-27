@@ -3,6 +3,87 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-26 — Per-speaker Continue/Replace rounds + preview-only Session Simulator (issue #21, Phase 2)
+
+**Context**: Phase 2 of #21 — the first real Continue/Replace round system
+(replacing the inert Vote emblem), plus a preview-only Session Simulator so
+the user can exercise a near-real active session solo, ahead of scheduling
+real multi-person testing of Phase 1 candidate promotion. Explicit
+instruction to architect the round-authority model before writing schema,
+and to stop and propose an alternative rather than add any
+production-accessible testing backdoor if one seemed necessary.
+
+**Round authority — reused #18's pattern, not invented new**: a round's
+deadline (`round_ends_at`, later `closing_ends_at`) lives on
+`event_speakers` itself, exactly like the existing seat-reconnect grace
+deadline. A single trusted RPC, `resolve_speaker_round`, re-derives the
+outcome from Postgres's own clock and the accumulated vote rows — never
+from client-reported elapsed time. Any client (or the simulator) may
+*trigger* re-derivation early; none may *decide* the outcome. Client-side,
+`useSpeakerRoundResolution` schedules one `setTimeout` per occupied seat's
+current deadline and calls the resolving Server Action when it fires —
+the same shape as `useSpeakerReconnectGrace`. A round is per-speaker (one
+independent state machine per occupied seat), not per-pairing, which
+supersedes the 2026-08-20 per-pairing sketch noted in the entry below —
+that sketch was never built and this pass's own instructions are
+unambiguous about per-speaker state.
+
+**Thresholds kept centralized, not scattered**: `lib/speaker-round.ts`
+holds `ROUND_DURATION_SECONDS` (60), `CLOSING_DURATION_SECONDS` (30),
+`NARROW_LOSS_THRESHOLD_PCT` (50), `DECISIVE_REPLACE_THRESHOLD_PCT` (66),
+and the pure `resolveRoundOutcome`. The SQL RPC re-implements the same
+integer cross-multiplication comparison (`replace_count*100 >= 66*total`)
+rather than calling back into TS — duplicated by necessity (SQL can't
+import TS), kept in sync by doc-comment cross-reference, same discipline
+already used for `SPEAKER_DISCONNECT_GRACE_SECONDS`. A narrow Replace loss
+(>50%, <66%) enters a `closing` phase with its own `closing_ends_at`
+deadline and accepts no further votes — not a second voting round.
+
+**Timer visibility split from the start**: `ROUND_TIMER_REVEAL_SECONDS`
+(10) governs the eventual product behavior (hidden until the final
+window); a separate `isPreviewBuild` boolean forces full-duration display
+for this testing pass only, threaded down as a plain prop rather than
+read from environment inside presentation components. This was called
+out explicitly in the request as a distinction to architect cleanly, not
+bake in permanently.
+
+**Load-bearing gap found before building the simulator**: the existing
+dev-tools gate (`isDevToolsAvailable`) checks `NODE_ENV !== "production"`,
+but Next.js force-sets `NODE_ENV=production` for every `next build`,
+Vercel preview deployments included — that gate would never appear on any
+deployed preview URL the user could actually click, only local dev. Fixed
+with a new `isPreviewOrDevBuild()` (`lib/preview-mode.ts`) checking
+`VERCEL_ENV !== "production"` instead — Vercel's own per-deployment
+signal, `"production"` only for real `main` deploys, unspoofable by app
+config, and enforced server-side inside every simulator Server Action
+itself (not merely hidden client-side). Concluded this was sufficient and
+that no production-accessible backdoor was needed.
+
+**Simulator architecture — "fake the people, not the systems"**: every
+simulated action except one calls the exact same repository functions and
+Server Actions a real guest session would (`insertMessage`,
+`insertReaction`, `requestToSpeakAsGuest`, `castSpeakerRequestVoteAsGuest`,
+`castSpeakerRoundVoteAsGuest`, `claimSpeakerSeat`, `endSpeakerSeat`) — a
+simulated identity is just a generated UUID passed into these
+already-real, already-service-role-gated functions in place of one
+resolved from a session cookie. The one deliberate, isolated exception is
+`forceRoundDeadline`, used only by the simulator's deterministic-outcome
+buttons: it backdates `round_ends_at`/`closing_ends_at` directly via the
+service client (no real pathway skips time) and then calls the real
+`resolveSpeakerRoundAction` so the outcome decision itself is never
+short-circuited — only the clock. This is the only simulation-specific
+adapter in the feature.
+
+**Tradeoffs**: the simulator's observability panel polls
+`speaker_round_votes` on a 3-second client interval rather than
+subscribing to Realtime, since it's preview-only tooling and simplicity
+was preferred over adding a new Realtime subscription surface for a
+non-production panel. `WatchModeControls` gained a narrow `voteSlot` prop
+so the real Vote control could be swapped in without touching Speaker
+View's existing `micCameraSlot` path — a seated speaker still has no way
+to vote on a co-speaker's round this pass, reported as an explicit
+scoping limit rather than silently left out.
+
 ## 2026-08-26 — Request-to-Speak voting + ranked Top 3 + authoritative weighted selection (issue #21, Phase 1 of the audience voting loop)
 
 **Context**: the user asked for the first functional audience-voting/

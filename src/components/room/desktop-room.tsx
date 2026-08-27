@@ -63,6 +63,7 @@ export function DesktopRoom({
   localVideoTrack,
   onPrepareMedia,
   reconnectingIdentities,
+  isPreviewBuild,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -91,6 +92,7 @@ export function DesktopRoom({
             isJoiningSeat={isJoiningSeat}
             localVideoTrack={localVideoTrack}
             reconnectingIdentities={reconnectingIdentities}
+            isPreviewBuild={isPreviewBuild}
           />
         </div>
         {joinSeatMessage && (

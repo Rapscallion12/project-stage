@@ -733,6 +733,46 @@ different dependencies. Current order:
       own suggested split; see DECISIONS.md's matching entry, including
       the flagged per-speaker-vs-per-pairing conflict resolution Phase 2
       will need.
+      **Continue/Replace rounds + preview-only Session Simulator (issue
+      #21, Phase 2, 2026-08-26, same branch)**: the Vote control is now
+      real. Each occupied seat runs an independent 60-second round
+      (`event_speakers.round_number`/`round_started_at`/`round_ends_at`/
+      `round_phase`/`closing_ends_at`, migrations 00000000000021/22),
+      resolved authoritatively server-side (`resolve_speaker_round` RPC)
+      on the same deadline-in-the-row pattern as #18's reconnect grace —
+      never by a client's own elapsed-time count. Outcome thresholds
+      (0 votes/≤50%/>50%–<66%/≥66%) are centralized in
+      `lib/speaker-round.ts` and mirrored in SQL via integer
+      cross-multiplication to avoid rounding ambiguity exactly at the
+      boundaries. A narrow Replace loss gets a 30-second closing period
+      (no further voting) before replacement; a decisive Replace (≥66%)
+      replaces at the round boundary with no closing period; replacement
+      reuses the *existing* Phase 1 freeze/rank/weighted-selection/Going
+      Live path — no second candidate-selection system. Round countdown
+      is hidden in production until the final 10 seconds
+      (`ROUND_TIMER_REVEAL_SECONDS`) but shown for the round's full
+      duration on preview/dev builds, an explicit test-only behavior
+      split. New preview-only **Session Simulator** panel
+      (`SessionSimulatorPanel`, gated by a new `isPreviewOrDevBuild()`
+      check on Vercel's own `VERCEL_ENV` signal — the existing
+      `NODE_ENV`-based dev-tools gate would never appear on a deployed
+      preview URL, since Next.js force-sets `NODE_ENV=production` for
+      every build) drives a generated ~20-person simulated audience
+      through the real comment, like, Request-to-Speak, request-vote, and
+      round-vote pathways (`insertMessage`, `insertReaction`,
+      `requestToSpeakAsGuest`, `castSpeakerRequestVoteAsGuest`,
+      `castSpeakerRoundVoteAsGuest`, `claimSpeakerSeat`, `endSpeakerSeat`
+      — same functions a real guest session calls), plus deterministic
+      buttons to force each round outcome and open a seat. The one
+      simulation-specific adapter, `forceRoundDeadline`, backdates a
+      round's deadline via the service client and then calls the real
+      resolution action, so only the clock is faked — the decision logic
+      never is. Real-time (not accelerated) round/closing/Going-Live
+      timing is used by default per instruction. 10 real-database
+      integration tests for the round state machine plus unit/component
+      tests for the decision logic, resolution hook, countdown display,
+      vote panel, and simulator gating/actions/panel. See DECISIONS.md's
+      matching entry.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -13,8 +13,11 @@ import {
   markSpeakerMediaActive,
   markSpeakerMediaInactive,
   releaseExpiredInactiveSpeaker,
+  castSpeakerRoundVote,
+  castSpeakerRoundVoteAsGuest,
+  resolveSpeakerRound,
 } from "@/lib/repositories/event-speakers";
-import type { SeatIdentity } from "@/lib/repositories/event-speakers";
+import type { SeatIdentity, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
 import {
   getPendingRequestForIdentity,
   markSpeakerRequestGranted,
@@ -591,4 +594,64 @@ export async function reportSpeakerMediaInactive(eventId: string): Promise<void>
 export async function reportSpeakerMediaActive(eventId: string): Promise<void> {
   const identity = await resolveIdentity();
   await markSpeakerMediaActive(eventId, identity);
+}
+
+/**
+ * Issue #21, Part 2: casts/changes the caller's one active Continue/
+ * Replace vote for a specific seated speaker's current round.
+ * `eventSpeakersId` (not a seat number) is what the vote actually keys
+ * on — the client already has it via `RoomLayoutProps.speakers[].id`,
+ * the same row every other piece of speaker state already reads from.
+ * Rejected server-side once the round has moved to 'closing' (see
+ * `castSpeakerRoundVote`'s own doc comment) — this action just surfaces
+ * that as a friendly result instead of throwing.
+ */
+export async function voteOnSpeakerRound(
+  eventSpeakersId: string,
+  choice: "continue" | "replace",
+): Promise<{ ok: true } | { error: string }> {
+  const identity = await resolveIdentity();
+  if (identity.type !== "profile" && !PROTOTYPE_CONFIG.guestParticipationEnabled) {
+    return { error: "Create an account to vote." };
+  }
+  try {
+    if (identity.type === "profile") {
+      await castSpeakerRoundVote(eventSpeakersId, choice);
+    } else {
+      await castSpeakerRoundVoteAsGuest(eventSpeakersId, choice, identity.id);
+    }
+    return { ok: true };
+  } catch {
+    return { error: "Couldn't record your vote. Try again." };
+  }
+}
+
+/**
+ * Issue #21, Part 1/4: triggers the one authoritative round resolution
+ * for a specific seated speaker — see `resolveSpeakerRound`
+ * (lib/repositories/event-speakers.ts) for what this actually decides.
+ * Called from `useSpeakerRoundResolution`'s scheduled deadline timer, by
+ * *any* connected client — never trusted to run on its own schedule,
+ * always safe to call early/late/repeatedly.
+ *
+ * On a replacement outcome (`decisive-replace`/`replaced-after-closing`),
+ * immediately revokes the departing speaker's LiveKit publish rights —
+ * the same "instant revoke, not left to their next token request"
+ * discipline every other eviction path in this app already follows
+ * (`checkAndEvictInactiveSpeaker`). Does *not* separately trigger Phase
+ * 1 candidate selection: the seat becoming open is picked up by the
+ * existing `ensureActiveSelectionRound` the next time any client polls
+ * `checkPromotionEligibility` — no second seat-opening signal needed,
+ * per explicit instruction not to build a second selection path.
+ */
+export async function resolveSpeakerRoundAction(eventSpeakersId: string): Promise<ResolveSpeakerRoundOutcome> {
+  const result = await resolveSpeakerRound(eventSpeakersId);
+  if (
+    (result.outcome === "decisive-replace" || result.outcome === "replaced-after-closing") &&
+    result.eventId &&
+    result.identity
+  ) {
+    await syncPublishPermission({ eventId: result.eventId, identity: result.identity, canPublish: false });
+  }
+  return result.outcome;
 }

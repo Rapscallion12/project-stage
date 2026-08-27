@@ -38,6 +38,26 @@ merged to `main`.
   successful join resets the entire candidate pool. Two new migrations.
   60-second Continue/Replace voting (Phase 2) is not built yet. See
   DECISIONS.md.
+- **Per-speaker Continue/Replace rounds** (issue #21, Phase 2) — the Vote
+  control is now real. Each occupied seat runs an independent
+  60-second round, resolved authoritatively server-side on a
+  deadline-in-the-row/trusted-RPC pattern (same shape as the existing
+  speaker reconnect grace), never by client-reported elapsed time. Zero
+  votes or Replace ≤50% continues the speaker for another 60s; Replace
+  >50% and <66% is a narrow loss with a 30-second closing period (no
+  further voting) before replacement; Replace ≥66% replaces the speaker
+  decisively at the round boundary. Replacement reuses the existing
+  Phase 1 candidate-selection path — no second selection system.
+  Thresholds and durations are centralized, not hardcoded. Round
+  countdown stays hidden until the final 10 seconds in production. Two
+  new migrations. See DECISIONS.md.
+- **Preview-only Session Simulator** (issue #21, Phase 2) — a tooling
+  panel, gated to non-production deployments only, that drives a
+  generated simulated audience through the real comment, like,
+  Request-to-Speak, request-voting, and round-voting pathways (the same
+  functions a real guest session uses), plus deterministic buttons to
+  force each round outcome for guided testing. Not part of the consumer
+  product UI. See DECISIONS.md.
 
 ## [public-beta-v1] - 2026-08-26
 

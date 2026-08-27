@@ -4,6 +4,7 @@ import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
 import { AmbientComments } from "@/components/room/ambient-comments";
 import { ExpandedComments } from "@/components/room/expanded-comments";
+import { SpeakerVotePanel } from "@/components/room/speaker-vote-panel";
 import { CountdownOverlay } from "@/components/room/countdown-overlay";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { MobileLandscapeSpeakerView } from "@/components/room/mobile-landscape-speaker-view";
@@ -109,6 +110,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
     localVideoTrack,
     onPrepareMedia,
     reconnectingIdentities,
+    isPreviewBuild,
     messages,
     reactions,
     pendingRequests,
@@ -130,6 +132,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         isJoiningSeat={isJoiningSeat}
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
+        isPreviewBuild={isPreviewBuild}
         // Issue #18 UX finding: dims the stage behind the center-stage
         // "Going live" countdown — SpeakerStage's own existing scrim
         // mechanism (issue #21), reused rather than a second dimming
@@ -176,6 +179,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
                   compact
                 />
               }
+              voteSlot={<SpeakerVotePanel speakers={speakers} isPreviewBuild={isPreviewBuild} />}
             />
           </StageOverlayShell>
 

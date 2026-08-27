@@ -48,6 +48,11 @@ function seat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
@@ -86,6 +91,7 @@ const baseProps: RoomLayoutProps = {
   messages: [],
   reactions: {},
   pendingRequests: [],
+  isPreviewBuild: false,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
