@@ -4,6 +4,7 @@ import {
   applyPendingRequestChange,
   applyVoteDelete,
   applyVoteInsert,
+  removePendingRequest,
   useActiveSpeakerRequests,
 } from "./use-active-speaker-requests";
 import type { SpeakerRequest, SpeakerRequestVote } from "@/lib/repositories/speaker-requests";
@@ -73,6 +74,27 @@ describe("applyPendingRequestChange", () => {
   });
 });
 
+describe("removePendingRequest (Session Simulator Reset Session follow-up — a hard DELETE, not a status UPDATE)", () => {
+  it("removes a request by id, e.g. a Reset Session hard-deleting a simulated Top Speaker Request", () => {
+    const state = applyPendingRequestChange({}, request({ id: "sim-1" }));
+    expect(removePendingRequest(state, "sim-1").sim1).toBeUndefined();
+    expect("sim-1" in removePendingRequest(state, "sim-1")).toBe(false);
+  });
+
+  it("leaves other requests untouched, e.g. a real pending request surviving a simulator reset", () => {
+    let state = applyPendingRequestChange({}, request({ id: "sim-1" }));
+    state = applyPendingRequestChange(state, request({ id: "real-1" }));
+    const next = removePendingRequest(state, "sim-1");
+    expect("sim-1" in next).toBe(false);
+    expect("real-1" in next).toBe(true);
+  });
+
+  it("deleting an unknown id is a no-op, same identity-preserving shape as applyVoteDelete", () => {
+    const state = applyPendingRequestChange({}, request({ id: "r1" }));
+    expect(removePendingRequest(state, "unknown")).toBe(state);
+  });
+});
+
 describe("applyVoteInsert / applyVoteDelete", () => {
   it("adds a new vote", () => {
     const result = applyVoteInsert({}, vote({ id: "v1" }));
@@ -91,13 +113,17 @@ describe("applyVoteInsert / applyVoteDelete", () => {
   });
 });
 
-/** Same fake-Supabase-with-triggerable-SUBSCRIBED pattern as use-active-speakers-resync.test.ts, adapted for this hook's two queries (requests: two .eq()s then .order(); votes: one .eq()). */
+/** Same fake-Supabase-with-triggerable-SUBSCRIBED pattern as use-active-speakers-resync.test.ts, adapted for this hook's two queries (requests: two .eq()s then .order(); votes: one .eq()). Also captures each registered `.on(event, config, callback)` by `event:table`, so a test can fire a specific DELETE handler directly (Session Simulator Reset Session follow-up). */
 function makeFakeSupabase(pendingRows: SpeakerRequest[], voteRows: SpeakerRequestVote[] = []) {
   let subscribeCallback: ((status: string) => void) | null = null;
   const fromCalls: string[] = [];
+  const handlers: Record<string, (payload: unknown) => void> = {};
 
   const channel = {
-    on: vi.fn().mockReturnThis(),
+    on: vi.fn((_type: string, config: { event: string; table: string }, callback: (payload: unknown) => void) => {
+      handlers[`${config.event}:${config.table}`] = callback;
+      return channel;
+    }),
     subscribe: vi.fn((callback: (status: string) => void) => {
       subscribeCallback = callback;
       return channel;
@@ -134,6 +160,7 @@ function makeFakeSupabase(pendingRows: SpeakerRequest[], voteRows: SpeakerReques
     triggerSubscribed: () => {
       subscribeCallback?.("SUBSCRIBED");
     },
+    fireRequestDelete: (id: string) => handlers["DELETE:speaker_requests"]?.({ old: { id } }),
   };
 }
 
@@ -230,6 +257,22 @@ describe("useActiveSpeakerRequests", () => {
     fake.triggerSubscribed();
     await waitFor(() => {
       expect(result.current.pendingRequests[0].isMyVote).toBe(true);
+    });
+  });
+
+  it("Session Simulator Reset Session follow-up: a hard-deleted request disappears from Top Speaker Requests without a page reload, leaving a real request untouched", async () => {
+    const simRequest = request({ id: "sim-1" });
+    const realRequest = request({ id: "real-1" });
+    const fake = makeFakeSupabase([simRequest, realRequest]);
+    createClient.mockReturnValue(fake.client);
+
+    const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, [simRequest, realRequest]));
+    expect(result.current.pendingRequests.map((r) => r.id).sort()).toEqual(["real-1", "sim-1"]);
+
+    fake.fireRequestDelete("sim-1");
+
+    await waitFor(() => {
+      expect(result.current.pendingRequests.map((r) => r.id)).toEqual(["real-1"]);
     });
   });
 });

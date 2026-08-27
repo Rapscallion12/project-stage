@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySpeakerChange } from "./use-active-speakers";
+import { applySpeakerChange, removeSpeaker } from "./use-active-speakers";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
@@ -74,5 +74,38 @@ describe("applySpeakerChange", () => {
 
     expect(state[1]?.display_name).toBe("Alice");
     expect(state[2]?.display_name).toBe("Bob");
+  });
+});
+
+describe("removeSpeaker (Session Simulator Reset Session follow-up — a hard DELETE, not left_at)", () => {
+  it("clears the seat when the deleted row is the one currently held there", () => {
+    const seated = speaker({ id: "sim-seat", seat_number: 1, display_name: "Fake Fox" });
+    const state = applySpeakerChange({}, seated);
+    expect(removeSpeaker(state, seated)[1]).toBeUndefined();
+  });
+
+  it("leaves a real, still-occupied seat untouched", () => {
+    const simSeat = speaker({ id: "sim-seat", seat_number: 1, display_name: "Fake Fox" });
+    const realSeat = speaker({ id: "real-seat", seat_number: 2, display_name: "Real Person" });
+    let state = applySpeakerChange({}, simSeat);
+    state = applySpeakerChange(state, realSeat);
+
+    state = removeSpeaker(state, simSeat);
+
+    expect(state[1]).toBeUndefined();
+    expect(state[2]?.display_name).toBe("Real Person");
+  });
+
+  it("does not clobber a newer occupant of the same seat — same ordering-hazard guard applySpeakerChange uses", () => {
+    const alice = speaker({ id: "a", seat_number: 1, display_name: "Alice" });
+    const bob = speaker({ id: "b", seat_number: 1, display_name: "Bob" });
+    let state = applySpeakerChange({}, alice);
+    state = applySpeakerChange(state, bob);
+
+    // Alice's own row-delete event arrives after Bob already claimed her
+    // seat — must not remove Bob.
+    state = removeSpeaker(state, alice);
+
+    expect(state[1]?.display_name).toBe("Bob");
   });
 });

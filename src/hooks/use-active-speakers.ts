@@ -31,6 +31,24 @@ export function applySpeakerChange(
   return { ...current, [row.seat_number]: row };
 }
 
+/**
+ * Removes one deleted event_speakers row from the seat map — only ever
+ * reached by a hard delete; ordinary seat departure sets `left_at` via
+ * UPDATE, already handled by `applySpeakerChange`. The Session
+ * Simulator's Reset Session is the one real caller today (see migration
+ * 00000000000023 for why `event_speakers` needed `REPLICA IDENTITY
+ * FULL` — both for this DELETE's `event_id` filter to evaluate
+ * correctly, and so `payload.old` carries `seat_number`, which isn't the
+ * table's primary key). Same "don't clobber a newer occupant already in
+ * state" guard `applySpeakerChange` uses for its own UPDATE case.
+ */
+export function removeSpeaker(current: Record<number, EventSpeaker>, deleted: EventSpeaker): Record<number, EventSpeaker> {
+  if (current[deleted.seat_number]?.id !== deleted.id) return current;
+  const next = { ...current };
+  delete next[deleted.seat_number];
+  return next;
+}
+
 function toBySeat(speakers: EventSpeaker[]): Record<number, EventSpeaker> {
   const map: Record<number, EventSpeaker> = {};
   for (const speaker of speakers) map[speaker.seat_number] = speaker;
@@ -117,6 +135,13 @@ export function useActiveSpeakers(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "event_speakers", filter: `event_id=eq.${eventId}` },
         (payload) => setBySeat((prev) => applySpeakerChange(prev, payload.new as EventSpeaker)),
+      )
+      .on(
+        // Session Simulator Reset Session follow-up — see
+        // removeSpeaker's own doc comment for why this exists.
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "event_speakers", filter: `event_id=eq.${eventId}` },
+        (payload) => setBySeat((prev) => removeSpeaker(prev, payload.old as EventSpeaker)),
       )
       .subscribe((status) => {
         // Fires on the initial successful subscription *and* on every

@@ -4,6 +4,59 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 40: Reset Session must also clear the visible feed (issue #21, fourth real-device follow-up)
+
+**Goal**: real-device testing of Session 39's Reset Session found the
+database side worked, but old simulated comments could remain visible
+in the room — the live feed, Expanded Comments, and Top Speaker
+Requests didn't reflect the deletion without a manual Safari refresh.
+
+**Root cause**: reading every realtime hook this room depends on
+(`useLobbyRealtime`, `useActiveSpeakerRequests`, `useActiveSpeakers`)
+found none of them ever subscribed to Postgres `DELETE` events — only
+`INSERT`/`UPDATE`. Never a bug before now: ordinary product usage never
+hard-deletes a chat message, a request transitions status via `UPDATE`,
+a speaker's departure sets `left_at` via `UPDATE`. Reset Session is the
+first thing in this codebase to ever hard-delete these rows, exposing a
+real, previously-latent gap in all three hooks — not something specific
+to the simulator.
+
+**Implemented**: migration 00000000000023 sets `REPLICA IDENTITY FULL`
+on `event_chat_messages`, `event_chat_message_reactions`,
+`speaker_requests`, and `event_speakers` — needed both so each hook's
+existing `event_id=eq.<id>` server-side filter can evaluate on a DELETE
+at all (a non-primary-key column must be present in the replicated
+old-row data for that), and so the client-side aggregates keyed by
+non-primary-key columns (reactions by `message_id`, speaker seats by
+`seat_number`) have what they need in `payload.old`. Added new DELETE
+handlers to all three hooks, each a pure exported function following the
+codebase's existing INSERT/UPDATE convention exactly
+(`removeMessage`/`removeReaction`, `removePendingRequest`,
+`removeSpeaker`). Chose the general realtime fix over a
+simulator-specific client refetch specifically because a refetch would
+only fix the operator's own tab — a second tab watching the same room
+would stay stale indefinitely; the realtime fix benefits every tab
+uniformly and handles any future hard-delete this app ever adds too.
+
+**Verification**: unit tests for all four new pure functions, plus
+hook-wiring tests (mocked Realtime channel, matching
+`use-active-speakers-resync.test.ts`'s established convention) proving
+each hook's DELETE handler updates state correctly — including the
+user's exact reported narrative as its own test: generate simulated
+comments → confirm visible → delete them → confirm they disappear
+without a reload → confirm a real comment survives → confirm a fresh
+run's comment appears without resurrecting anything from the deleted
+run. Full suite 879/879 (71 files), lint, tsc, build all clean. Ran
+`supabase gen types` after the migration — no diff, as expected (replica
+identity doesn't affect schema types).
+
+**Not built this pass**: no change to Reset's own deletion logic
+(already correct — this pass) or to which rows it targets. Fresh
+preview deployed; stopping here for the user's review — not merged to
+main.
+
+---
+
 ## 2026-08-27 — Session 39: Session Simulator Reset Session (issue #21, third real-device follow-up)
 
 **Goal**: Stop Simulation only ever halted future activity — old

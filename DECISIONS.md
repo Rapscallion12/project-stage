@@ -3,6 +3,76 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — Session Simulator Reset Session must also clear the visible feed (issue #21, fourth real-device follow-up)
+
+**Context**: real-device testing of Reset Session found the database
+side worked (confirmed by the prior round's 5 real-DB tests), but
+simulator-generated comments could remain visibly stale in the room —
+the live feed, Expanded Comments, and Top Speaker Requests didn't
+reflect the deletion without a manual Safari refresh.
+
+**Root cause, found by reading every realtime hook this room uses**:
+`useLobbyRealtime`, `useActiveSpeakerRequests`, and `useActiveSpeakers`
+each only ever subscribed to `postgres_changes` `INSERT`/`UPDATE` —
+never `DELETE`. This was never a bug in the ordinary product: a chat
+message is permanent (never hard-deleted), a request's lifecycle moves
+through `status` via `UPDATE` (granted/withdrawn/expired), and a
+speaker's departure sets `left_at` via `UPDATE` too. Reset Session is
+the first thing in this codebase that ever hard-deletes rows from
+`event_chat_messages`, `event_chat_message_reactions`, `speaker_requests`,
+or `event_speakers` — exposing a real, previously-latent gap in all
+three hooks, not something specific to the simulator's own code.
+
+**Two-part fix, both required for correctness**:
+1. **Migration 00000000000023**: `ALTER TABLE ... REPLICA IDENTITY
+   FULL` on all four tables. Two independent reasons this was needed,
+   not just one: (a) three of the four existing subscriptions filter by
+   `event_id=eq.<id>` — a column that isn't each table's primary key —
+   and Postgres's default replica identity (primary-key-only) omits
+   non-key columns from a DELETE's old-row data, so that server-side
+   filter can't even evaluate on a DELETE without this; (b) the
+   client-side aggregates that need updating are keyed by columns that
+   also aren't each row's own primary key (`reactions` by `message_id`,
+   `event_speakers`' seat map by `seat_number`) — REPLICA IDENTITY FULL
+   is what makes those present in `payload.old` at all, matching what
+   INSERT/UPDATE already carry. No RLS/grant/column change — purely a
+   replication-stream detail.
+2. **New DELETE handlers** in all three hooks (`removeMessage`/
+   `removeReaction` in `useLobbyRealtime`; `removePendingRequest` in
+   `useActiveSpeakerRequests`; `removeSpeaker` in `useActiveSpeakers`),
+   each a pure, exported, unit-tested function following the exact
+   convention this codebase already established for INSERT/UPDATE
+   (`applySpeakerChange`, `applyPendingRequestChange`, `applyVoteDelete`).
+   A message-DELETE also proactively clears that message's whole
+   reaction aggregate (belt-and-suspenders — individual cascaded
+   reaction-DELETE events will also arrive and would clean it up on
+   their own, but not waiting on however many of those arrive is
+   simpler and immediate).
+
+**Why this, not a simulator-specific refetch call**: `SessionSimulatorPanel`
+could instead have triggered an explicit client-side refetch of
+messages/requests/speakers after a successful reset (mirroring
+`refetchSpeakers`'s existing pattern). Rejected in favor of the general
+realtime fix because a refetch call scoped to the operator's own panel
+only fixes *that* browser tab — a second tab genuinely watching the
+same room (the actual product scenario, and a real testing setup) would
+still see stale data indefinitely. Fixing the underlying realtime gap
+benefits every tab watching the room uniformly, via the same mechanism
+every other live update already uses, and happens to also correctly
+handle any *other* future hard-delete this app ever adds — not a
+special case bolted onto the simulator.
+
+**Verification**: unit tests for all four new pure removal functions
+(`removeMessage`/`removeReaction`/`removePendingRequest`/`removeSpeaker`),
+plus hook-wiring tests (mocked Realtime channel, matching
+`use-active-speakers-resync.test.ts`'s established fake-channel
+convention) proving each hook's registered DELETE handler correctly
+updates state — including the user's exact reported narrative: generate
+simulated comments → confirm visible → delete them (what Reset does) →
+confirm they disappear without a reload → confirm a real comment
+survives → confirm a fresh run's new comment appears without resurrecting
+anything from the deleted run.
+
 ## 2026-08-27 — Session Simulator: Reset Session (issue #21, third real-device follow-up)
 
 **Context**: Stop Simulation only ever halted *future* activity — old

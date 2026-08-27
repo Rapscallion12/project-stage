@@ -30,6 +30,26 @@ export function applyPendingRequestChange(
   return { ...current, [row.id]: row };
 }
 
+/**
+ * Removes one deleted speaker_requests row — `applyPendingRequestChange`
+ * only reacts to a *changed* row (an UPDATE to a non-pending status), so
+ * it never fires for a row that's simply gone. Ordinary product usage
+ * never hard-deletes a request (it transitions status via UPDATE
+ * instead); the Session Simulator's Reset Session is the one real
+ * caller today (see migration 00000000000023 for why `speaker_requests`
+ * needed `REPLICA IDENTITY FULL` for this DELETE's `event_id` filter to
+ * evaluate correctly).
+ */
+export function removePendingRequest(
+  current: Record<string, SpeakerRequest>,
+  deletedId: string,
+): Record<string, SpeakerRequest> {
+  if (!(deletedId in current)) return current;
+  const next = { ...current };
+  delete next[deletedId];
+  return next;
+}
+
 /** Applies one speaker_request_votes INSERT — issue #21 Phase 1's vote-count tracking, same accumulate-then-resync shape as reactions. */
 export function applyVoteInsert(
   current: Record<string, SpeakerRequestVote>,
@@ -140,6 +160,13 @@ export function useActiveSpeakerRequests(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "speaker_requests", filter: `event_id=eq.${eventId}` },
         (payload) => setRequestsById((prev) => applyPendingRequestChange(prev, payload.new as SpeakerRequest)),
+      )
+      .on(
+        // Session Simulator Reset Session follow-up — see
+        // removePendingRequest's own doc comment for why this exists.
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "speaker_requests", filter: `event_id=eq.${eventId}` },
+        (payload) => setRequestsById((prev) => removePendingRequest(prev, (payload.old as { id: string }).id)),
       )
       .on(
         "postgres_changes",

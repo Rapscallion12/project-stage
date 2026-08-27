@@ -94,6 +94,21 @@ merged to `main`.
   from Stop Simulation, which only pauses future activity and leaves
   existing test state in place. See DECISIONS.md.
 
+### Fixed
+
+- **Reset Session left old simulated comments visible in the room**
+  (issue #21, fourth real-device follow-up) — the database deletion was
+  already correct, but the live comment feed, Expanded Comments, and Top
+  Speaker Requests didn't reflect it without a manual page reload. Root
+  cause: none of the room's realtime hooks (`useLobbyRealtime`,
+  `useActiveSpeakerRequests`, `useActiveSpeakers`) had ever needed to
+  handle a Postgres `DELETE` event before, since ordinary product usage
+  never hard-deletes these rows — Reset Session is the first thing that
+  does. Added `DELETE` handling to all three hooks, plus a migration
+  enabling `REPLICA IDENTITY FULL` on the four affected tables so those
+  events carry enough data to act on. Benefits every tab watching a
+  room, not just the one running the simulator. See DECISIONS.md.
+
 ## [public-beta-v1] - 2026-08-26
 
 First production release of Virtual Stage to the live site

@@ -809,6 +809,15 @@ different dependencies. Current order:
       real-database integration tests proving real activity survives a
       reset even when paired with same-shape simulated data. See
       DECISIONS.md.
+      **Visible-feed follow-up (2026-08-27, same branch)**: the DB
+      deletion was correct but old comments stayed visible without a
+      manual reload. Root cause: `useLobbyRealtime`/
+      `useActiveSpeakerRequests`/`useActiveSpeakers` had never needed
+      Postgres `DELETE` handling before (ordinary usage only ever
+      UPDATEs these rows) — migration 00000000000023 enables `REPLICA
+      IDENTITY FULL` on the four affected tables and each hook gained a
+      pure, tested DELETE handler. Fixes every tab watching a room, not
+      just the simulator's own. See DECISIONS.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
