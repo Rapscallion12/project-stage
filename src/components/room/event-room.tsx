@@ -581,6 +581,7 @@ export function EventRoom({
           pendingRequests={pendingRequests}
           messages={messages}
           onSimulatedIdentitiesCreated={registerSimulatedGuestIds}
+          onSimulatorReset={() => setSimulatedGuestIds(new Set())}
         />
       )}
     </div>

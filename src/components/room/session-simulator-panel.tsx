@@ -10,6 +10,7 @@ import {
   simulateSeedSpeaker,
   simulateOpenSeat,
   forceRoundDeadline,
+  resetSimulatorSession,
 } from "@/app/events/[id]/room/simulator-actions";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -112,6 +113,7 @@ export function SessionSimulatorPanel({
   pendingRequests,
   messages,
   onSimulatedIdentitiesCreated,
+  onSimulatorReset,
 }: {
   eventId: string;
   speakers: EventSpeaker[];
@@ -119,6 +121,8 @@ export function SessionSimulatorPanel({
   messages: LobbyMessage[];
   /** Real-device follow-up: reports every guest id this panel generates, once, at creation — the caller (EventRoom) uses this purely cosmetically, to let SpeakerTile render an obviously-simulated placeholder. Optional so this component still works standalone in tests that don't care. */
   onSimulatedIdentitiesCreated?: (ids: string[]) => void;
+  /** Reset Session follow-up: called once cleanup completes, so the caller (EventRoom) can clear its own `simulatedGuestIds` set — that state is otherwise only ever added to, never removed. Optional, same reasoning as the prop above. */
+  onSimulatorReset?: () => void;
 }) {
   const [running, setRunning] = useState(false);
   const [audience, setAudience] = useState<SimulatedIdentity[]>([]);
@@ -141,6 +145,10 @@ export function SessionSimulatorPanel({
   // interrupting the simulated session underneath it.
   const [collapsed, setCollapsed] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  // Reset Session: a small inline "are you sure" step (never a native
+  // confirm() dialog — keeps the whole interaction inside this panel's
+  // own testable DOM) so a single stray tap can't destroy test state.
+  const [resetConfirming, setResetConfirming] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
 
@@ -155,6 +163,13 @@ export function SessionSimulatorPanel({
   // startSimulation, reused by every subsequent Seed 2 Speakers click in
   // the same run, never re-randomized per click.
   const seedSpeakersRef = useRef<[SimulatedIdentity, SimulatedIdentity] | null>(null);
+  // Reset Session: every guest id this panel has ever generated since the
+  // last reset (or mount), across every Start/Stop cycle — not just the
+  // current run's `audienceRef`, which Start *replaces* rather than
+  // extends. This is the exact ownership list Reset deletes by; see
+  // `resetSimulatorSession`'s own doc comment for why an exact in-memory
+  // id list is the safe mechanism here, not a new schema column.
+  const allSimulatedGuestIdsRef = useRef<Set<string>>(new Set());
 
   // react-hooks/refs: writing a ref during render is disallowed even for
   // this "mirror the latest prop for later async callbacks" pattern — the
@@ -322,7 +337,9 @@ export function SessionSimulatorPanel({
     setAudience(newAudience);
     const seedSpeakers: [SimulatedIdentity, SimulatedIdentity] = [createSimulatedIdentity(), createSimulatedIdentity()];
     seedSpeakersRef.current = seedSpeakers;
-    onSimulatedIdentitiesCreated?.([...newAudience, ...seedSpeakers].map((identity) => identity.id));
+    const newIds = [...newAudience, ...seedSpeakers].map((identity) => identity.id);
+    for (const id of newIds) allSimulatedGuestIdsRef.current.add(id);
+    onSimulatedIdentitiesCreated?.(newIds);
     runningRef.current = true;
     setRunning(true);
     appendLog(`Started — ${AUDIENCE_SIZE} simulated audience identities generated`);
@@ -376,6 +393,38 @@ export function SessionSimulatorPanel({
     setRunning(false);
     stopAllTimers();
     appendLog("Stopped — no further activity will be generated (already-written data is untouched)");
+  }
+
+  /**
+   * "Reset Session" — genuinely destroys everything the simulator wrote
+   * this run and returns to a clean test room, unlike Stop (which only
+   * halts future activity). Stops the session first (a reset run can't
+   * keep generating activity against data that's about to be deleted),
+   * deletes every DB row owned by any guest id this panel has generated
+   * since the last reset, then clears every piece of local run state —
+   * the *next* Start Simulated Session genuinely starts fresh, with a new
+   * audience and no memory of the old one.
+   */
+  async function confirmReset() {
+    setResetConfirming(false);
+    runningRef.current = false;
+    setRunning(false);
+    stopAllTimers();
+
+    const guestIds = Array.from(allSimulatedGuestIdsRef.current);
+    const result = await resetSimulatorSession(eventId, guestIds);
+
+    allSimulatedGuestIdsRef.current = new Set();
+    audienceRef.current = [];
+    seedSpeakersRef.current = null;
+    setAudience([]);
+    setRoundVoteTallies({});
+    setPoolResetCount(0);
+    prevPendingCountRef.current = 0;
+    setLog([
+      `${new Date().toLocaleTimeString()} — Reset — cleared ${result.messagesDeleted} comments, ${result.reactionsDeleted} likes, ${result.speakersDeleted} speaker seats, ${result.requestVotesDeleted} request votes, ${result.roundVotesDeleted} round votes`,
+    ]);
+    onSimulatorReset?.();
   }
 
   useEffect(() => stopAllTimers, []);
@@ -554,6 +603,26 @@ export function SessionSimulatorPanel({
         >
           Stop Simulation
         </button>
+        {resetConfirming ? (
+          <div data-testid="sim-reset-confirm-row" className="flex items-center gap-1.5 rounded bg-white/10 px-2 py-1">
+            <span className="font-medium">Reset simulated session?</span>
+            <button type="button" data-testid="sim-reset-cancel" onClick={() => setResetConfirming(false)} className="rounded bg-white/10 px-1.5 py-0.5">
+              Cancel
+            </button>
+            <button type="button" data-testid="sim-reset-confirm" onClick={() => void confirmReset()} className="rounded bg-red-600 px-1.5 py-0.5 font-medium">
+              Reset
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            data-testid="sim-reset"
+            onClick={() => setResetConfirming(true)}
+            className="rounded bg-orange-700 px-2 py-1 font-medium"
+          >
+            Reset Session
+          </button>
+        )}
         <button type="button" data-testid="sim-seed-speakers" onClick={() => void seedTwoSpeakers()} className="rounded bg-white/10 px-2 py-1">
           Seed 2 Speakers
         </button>

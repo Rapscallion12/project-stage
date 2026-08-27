@@ -4,6 +4,7 @@ import { SessionSimulatorPanel } from "./session-simulator-panel";
 import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { ResetSimulatorSessionResult } from "@/app/events/[id]/room/simulator-actions";
 
 const {
   simulateComment,
@@ -14,6 +15,7 @@ const {
   simulateSeedSpeaker,
   simulateOpenSeat,
   forceRoundDeadline,
+  resetSimulatorSession,
 } = vi.hoisted(() => ({
   simulateComment: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateLike: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
@@ -23,6 +25,13 @@ const {
   simulateSeedSpeaker: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateOpenSeat: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   forceRoundDeadline: vi.fn<(...args: unknown[]) => Promise<ResolveSpeakerRoundOutcome>>(async () => "decisive-replace"),
+  resetSimulatorSession: vi.fn<(...args: unknown[]) => Promise<ResetSimulatorSessionResult>>(async () => ({
+    messagesDeleted: 0,
+    reactionsDeleted: 0,
+    speakersDeleted: 0,
+    requestVotesDeleted: 0,
+    roundVotesDeleted: 0,
+  })),
 }));
 
 vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
@@ -34,6 +43,7 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   simulateSeedSpeaker,
   simulateOpenSeat,
   forceRoundDeadline,
+  resetSimulatorSession,
 }));
 
 const { supabaseFrom } = vi.hoisted(() => ({
@@ -357,6 +367,152 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       fireEvent.click(within(roundStatusForSeat(2)).getByTestId("sim-open-seat"));
       expect(simulateOpenSeat).toHaveBeenCalledWith("e1", "g-speaker-2");
       expect(simulateOpenSeat).not.toHaveBeenCalledWith("e1", "g-speaker-1");
+    });
+  });
+
+  describe("Reset Session (destroys simulator-created state, distinct from Stop)", () => {
+    it("clicking Reset Session shows a confirmation instead of resetting immediately", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      expect(resetSimulatorSession).not.toHaveBeenCalled();
+      expect(screen.getByTestId("sim-reset-confirm-row")).toHaveTextContent("Reset simulated session?");
+    });
+
+    it("Cancel dismisses the confirmation without resetting anything", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-cancel"));
+      expect(resetSimulatorSession).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("sim-reset-confirm-row")).not.toBeInTheDocument();
+      expect(screen.getByTestId("sim-reset")).toBeInTheDocument();
+    });
+
+    it("confirming Reset stops the simulation and calls resetSimulatorSession with every generated guest id", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      const [calledEventId, guestIds] = resetSimulatorSession.mock.calls[0] as [string, string[]];
+      expect(calledEventId).toBe("e1");
+      expect(guestIds.length).toBe(22); // 20 audience + 2 stable seed speakers, per Start's own accounting
+      expect(new Set(guestIds).size).toBe(22);
+
+      expect(screen.getByTestId("sim-stop")).toBeDisabled();
+      expect(screen.getByTestId("sim-start")).not.toBeDisabled();
+    });
+
+    it("accumulates guest ids across multiple Start/Stop cycles, not just the latest run's audience", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-stop"));
+
+      fireEvent.click(screen.getByTestId("sim-start")); // second run — generates a fresh, different 22 identities
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      const [, guestIds] = resetSimulatorSession.mock.calls[0] as [string, string[]];
+      // Both runs' identities are included — never just the second run's 22.
+      expect(guestIds.length).toBe(44);
+    });
+
+    it("clears the activity log down to a single reset confirmation line — old entries do not survive", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-generate-comments"));
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Generated 5 comments");
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+
+      const log = screen.getByTestId("sim-log");
+      expect(log).not.toHaveTextContent("Generated 5 comments");
+      expect(log).not.toHaveTextContent("Started");
+      expect(log).toHaveTextContent("Reset");
+    });
+
+    it("clears round-vote tallies and pool-reset count back to a fresh state", async () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ display_name: "Alex" })]} pendingRequests={[]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+
+      expect(screen.getByTestId("sim-pool-reset-count")).toHaveTextContent("pool resets observed: 0");
+    });
+
+    it("no background simulation activity fires after a reset", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+
+      const callsAtReset = simulateComment.mock.calls.length + simulateLike.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(simulateComment.mock.calls.length + simulateLike.mock.calls.length).toBe(callsAtReset);
+    });
+
+    it("deterministic actions are safe no-ops again after reset, exactly like before the first Start", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+
+      simulateComment.mockClear();
+      fireEvent.click(screen.getByTestId("sim-generate-comments"));
+      expect(simulateComment).not.toHaveBeenCalled();
+    });
+
+    it("starting again after reset creates a genuinely new run — a fresh, non-overlapping set of identities", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      const firstRunIds = resetSimulatorSession.mock.calls[0][1] as string[];
+
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
+      const secondRunIds = resetSimulatorSession.mock.calls[1][1] as string[];
+
+      expect(secondRunIds.length).toBe(22); // not accumulated with the first (reset) run
+      expect(secondRunIds.some((id) => firstRunIds.includes(id))).toBe(false);
+    });
+
+    it("calls onSimulatorReset so the caller can clear its own simulated-identity tracking", async () => {
+      const onSimulatorReset = vi.fn();
+      render(<SessionSimulatorPanel {...baseProps} onSimulatorReset={onSimulatorReset} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(onSimulatorReset).toHaveBeenCalledTimes(1));
+    });
+
+    it("reset with nothing ever started is a harmless no-op (no crash, resetSimulatorSession still called with an empty list)", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledWith("e1", []));
     });
   });
 

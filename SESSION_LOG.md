@@ -4,6 +4,68 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 39: Session Simulator Reset Session (issue #21, third real-device follow-up)
+
+**Goal**: Stop Simulation only ever halted future activity — old
+simulated comments/votes/requests/seats piled up across test runs with
+no way to clear them. Add a genuinely destructive "Reset Session,"
+explicitly instructed to investigate the data model first and report the
+approach before writing anything destructive, since "do not delete real
+user-generated room activity" is the real constraint.
+
+**Investigated first**: every table a simulated identity writes to
+stores its guest id in the exact same shape as a real guest's (both bare
+`crypto.randomUUID()` values) — no column anywhere distinguishes them,
+so a broad filter would delete real audience participation. The prompt
+suggested a `simulation_run_id` schema column as a good model if safe
+cleanup wasn't otherwise possible. Concluded it wasn't necessary:
+`SessionSimulatorPanel` already knows the exact set of guest ids it
+generated this run — deleting by that exact list is precise identity
+matching, not inference, and avoids a migration plus touching four
+`SECURITY DEFINER` RPCs on the shared linked database. Reported this
+reasoning explicitly rather than defaulting to the schema change.
+
+**Implemented**: a new `resetSimulatorSession` Server Action deletes,
+by exact guest-id list (accumulated across every Start/Stop cycle in a
+new `allSimulatedGuestIdsRef`, never just the latest run's audience):
+request votes, message reactions, round votes, speaker seats, and chat
+messages, in an order correct with or without relying on the tables'
+existing `ON DELETE CASCADE` FKs. `speaker_selection_rounds` is
+deliberately left alone — no guest/profile column exists on it, its only
+writer is a shared production RPC that can freeze a pool mixing real and
+simulated candidates, and leaving an orphaned row is invisible/harmless
+since nothing reads that table directly. The panel gained a "Reset
+Session" button with an inline confirmation ("Reset simulated session?
+Cancel | Reset," no native `confirm()` dialog) that stops the session,
+deletes everything the run created, and clears every piece of local
+state (log, tallies, pool-reset count, tracked identities) plus tells
+`EventRoom` to clear its `simulatedGuestIds` placeholder-tag set via a
+new `onSimulatorReset` callback — so the next Start genuinely begins
+clean.
+
+**Verification**: 5 new real-database integration tests
+(`simulator-actions.test.ts`) against the linked Supabase project, each
+pairing a simulated guest id with a same-shape "real" one to prove the
+deletion precision comes from the exact list — covering comments, likes
+(including cascade-deleting a real like on a deleted simulated comment),
+speaker seats and their round votes (including a real voter's vote on a
+now-gone fake round correctly cascading away, and a simulated voter's
+vote on a real seat being explicitly removed), and speaker requests with
+their votes. Plus 11 new component tests for the confirm/cancel flow,
+accumulation across Start/Stop cycles, log/state clearing, no
+background activity after reset, and a genuinely fresh next run. Full
+suite 862/862 (70 files), lint, tsc, build all clean. No schema
+migration this pass.
+
+**Not built this pass**: no `simulation_run_id` column (see the
+architecture decision above — not needed for the safety guarantee);
+reset does not survive a hard page reload, since the guest-id list lives
+in the tab's memory, same limitation every other piece of this panel's
+state already has. Fresh preview deployed; stopping here for the user's
+review — not merged to main.
+
+---
+
 ## 2026-08-27 — Session 38: Session Simulator round-testing presentation — timer, occupied placeholder, per-seat forcing (issue #21, second real-device follow-up)
 
 **Goal**: the compact/collapsible panel from Session 37 was usable on

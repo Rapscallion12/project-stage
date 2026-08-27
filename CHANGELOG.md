@@ -83,6 +83,16 @@ merged to `main`.
   whole run instead of a fresh random pair per click. Presentation/
   test-control only — no change to voting, round-resolution, or
   selection logic. See DECISIONS.md.
+- **Session Simulator — Reset Session** (issue #21, third real-device
+  follow-up) — a new destructive "Reset Session" action (with an inline
+  "Reset simulated session? Cancel | Reset" confirmation) that deletes
+  every DB row the current simulation run created — comments, likes,
+  Request-to-Speak entries and their votes, speaker seats, and
+  Continue/Replace votes — by an exact tracked guest-id list, and clears
+  the panel's own log/tallies/state so the next Start begins a genuinely
+  clean run. Real user-generated activity is never touched. Distinct
+  from Stop Simulation, which only pauses future activity and leaves
+  existing test state in place. See DECISIONS.md.
 
 ## [public-beta-v1] - 2026-08-26
 

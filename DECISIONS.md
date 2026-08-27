@@ -3,6 +3,89 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — Session Simulator: Reset Session (issue #21, third real-device follow-up)
+
+**Context**: Stop Simulation only ever halted *future* activity — old
+simulated comments, votes, requests, and speaker seats stayed in the
+room forever, so re-testing meant an ever-growing pile of stale test
+data. Explicit instruction: add a genuinely destructive "Reset Session"
+that returns the room to a clean state, but investigate the data model
+first and report the approach before doing anything destructive, since
+the safety requirement ("do not delete real user-generated room
+activity") is the load-bearing constraint here.
+
+**Investigated before writing any DELETE**: every table a simulated
+identity can write to
+(`event_chat_messages`/`event_chat_message_reactions`/`speaker_requests`/
+`speaker_request_votes`/`event_speakers`/`speaker_round_votes`) stores a
+simulated guest id in exactly the same shape as a real one — both are
+bare `crypto.randomUUID()` values (see `lib/guest.ts` vs.
+`lib/simulator/identities.ts`). A filter like "guest_id is not null"
+would delete real guest participation, not just simulated rows; none of
+these tables has a spare column that could already double as an
+ownership tag.
+
+**Decision — exact in-memory id list, not a new `simulation_run_id`
+schema column.** The prompt suggested a `simulation_run_id` column (or
+"an equivalent preview-only ownership mechanism") as a good model *if*
+safe cleanup wasn't otherwise possible. It is: `SessionSimulatorPanel`
+already knows, precisely, every guest id it has ever generated this run
+(`crypto.randomUUID()`, minted client-side, accumulated across every
+Start/Stop cycle in a new `allSimulatedGuestIdsRef`) — deleting `WHERE
+guest_id = ANY(these exact ids)` is exact identity matching against ids
+the app itself created, not an inference from display name or any other
+heuristic, and there is zero chance of collision with a real guest's
+independently-generated UUID. This satisfies the safety bar without a
+migration or touching four `SECURITY DEFINER` RPCs
+(`request_to_speak_as_guest`, `cast_speaker_request_vote_as_guest`,
+`claim_speaker_seat`, `cast_speaker_round_vote_as_guest`) on the shared
+linked database — a real, if smaller, risk a schema-tagging approach
+would have introduced for a preview-only tool. The traded-off cost,
+stated plainly: this list lives in the browser tab's memory, so it only
+resets what the *current tab* remembers generating — a hard reload loses
+it, same as every other piece of this panel's presentation state
+already does.
+
+**`speaker_selection_rounds` deliberately left untouched.** It has no
+guest/profile column at all, and its only writer, the shared production
+RPC `freeze_speaker_candidates`, fires whenever *any* seat opens and can
+freeze a pool mixing real and simulated requests — there's no safe way
+to attribute a frozen round to "the simulator" specifically. Left alone,
+an orphaned round (its `speaker_requests` all deleted) is an inert,
+invisible bookkeeping row — nothing in the UI reads this table directly
+(Top Speaker Requests reads `speaker_requests` itself, which *is*
+cleaned up).
+
+**Deletion order chosen to be correct with or without relying on
+cascade** (every relevant FK here is `ON DELETE CASCADE` except
+`speaker_requests.selection_round_id`, which `SET NULL`s and is
+irrelevant to this cleanup): `speaker_request_votes` → 
+`event_chat_message_reactions` → `speaker_round_votes` → `event_speakers`
+→ `event_chat_messages`, each filtered by the exact guest-id list (plus
+`event_id` where the column exists, as defense in depth). A worked
+edge case that shaped this order: a *real* audience member's Continue/
+Replace vote on a *simulated* speaker's round is deleted too — not
+because it's "fake," but because it's cascaded away with the fake round
+it was cast on, which is correct: the vote is meaningless once that
+round no longer exists. Symmetrically, a simulated identity's vote on a
+*real* speaker's round is deleted by explicit guest-id match, since
+nothing else would ever remove it. Verified against the real linked
+database (5 integration tests, `simulator-actions.test.ts`), each
+pairing a simulated id with a same-shape "real" id to prove the safety
+guarantee comes from the exact list, not from any structural difference
+between the two.
+
+**UX**: Reset requires an inline confirmation ("Reset simulated
+session? Cancel | Reset") rather than a native `confirm()` dialog, kept
+fully inside the panel's own testable DOM. Reset always stops the
+session first (can't keep generating activity against data about to be
+deleted) and clears every piece of local run state (log, vote tallies,
+pool-reset count, tracked identities) so the *next* Start genuinely
+begins a fresh run with no memory of the old one — including telling
+`EventRoom` to clear its own `simulatedGuestIds` set (the "Simulated
+speaker" placeholder tag), via a new `onSimulatorReset` callback,
+mirroring `onSimulatedIdentitiesCreated`'s existing shape.
+
 ## 2026-08-27 — Session Simulator: round-testing presentation (timer, occupied placeholder, per-seat forcing) (issue #21, second real-device follow-up)
 
 **Context**: the compact/collapsible/draggable pass above made the panel

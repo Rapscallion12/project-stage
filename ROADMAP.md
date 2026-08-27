@@ -796,6 +796,19 @@ different dependencies. Current order:
       forced-outcome feedback always matches what was actually decided;
       "Seed 2 Speakers" reuses the same two stable identities for the
       whole run. Presentation/test-control only. See DECISIONS.md.
+      **Reset Session (2026-08-27, same branch)**: Stop only ever halted
+      future activity, leaving old test data piled up. New destructive
+      "Reset Session" control (inline confirm, not a native dialog)
+      deletes every row the current run created — comments, likes,
+      requests/votes, seats, round votes — by an exact tracked guest-id
+      list, investigated first and chosen over a new `simulation_run_id`
+      schema column since the exact-id-list approach is already safe and
+      precise without a migration or touching four production RPCs.
+      `speaker_selection_rounds` deliberately left untouched (no owner
+      column, shared production writer — see DECISIONS.md). 5 new
+      real-database integration tests proving real activity survives a
+      reset even when paired with same-shape simulated data. See
+      DECISIONS.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
