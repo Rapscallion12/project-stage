@@ -4,6 +4,62 @@ Newest entry first.
 
 ---
 
+## 2026-08-27 — Session 41: One-tap full session + closing the replacement loop (issue #21, fifth real-device follow-up)
+
+**Goal**: the simulator could produce individual pieces of activity but
+not a full, self-sustaining stage — Start still required a separate
+Seed 2 Speakers press, and a replaced speaker's seat stayed open
+forever since nothing could promote a new simulated candidate into it.
+
+**Root finding, reported first**: production's automatic promotion
+(`useAutomaticPromotion`/`checkPromotionEligibility`/`claimOpenSeat`)
+resolves "who is asking" from the calling browser tab's own session —
+it was never built to promote anyone but whoever's own tab is polling.
+A simulated identity has no tab and no session, so no real pathway
+could ever promote one, no matter how many votes its request earned —
+a genuine, previously-unreachable gap, not a bug in anything built
+before this pass.
+
+**Implemented**: exported `ensureActiveSelectionRound` (identity-agnostic
+freeze + weighted-pick, reused completely unmodified) and added a new
+adapter, `simulateAdvanceSelection`, that performs the same claim/grant/
+pool-reset sequence `claimOpenSeat` does but for an explicit target
+identity. Its one safety-critical property: it only proceeds if the
+round's real, authoritatively-selected winner is a known simulated guest
+id — a real user's request winning the same pool (entirely possible in
+a mixed pool) is left completely untouched, for their own tab to claim
+normally. `startSimulation` now auto-seeds both speakers itself (the
+same logic `Seed 2 Speakers` already had, called once automatically,
+now tolerant of a seat already being occupied). Round voting now rolls
+an independent continue-bias per *round* (not one fixed global bias),
+since a single fixed bias reliably converges on Continue by the law of
+large numbers and would never produce a narrow-loss/decisive-replace
+outcome naturally. A new 4-6s polling loop calls
+`simulateAdvanceSelection` whenever a seat is open, closing the loop:
+Speaker A → natural voting → outcome → candidate selected → new speaker
+→ next round, unattended. Enhanced Top Speaker Requests to show frozen
+rank/vote-count and a "selected" marker.
+
+**Verification**: 4 new real-database tests for `simulateAdvanceSelection`
+— including one built specifically to try to break the safety property
+(a real requester alone in the pool, guaranteed to win the pick,
+confirmed left untouched: still `pending`, seat never claimed) — plus
+component tests for auto-seeding on Start (including the
+partial-failure-tolerant case), natural round voting and promotion
+polling without force buttons, and a clean 2-speaker restart after
+Reset. Full suite 891/891 (71 files), lint, tsc, build all clean. No
+schema migration this pass.
+
+**Not built this pass**: no visible "Going Live countdown" UI for a
+simulated promotion — that countdown is genuinely private, client-local
+state in production (only the promoted candidate's own tab ever renders
+it), so there's nothing for a simulator operator watching as audience to
+see regardless of how the promotion itself is triggered; not treated as
+a gap. Fresh preview deployed; stopping here for the user's review — not
+merged to main.
+
+---
+
 ## 2026-08-27 — Session 40: Reset Session must also clear the visible feed (issue #21, fourth real-device follow-up)
 
 **Goal**: real-device testing of Session 39's Reset Session found the

@@ -4,7 +4,7 @@ import { SessionSimulatorPanel } from "./session-simulator-panel";
 import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
-import type { ResetSimulatorSessionResult } from "@/app/events/[id]/room/simulator-actions";
+import type { ResetSimulatorSessionResult, AdvanceSelectionResult } from "@/app/events/[id]/room/simulator-actions";
 
 const {
   simulateComment,
@@ -16,6 +16,7 @@ const {
   simulateOpenSeat,
   forceRoundDeadline,
   resetSimulatorSession,
+  simulateAdvanceSelection,
 } = vi.hoisted(() => ({
   simulateComment: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateLike: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
@@ -32,6 +33,7 @@ const {
     requestVotesDeleted: 0,
     roundVotesDeleted: 0,
   })),
+  simulateAdvanceSelection: vi.fn<(...args: unknown[]) => Promise<AdvanceSelectionResult>>(async () => ({ claimed: false })),
 }));
 
 vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
@@ -44,6 +46,7 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   simulateOpenSeat,
   forceRoundDeadline,
   resetSimulatorSession,
+  simulateAdvanceSelection,
 }));
 
 const { supabaseFrom } = vi.hoisted(() => ({
@@ -219,32 +222,107 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
   });
 
   describe("Seed 2 Speakers (Part 5 — deterministic, stable identities)", () => {
-    it("uses the same two identities on every click within one run", async () => {
+    it("uses the same two identities on every click within one run, including Start's own automatic seeding", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
-      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-
-      fireEvent.click(screen.getByTestId("sim-seed-speakers"));
       await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
-      const firstRun = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
+      const fromStart = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
 
       simulateSeedSpeaker.mockClear();
       fireEvent.click(screen.getByTestId("sim-seed-speakers"));
       await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
-      const secondRun = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
+      const fromManualClick = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
 
-      expect(secondRun).toEqual(firstRun);
+      expect(fromManualClick).toEqual(fromStart);
     });
 
     it("assigns seat 1 and seat 2 explicitly", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
-      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-
-      fireEvent.click(screen.getByTestId("sim-seed-speakers"));
       await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
       const seatNumbers = simulateSeedSpeaker.mock.calls.map((call) => call[3]);
       expect(seatNumbers.sort()).toEqual([1, 2]);
+    });
+
+    it("Start Simulated Session seeds both seats automatically — no separate Seed 2 Speakers press required", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      expect(simulateSeedSpeaker).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      const seats = simulateSeedSpeaker.mock.calls.map((call) => call[3]).sort();
+      expect(seats).toEqual([1, 2]);
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seeded 2 stable simulated speakers");
+    });
+
+    it("tolerates one seat already being occupied — still seeds the other, doesn't abort Start", async () => {
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        throw new Error("seat already occupied");
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Seeded 1 simulated speaker"));
+      // Start still completes — Stop is enabled, meaning the rest of the
+      // session (comments/requests/etc. loops) still started normally.
+      expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
+    });
+  });
+
+  describe("natural session progression (real-device follow-up — no force buttons required to advance)", () => {
+    it("casts round votes periodically on an active round, with no force button ever clicked", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "round-1", round_phase: "active" })]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(simulateRoundVote).toHaveBeenCalled();
+      expect(simulateRoundVote.mock.calls.every((call) => call[0] === "round-1")).toBe(true);
+    });
+
+    it("polls for an open seat and calls simulateAdvanceSelection — closes the replacement loop without Open Speaker Seat or Seed 2 Speakers", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      // Only one seat occupied — the other is open, exactly the
+      // post-replacement state this loop exists to fill automatically.
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(simulateAdvanceSelection).toHaveBeenCalled();
+      const [calledEventId, guestIds, displayNames] = simulateAdvanceSelection.mock.calls[0] as [string, string[], Record<string, string>];
+      expect(calledEventId).toBe("e1");
+      expect(guestIds.length).toBeGreaterThan(0); // the generated audience + seed speakers
+      expect(Object.keys(displayNames).length).toBeGreaterThan(0);
+    });
+
+    it("does not poll simulateAdvanceSelection once both seats are occupied", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "seat-1", seat_number: 1 }), speaker({ id: "seat-2", seat_number: 2 })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(simulateAdvanceSelection).not.toHaveBeenCalled();
+    });
+
+    it("logs a promotion when simulateAdvanceSelection reports a successful claim", async () => {
+      simulateAdvanceSelection.mockResolvedValueOnce({ claimed: true, guestId: "sim-guest-x", seatNumber: 2 });
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await vi.advanceTimersByTimeAsync(6000);
+
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("promoted");
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 2");
     });
   });
 
@@ -496,6 +574,23 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
 
       expect(secondRunIds.length).toBe(22); // not accumulated with the first (reset) run
       expect(secondRunIds.some((id) => firstRunIds.includes(id))).toBe(false);
+    });
+
+    it("starting again after reset seeds a clean 2-speaker stage again — auto-seeding is not a one-time-per-mount thing", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+
+      simulateSeedSpeaker.mockClear();
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      const seats = simulateSeedSpeaker.mock.calls.map((call) => call[3]).sort();
+      expect(seats).toEqual([1, 2]);
     });
 
     it("calls onSimulatorReset so the caller can clear its own simulated-identity tracking", async () => {

@@ -239,8 +239,16 @@ const CLAIM_REJECTION_MESSAGES = {
  * runs here — in a Server Action, on the server — never in a client
  * component, satisfying "the authoritative selection must happen
  * server-side."
+ *
+ * Exported (not just used internally by `resolveClaimDecision`) so
+ * `simulator-actions.ts`'s `simulateAdvanceSelection` can trigger the
+ * exact same freeze/pick — the Session Simulator has no real per-candidate
+ * browser tab to poll `checkPromotionEligibility` on a simulated
+ * identity's own behalf (see that function's own doc comment), but the
+ * freeze/pick step itself is identity-agnostic and needs no adapter at
+ * all to reuse directly.
  */
-async function ensureActiveSelectionRound(eventId: string): Promise<void> {
+export async function ensureActiveSelectionRound(eventId: string): Promise<void> {
   const candidates = await freezeSpeakerCandidates(eventId);
   if (candidates.length === 0) return;
   if (candidates.some((c) => c.is_current)) return;

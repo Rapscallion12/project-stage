@@ -93,6 +93,19 @@ merged to `main`.
   clean run. Real user-generated activity is never touched. Distinct
   from Stop Simulation, which only pauses future activity and leaves
   existing test state in place. See DECISIONS.md.
+- **Session Simulator — one-tap full session + automatic replacement
+  loop** (issue #21, fifth real-device follow-up) — Start Simulated
+  Session now seeds both stage seats itself (no separate Seed 2 Speakers
+  press required), and a new `simulateAdvanceSelection` adapter closes
+  the loop after a speaker is replaced: it completes the exact
+  claim/grant/pool-reset sequence a real candidate's own browser would,
+  for a *known-simulated* winner only — a real user's request winning
+  the same selection pool is always left untouched, for their own
+  device to claim normally. Round voting now rolls an independent
+  continue-bias per round instead of one fixed constant, so a
+  long-running session naturally produces Continue, narrow-loss, and
+  decisive-Replace outcomes over time rather than always converging on
+  one. See DECISIONS.md.
 
 ### Fixed
 

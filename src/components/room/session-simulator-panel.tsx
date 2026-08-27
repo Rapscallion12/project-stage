@@ -11,6 +11,7 @@ import {
   simulateOpenSeat,
   forceRoundDeadline,
   resetSimulatorSession,
+  simulateAdvanceSelection,
 } from "@/app/events/[id]/room/simulator-actions";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -43,6 +44,10 @@ function randomVoterCount(min: number, maxExclusive: number): number {
 }
 function randomRoundChoice(continueBias: number): "continue" | "replace" {
   return Math.random() < continueBias ? "continue" : "replace";
+}
+/** A fresh continue-bias in [min, max) — never one fixed constant. See `moodBiasFor`'s own doc comment for why each round needs its own independently-rolled bias, not a single global one. */
+function randomMoodBias(min: number, max: number): number {
+  return min + Math.random() * (max - min);
 }
 
 /** Maps the real resolver's outcome to the short label the log/feedback lines show — see this file's own doc comment on why the outcome itself always comes from the real resolver, never invented here. */
@@ -92,20 +97,38 @@ const AUDIENCE_SIZE = 20;
  * target, how often) — never a parallel implementation of comments,
  * likes, votes, or selection.
  *
+ * **One-tap full session** (real-device follow-up): `Start Simulated
+ * Session` now seeds both stage seats itself (via `seedTwoSpeakers`,
+ * called once from `startSimulation`) rather than requiring a separate
+ * press of `Seed 2 Speakers` — the stage is immediately watchable, not
+ * assembled by hand. `Seed 2 Speakers` stays available standalone for a
+ * deterministic manual re-seed (e.g. right after an Open Seat).
+ *
  * **Realistic mode**: independent jittered (never perfectly periodic —
  * Part 6) `setTimeout` loops for comments, ordinary likes, Request-to-
- * Speak submissions, request-vote shifting, and round voting — each
- * re-schedules itself with a fresh random delay after firing, until
- * `runningRef` goes false. Round votes deliberately use only a random
- * subset of the audience per tick (Part 10: "not every fake viewer
- * should vote") and lean Continue more often than Replace, so realistic
- * mode doesn't reflexively evict every speaker within seconds — but can
- * still organically produce a Replace outcome over enough ticks.
+ * Speak submissions, request-vote shifting, round voting, and — new —
+ * automatic candidate promotion (`simulateAdvanceSelection`, polling
+ * every 4-6s for an open seat) — each re-schedules itself with a fresh
+ * random delay after firing, until `runningRef` goes false. Round votes
+ * use only a random subset of the audience per tick (Part 10: "not
+ * every fake viewer should vote"), and each *round* gets its own
+ * independently-rolled continue-bias (`moodBiasFor`) rather than one
+ * fixed constant — over enough rounds this naturally produces Continue,
+ * narrow-loss, and decisive-Replace outcomes, not just whichever one a
+ * single fixed bias would statistically always converge on. The
+ * automatic-promotion loop is what closes the loop after a Replace: it
+ * completes the same claim/grant/pool-reset sequence a real candidate's
+ * own browser would (production has no mechanism for a session-less
+ * simulated identity to do this itself — see `simulateAdvanceSelection`'s
+ * own doc comment), but only ever for a *known simulated* winner, never
+ * a real user's.
  *
  * **Deterministic mode**: one-shot buttons that combine casting an exact
  * vote split with `forceRoundDeadline` (this pass's one clock-skipping
  * adapter — see `simulator-actions.ts`) so an outcome is observable
- * immediately rather than after a real 60/30s wait.
+ * immediately rather than after a real 60/30s wait. Natural simulation no
+ * longer depends on these to advance — they remain for targeted testing
+ * of one specific seat's outcome on demand.
  */
 export function SessionSimulatorPanel({
   eventId,
@@ -170,6 +193,30 @@ export function SessionSimulatorPanel({
   // `resetSimulatorSession`'s own doc comment for why an exact in-memory
   // id list is the safe mechanism here, not a new schema column.
   const allSimulatedGuestIdsRef = useRef<Set<string>>(new Set());
+  // Display names for every guest id above — kept alongside the id set
+  // rather than re-derived, since `simulateAdvanceSelection` needs a
+  // display name for whichever simulated identity gets promoted, and the
+  // audience pool that originally generated it may have been superseded
+  // by a later Start.
+  const guestDisplayNamesRef = useRef<Record<string, string>>({});
+  // Part 3: "the simulator should naturally be capable of producing all
+  // outcomes over time rather than always converging on the same one" —
+  // a single fixed continue-bias would, over enough votes, reliably land
+  // in "continue" territory almost every time (law of large numbers).
+  // Each *round* (keyed by `event_speakers.id:round_number`, so a
+  // continue outcome's fresh round gets its own independent roll) gets
+  // its own randomly-rolled bias instead, so some rounds naturally trend
+  // toward Replace and others toward Continue — see `moodBiasFor` below.
+  const roundMoodRef = useRef<Map<string, number>>(new Map());
+
+  function moodBiasFor(speaker: EventSpeaker): number {
+    const key = `${speaker.id}:${speaker.round_number}`;
+    const existing = roundMoodRef.current.get(key);
+    if (existing !== undefined) return existing;
+    const bias = randomMoodBias(0.2, 0.9);
+    roundMoodRef.current.set(key, bias);
+    return bias;
+  }
 
   // react-hooks/refs: writing a ref during render is disallowed even for
   // this "mirror the latest prop for later async callbacks" pattern — the
@@ -331,18 +378,34 @@ export function SessionSimulatorPanel({
     };
   }, [collapsed]);
 
+  /**
+   * Real-device follow-up: "I should not need to separately press Seed 2
+   * Speakers just to make the simulator resemble an actual live
+   * session." Start now performs the full setup in one tap — stable
+   * audience, 2 seeded speakers (real seats, real 60s rounds), and every
+   * realistic-mode activity loop, including the ones that keep the
+   * session moving on its own (round voting, and — new — automatic
+   * candidate promotion once a seat opens). `Seed 2 Speakers` stays
+   * available standalone for deterministic re-seeding (e.g. right after
+   * a manual Open Seat), not as a required extra step.
+   */
   async function startSimulation() {
     const newAudience = createSimulatedAudience(AUDIENCE_SIZE);
     audienceRef.current = newAudience;
     setAudience(newAudience);
     const seedSpeakers: [SimulatedIdentity, SimulatedIdentity] = [createSimulatedIdentity(), createSimulatedIdentity()];
     seedSpeakersRef.current = seedSpeakers;
-    const newIds = [...newAudience, ...seedSpeakers].map((identity) => identity.id);
-    for (const id of newIds) allSimulatedGuestIdsRef.current.add(id);
-    onSimulatedIdentitiesCreated?.(newIds);
+    const allNewIdentities = [...newAudience, ...seedSpeakers];
+    for (const identity of allNewIdentities) {
+      allSimulatedGuestIdsRef.current.add(identity.id);
+      guestDisplayNamesRef.current[identity.id] = identity.displayName;
+    }
+    onSimulatedIdentitiesCreated?.(allNewIdentities.map((identity) => identity.id));
     runningRef.current = true;
     setRunning(true);
     appendLog(`Started — ${AUDIENCE_SIZE} simulated audience identities generated`);
+
+    await seedTwoSpeakers();
 
     // Comments: every 3-8s.
     schedule(() => {
@@ -374,18 +437,43 @@ export function SessionSimulatorPanel({
       void simulateRequestVote(eventId, target.message_id, identity.id);
     }, 4000, 10000);
 
-    // Round voting: every 3-7s, a small random subset per active round,
-    // leaning Continue (Part 10: "not every fake viewer should vote" +
-    // avoids reflexively evicting every speaker within seconds).
+    // Round voting: every 3-7s, a small random subset per active round
+    // (Part 10: "not every fake viewer should vote"). Each round gets its
+    // own independently-rolled continue-bias (`moodBiasFor`) rather than
+    // one fixed constant, so outcomes vary round to round instead of
+    // always converging on Continue.
     schedule(() => {
       const activeRounds = speakersRef.current.filter((s) => s.round_phase === "active");
       for (const round of activeRounds) {
+        const bias = moodBiasFor(round);
         const voters = randomSubset(audienceRef.current, randomVoterCount(3, 8));
         for (const voter of voters) {
-          void simulateRoundVote(round.id, randomRoundChoice(0.72), voter.id);
+          void simulateRoundVote(round.id, randomRoundChoice(bias), voter.id);
         }
       }
     }, 3000, 7000);
+
+    // Part 4/5: automatic candidate promotion — every 4-6s (matching
+    // production's own useAutomaticPromotion polling interval), checks
+    // whether a seat is open and, only when the real weighted-selection
+    // round's winner is already a known simulated identity, completes
+    // the exact claim a real candidate's own browser would perform. See
+    // simulateAdvanceSelection's own doc comment for the full reasoning
+    // and the safety check that keeps this from ever acting on a real
+    // user's behalf. This is what lets a replaced simulated speaker's
+    // seat refill itself without Open Speaker Seat or Seed 2 Speakers
+    // ever being pressed again.
+    schedule(() => {
+      if (speakersRef.current.length >= 2) return;
+      void simulateAdvanceSelection(eventId, Array.from(allSimulatedGuestIdsRef.current), guestDisplayNamesRef.current).then(
+        (result) => {
+          if (result.claimed) {
+            const name = guestDisplayNamesRef.current[result.guestId] ?? "a simulated candidate";
+            appendLog(`Seat ${result.seatNumber} → ${name} promoted (real weighted selection)`);
+          }
+        },
+      );
+    }, 4000, 6000);
   }
 
   function stopSimulation() {
@@ -415,6 +503,8 @@ export function SessionSimulatorPanel({
     const result = await resetSimulatorSession(eventId, guestIds);
 
     allSimulatedGuestIdsRef.current = new Set();
+    guestDisplayNamesRef.current = {};
+    roundMoodRef.current = new Map();
     audienceRef.current = [];
     seedSpeakersRef.current = null;
     setAudience([]);
@@ -514,14 +604,32 @@ export function SessionSimulatorPanel({
     appendLog(`Opened seat ${speaker.seat_number} (${speaker.display_name})`);
   }
 
+  /**
+   * Claims both seats for the run's two stable identities. Tolerant of
+   * either seat already being occupied (a real user got there first, or
+   * this is a manual re-seed after only one seat opened) — each claim is
+   * attempted independently so one failure never prevents the other from
+   * succeeding, which matters most for `startSimulation`'s new "one tap"
+   * call: a partially-occupied stage still starts, rather than the whole
+   * session bootstrap aborting on one already-taken seat.
+   */
   async function seedTwoSpeakers() {
     const pool = requireAudience();
     const seedSpeakers = seedSpeakersRef.current;
     if (!pool || !seedSpeakers) return;
     const [a, b] = seedSpeakers;
-    await simulateSeedSpeaker(eventId, a.id, a.displayName, 1);
-    await simulateSeedSpeaker(eventId, b.id, b.displayName, 2);
-    appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2 (real claim_speaker_seat RPC)`);
+    const results = await Promise.allSettled([
+      simulateSeedSpeaker(eventId, a.id, a.displayName, 1),
+      simulateSeedSpeaker(eventId, b.id, b.displayName, 2),
+    ]);
+    const seated = [a, b].filter((_, i) => results[i].status === "fulfilled");
+    if (seated.length === 2) {
+      appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2 (real claim_speaker_seat RPC)`);
+    } else if (seated.length === 1) {
+      appendLog(`Seeded 1 simulated speaker (${seated[0].displayName}) — the other seat was already occupied`);
+    } else {
+      appendLog("Could not seed simulated speakers — both seats already occupied");
+    }
   }
 
   const positionStyle = position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined;
@@ -708,6 +816,13 @@ export function SessionSimulatorPanel({
         {pendingRequests.slice(0, 3).map((r, i) => (
           <p key={r.id} data-testid="sim-top-request">
             #{i + 1} {r.profile_id ? "profile" : "guest"}:{(r.profile_id ?? r.guest_id ?? "").slice(0, 8)} — {r.voteCount} votes
+            {r.frozen_rank !== null ? ` · frozen #${r.frozen_rank} (${r.frozen_vote_count} at freeze)` : ""}
+            {r.is_current_candidate && (
+              <span data-testid="sim-selected-candidate" className="font-semibold text-emerald-400">
+                {" "}
+                — selected
+              </span>
+            )}
           </p>
         ))}
 

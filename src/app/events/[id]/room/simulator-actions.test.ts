@@ -10,6 +10,7 @@ import {
   simulateOpenSeat,
   forceRoundDeadline,
   resetSimulatorSession,
+  simulateAdvanceSelection,
 } from "./simulator-actions";
 import { createServiceClient } from "@/lib/supabase/service";
 import { requestToSpeakAsGuest, castSpeakerRequestVoteAsGuest } from "@/lib/repositories/speaker-requests";
@@ -68,6 +69,11 @@ describe("simulator-actions (issue #21, Part 5) — refuse to run on production"
   it("forceRoundDeadline throws on production", async () => {
     process.env.VERCEL_ENV = "production";
     await expect(forceRoundDeadline("s1")).rejects.toThrow(/not available/);
+  });
+
+  it("simulateAdvanceSelection throws on production", async () => {
+    process.env.VERCEL_ENV = "production";
+    await expect(simulateAdvanceSelection("e1", ["g1"], { g1: "Fake Fox" })).rejects.toThrow(/not available/);
   });
 
   it("resetSimulatorSession throws on production, even with a non-empty guest id list", async () => {
@@ -296,6 +302,127 @@ describe.skipIf(!hasServiceCredentials)("resetSimulatorSession (real database) �
         .from("speaker_requests")
         .update({ status: "withdrawn", resolved_at: new Date().toISOString() })
         .eq("id", realRequestId);
+    }
+  });
+});
+
+/**
+ * Real-database coverage for the "closing the loop" requirement: after a
+ * simulated speaker is replaced, the existing Phase 1 candidate-selection
+ * system must run and a new simulated speaker must visibly occupy the
+ * seat — but production's own `claimOpenSeat`/`checkPromotionEligibility`
+ * can't promote a session-less simulated identity (see
+ * `simulateAdvanceSelection`'s own doc comment). These tests prove both
+ * halves of that adapter's contract: it correctly completes a promotion
+ * for a known-simulated winner, and it never touches a real candidate's
+ * own pending request, even when that real request is the only — and
+ * therefore winning — candidate in the pool.
+ */
+describe.skipIf(!hasServiceCredentials)("simulateAdvanceSelection (real database)", () => {
+  let service: ReturnType<typeof createServiceClient>;
+  let eventId: string;
+  const originalVercelEnv = process.env.VERCEL_ENV;
+
+  beforeAll(async () => {
+    process.env.VERCEL_ENV = "preview";
+    service = createServiceClient();
+    const { data: event, error } = await service
+      .from("events")
+      .insert({
+        title: "Session Simulator advance-selection test fixture event",
+        scheduled_start: new Date(Date.now() - 60_000).toISOString(),
+        lobby_opens_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      })
+      .select("id")
+      .single();
+    if (error || !event) throw new Error(error?.message ?? "failed to create test event");
+    eventId = event.id;
+  }, 30_000);
+
+  afterAll(async () => {
+    if (eventId) {
+      await service.from("events").delete().eq("id", eventId);
+    }
+    if (originalVercelEnv === undefined) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = originalVercelEnv;
+  }, 30_000);
+
+  it("does nothing when both seats are already occupied", async () => {
+    const a = crypto.randomUUID();
+    const b = crypto.randomUUID();
+    await claimSpeakerSeat(eventId, { type: "guest", id: a }, 1, "A");
+    await claimSpeakerSeat(eventId, { type: "guest", id: b }, 2, "B");
+    try {
+      const result = await simulateAdvanceSelection(eventId, [a, b], { [a]: "A", [b]: "B" });
+      expect(result.claimed).toBe(false);
+    } finally {
+      await endSpeakerSeat(eventId, { type: "guest", id: a }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: b }, "moderator_removed");
+    }
+  });
+
+  it("does nothing when a seat is open but there is no pending request at all (Part 5's empty-pool case)", async () => {
+    const result = await simulateAdvanceSelection(eventId, [], {});
+    expect(result.claimed).toBe(false);
+  });
+
+  it("claims the seat for a simulated winner — real freeze/weighted-select/claim/grant/pool-reset, new speaker gets a fresh real round", async () => {
+    const candidateGuestId = crypto.randomUUID();
+    const { requestId, messageId } = await requestToSpeakAsGuest(eventId, candidateGuestId, "Fake Fox", "let me speak");
+    const voterGuestId = crypto.randomUUID();
+    await castSpeakerRequestVoteAsGuest(eventId, messageId, voterGuestId);
+
+    try {
+      const result = await simulateAdvanceSelection(eventId, [candidateGuestId], { [candidateGuestId]: "Fake Fox" });
+      expect(result).toEqual({ claimed: true, guestId: candidateGuestId, seatNumber: expect.any(Number) });
+
+      const { data: request } = await service.from("speaker_requests").select("status").eq("id", requestId).single();
+      expect(request!.status).toBe("granted");
+
+      const { data: seat } = await service
+        .from("event_speakers")
+        .select("*")
+        .eq("event_id", eventId)
+        .eq("guest_id", candidateGuestId)
+        .is("left_at", null)
+        .single();
+      expect(seat).toBeTruthy();
+      expect(seat!.round_number).toBe(1);
+      expect(seat!.round_phase).toBe("active");
+      const remainingMs = new Date(seat!.round_ends_at).getTime() - Date.now();
+      expect(remainingMs).toBeGreaterThan(55_000);
+      expect(remainingMs).toBeLessThanOrEqual(60_000);
+    } finally {
+      await endSpeakerSeat(eventId, { type: "guest", id: candidateGuestId }, "moderator_removed");
+    }
+  });
+
+  it("never claims on behalf of a real (non-simulated) winning candidate, even when it's the only candidate in the pool", async () => {
+    const realGuestId = crypto.randomUUID();
+    const { requestId } = await requestToSpeakAsGuest(eventId, realGuestId, "Real Person", "let me speak");
+
+    try {
+      // Empty simulatedGuestIds — this real requester's id is deliberately
+      // never included, exactly the scenario a mixed real+simulated pool
+      // produces.
+      const result = await simulateAdvanceSelection(eventId, [], {});
+      expect(result.claimed).toBe(false);
+
+      const { data: request } = await service.from("speaker_requests").select("status").eq("id", requestId).single();
+      expect(request!.status).toBe("pending"); // untouched — not granted, not expired
+
+      const { data: seat } = await service
+        .from("event_speakers")
+        .select("id")
+        .eq("event_id", eventId)
+        .eq("guest_id", realGuestId)
+        .maybeSingle();
+      expect(seat).toBeNull(); // never claimed
+    } finally {
+      await service
+        .from("speaker_requests")
+        .update({ status: "withdrawn", resolved_at: new Date().toISOString() })
+        .eq("id", requestId);
     }
   });
 });

@@ -818,6 +818,19 @@ different dependencies. Current order:
       IDENTITY FULL` on the four affected tables and each hook gained a
       pure, tested DELETE handler. Fixes every tab watching a room, not
       just the simulator's own. See DECISIONS.md.
+      **One-tap full session + replacement loop (2026-08-27, same
+      branch)**: Start now auto-seeds both speakers itself (no separate
+      Seed 2 Speakers press). Root finding: production's automatic
+      promotion resolves "who" from the calling tab's own session — a
+      simulated identity has none, so no real pathway could ever promote
+      one. New `simulateAdvanceSelection` adapter reuses the identity-
+      agnostic freeze/weighted-pick (`ensureActiveSelectionRound`,
+      exported) unmodified and only adapts the claim step, gated by one
+      safety property verified via a real-DB test built to try to break
+      it: it never claims on behalf of a real user's winning request,
+      even alone in the pool. Round voting rolls an independent
+      continue-bias per round instead of one fixed constant, so outcomes
+      vary naturally over a long session. See DECISIONS.md.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

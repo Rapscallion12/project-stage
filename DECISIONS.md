@@ -3,6 +3,76 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-27 — Session Simulator: one-tap full session + closing the replacement loop (issue #21, fifth real-device follow-up)
+
+**Context**: the simulator could produce individual pieces of activity,
+but not a full, self-sustaining stage — starting a session still
+required a separate "Seed 2 Speakers" press, and even seeded, a
+replaced speaker's seat stayed open forever, since nothing could ever
+promote a new simulated candidate into it.
+
+**Root architectural finding, reported before writing anything**:
+production's own automatic promotion (`useAutomaticPromotion` →
+`checkPromotionEligibility`/`claimOpenSeat`, `room/actions.ts`) resolves
+*who is asking* from the calling browser tab's own session cookie
+(`resolveIdentity()`) — it was never designed to promote anyone but
+"whoever's tab is currently polling this." A simulated identity has no
+browser tab and no session, so no amount of casting Request-to-Speak
+votes for one could ever get it promoted through the real pathway —
+this was a genuine, previously-unreachable gap, not a bug in anything
+built so far.
+
+**Decision — reuse the identity-agnostic half, adapt only the
+identity-bound half.** `ensureActiveSelectionRound` (freeze the pending
+pool, run the weighted pick) operates on the whole event, not on "the
+caller" — exported from `room/actions.ts` and reused completely
+unmodified. Only the *claim* step needed a new adapter,
+`simulateAdvanceSelection` (`simulator-actions.ts`), which performs the
+exact same `claimSpeakerSeat`/`markSpeakerRequestGranted`/
+`resetSpeakerCandidatePool` sequence `claimOpenSeat` does, parameterized
+by an explicit target identity instead of a resolved session.
+
+**The one safety-critical property, verified by a real-database test
+built specifically to try to break it**: after the real, authoritative
+selection round picks a winner, the adapter only proceeds if that
+winner's `guest_id` is in the caller-supplied list of ids the panel
+itself generated this run. A real user's request can be — and, in a
+mixed pool, sometimes will be — the winning candidate; when that
+happens, this adapter does nothing and leaves that real user's own
+`useAutomaticPromotion` to claim it for themselves, exactly as
+production already does unassisted. Tested directly: a real requester's
+pending request, alone in the pool (so it wins the pick with certainty),
+is confirmed left untouched — `status` stays `'pending'`, no seat is
+ever claimed on their behalf.
+
+**One-tap start**: `startSimulation` now calls the same seeding logic
+`Seed 2 Speakers` already used, once, automatically — `Seed 2 Speakers`
+itself stays as a standalone deterministic re-seed tool. Made tolerant
+of a seat already being occupied (`Promise.allSettled` over both claims)
+so a partially-blocked stage (a real user beat the simulator to one
+seat) still starts the rest of the session rather than aborting.
+
+**Naturally varied outcomes, not one converging bias**: the round-voting
+loop previously used one fixed continue-bias (0.72) for every vote — over
+enough votes, the law of large numbers means that reliably lands in
+"continue" territory almost every time, never producing a narrow-loss or
+decisive-replace outcome by chance despite the product spec explicitly
+allowing all three. Replaced with a per-*round* randomly-rolled bias
+(`moodBiasFor`, keyed by `event_speakers.id:round_number` so a fresh
+round — including one a Continue outcome just created — gets its own
+independent roll), producing genuine variety across a long-running
+session without needing the deterministic Force controls to see
+anything but a Continue outcome.
+
+**Automatic promotion polling**: a new scheduled loop (4-6s, matching
+production's own `POLL_INTERVAL_MS`) checks for an open seat and calls
+`simulateAdvanceSelection` — this is what lets `Speaker A → vote →
+outcome → candidate selected → new speaker → next round` run
+unattended, and what fills a seat the instant an eligible request exists
+even when it started with none (Part 5's empty-pool case — the loop
+just keeps checking; `ensureActiveSelectionRound` is already a safe
+no-op against an empty pool).
+
 ## 2026-08-27 — Session Simulator Reset Session must also clear the visible feed (issue #21, fourth real-device follow-up)
 
 **Context**: real-device testing of Reset Session found the database

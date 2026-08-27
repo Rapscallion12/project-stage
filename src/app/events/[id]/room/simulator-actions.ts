@@ -19,7 +19,7 @@
  * Nothing here writes to a table or bypasses a check a real guest
  * couldn't already trigger through the genuine UI.
  *
- * **Two deliberate adapters, both isolated and reported**:
+ * **Three deliberate adapters, all isolated and reported**:
  * - `forceRoundDeadline` backdates `event_speakers.round_ends_at`/
  *   `closing_ends_at` directly via the service client — there is no real
  *   user pathway that skips time, and there never should be one. It exists
@@ -34,20 +34,59 @@
  *   data either. See its own doc comment for why an exact in-memory id
  *   list (not a new `simulation_run_id` schema column) is the safe,
  *   sufficient ownership mechanism here.
+ * - `simulateAdvanceSelection` claims an open seat on a *specific target
+ *   identity's* behalf — see its own doc comment for why production's
+ *   `claimOpenSeat`/`checkPromotionEligibility` can't be reused as-is
+ *   (they always resolve "who" from the caller's own session, and a
+ *   simulated identity has no session to resolve), and for the one
+ *   safety property that makes this adapter non-negotiable: it refuses
+ *   to act unless the round's actual, authoritatively-selected winner is
+ *   already a known simulated guest id — it never claims on behalf of a
+ *   real user, even when a real user's request happens to be in the same
+ *   frozen pool as simulated ones.
  */
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { isPreviewOrDevBuild } from "@/lib/preview-mode";
 import { insertMessage, insertReaction } from "@/lib/repositories/chat";
-import { requestToSpeakAsGuest, castSpeakerRequestVoteAsGuest } from "@/lib/repositories/speaker-requests";
+import {
+  requestToSpeakAsGuest,
+  castSpeakerRequestVoteAsGuest,
+  freezeSpeakerCandidates,
+  markSpeakerRequestGranted,
+  resetSpeakerCandidatePool,
+} from "@/lib/repositories/speaker-requests";
 import { claimSpeakerSeat, endSpeakerSeat, castSpeakerRoundVoteAsGuest } from "@/lib/repositories/event-speakers";
-import type { ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
-import { resolveSpeakerRoundAction } from "./actions";
+import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
+import { findOpenSeat } from "@/lib/speaker-queue";
+import { resolveSpeakerRoundAction, ensureActiveSelectionRound } from "./actions";
 
 function assertSimulatorAvailable(): void {
   if (!isPreviewOrDevBuild()) {
     throw new Error("The Session Simulator is not available on this deployment.");
   }
+}
+
+/**
+ * The same `event_speakers_active` view `listActiveSpeakers`
+ * (`lib/repositories/event-speakers.ts`) reads, via the service client
+ * instead of the request-scoped one that function uses — every other
+ * read/write in this file already goes through the service client (this
+ * is preview-tooling gated by `assertSimulatorAvailable`, not tied to
+ * any particular caller's session), and `simulateAdvanceSelection` is no
+ * different. Kept local rather than exported from the repository file:
+ * this exact "service client, no session" shape is specific to this
+ * file's own trust model, not a general-purpose alternative worth
+ * offering callers that *do* have a real session.
+ */
+async function listActiveSpeakersForSimulator(eventId: string): Promise<EventSpeaker[]> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from("event_speakers_active")
+    .select("*")
+    .eq("event_id", eventId)
+    .order("seat_number", { ascending: true });
+  return (data ?? []) as EventSpeaker[];
 }
 
 export async function simulateComment(eventId: string, guestId: string, displayName: string, body: string) {
@@ -259,4 +298,70 @@ export async function resetSimulatorSession(eventId: string, guestIds: string[])
     requestVotesDeleted: requestVotesDeleted ?? 0,
     roundVotesDeleted: roundVotesDeleted ?? 0,
   };
+}
+
+export type AdvanceSelectionResult =
+  | { claimed: false }
+  | { claimed: true; guestId: string; seatNumber: 1 | 2 };
+
+/**
+ * The third deliberate adapter — see this file's own doc comment.
+ * Closes the loop production's own automatic promotion can't close for a
+ * simulated identity: `useAutomaticPromotion` polls
+ * `checkPromotionEligibility`/`claimOpenSeat` from a *specific candidate's
+ * own browser tab*, both of which resolve "who is asking" from that
+ * tab's session cookie (`resolveIdentity()`) — there is no session to
+ * resolve for a simulated guest id, so no real pathway could ever
+ * promote one automatically, no matter how many votes their request
+ * earned.
+ *
+ * The freeze/weighted-pick step itself (`ensureActiveSelectionRound`) is
+ * identity-agnostic — it operates on the whole event's pending pool, not
+ * on "the caller" — so it's reused directly, unmodified, exactly as
+ * production's own `resolveClaimDecision` calls it. Only the *claim* step
+ * needs this adapter, and only for the specific case production has no
+ * mechanism for at all.
+ *
+ * **The one safety-critical check**: after the (real, authoritative)
+ * selection round has picked a winner, this only proceeds if that
+ * winner's `guest_id` is in the caller-supplied `simulatedGuestIds` list
+ * — the exact same "ids the panel itself generated this run" ownership
+ * mechanism `resetSimulatorSession` already uses. If a real user's
+ * request organically wins the same weighted pick (entirely possible —
+ * real and simulated requests share one pool), this returns
+ * `{claimed:false}` without touching anything, leaving that real user's
+ * own `useAutomaticPromotion` to claim it for themselves exactly as
+ * production always has. This function only ever completes a promotion
+ * production itself could never have completed on its own.
+ */
+export async function simulateAdvanceSelection(
+  eventId: string,
+  simulatedGuestIds: string[],
+  displayNameByGuestId: Record<string, string>,
+): Promise<AdvanceSelectionResult> {
+  assertSimulatorAvailable();
+
+  const activeSpeakers = await listActiveSpeakersForSimulator(eventId);
+  const seatNumber = findOpenSeat(activeSpeakers);
+  if (seatNumber === null) return { claimed: false };
+
+  await ensureActiveSelectionRound(eventId);
+  const candidates = await freezeSpeakerCandidates(eventId);
+  const winner = candidates.find((c) => c.is_current);
+  if (!winner?.guest_id || !simulatedGuestIds.includes(winner.guest_id)) {
+    return { claimed: false };
+  }
+
+  const displayName = displayNameByGuestId[winner.guest_id] ?? "Simulated Speaker";
+  try {
+    await claimSpeakerSeat(eventId, { type: "guest", id: winner.guest_id }, seatNumber, displayName);
+  } catch {
+    // Same "someone else just took it" tolerance claimOpenSeat has —
+    // another poll (real or simulated) can legitimately win the race.
+    return { claimed: false };
+  }
+  await markSpeakerRequestGranted(winner.request_id);
+  await resetSpeakerCandidatePool(eventId, winner.request_id);
+
+  return { claimed: true, guestId: winner.guest_id, seatNumber };
 }
