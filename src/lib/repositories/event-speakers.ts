@@ -483,51 +483,16 @@ export async function castSpeakerRoundVoteAsGuest(
   }
 }
 
-export type ResolveSpeakerRoundOutcome =
-  | "no-active-occupancy"
-  | "active-not-yet-expired"
-  | "closing-not-yet-expired"
-  | "continue"
-  | "narrow-loss"
-  | "decisive-replace"
-  | "replaced-after-closing";
-
-export type ResolveSpeakerRoundResult = {
-  outcome: ResolveSpeakerRoundOutcome;
-  /** The occupancy row's own identity — returned unconditionally (even for a no-op outcome), so callers that need to react to a replacement (e.g. revoking LiveKit publish rights) never need a second fetch. Null only when outcome is 'no-active-occupancy'. */
-  eventId: string | null;
-  identity: SeatIdentity | null;
-};
-
 /**
- * Issue #21, Part 1: the one authoritative round state transition — see
- * migration 00000000000021/00000000000022's `resolve_speaker_round` for
- * the full decision (mirrors `lib/speaker-round.ts`'s
- * `resolveRoundOutcome` exactly). Trusted-server-only; always safe to
- * call early, late, or repeatedly — it re-derives everything from the
- * row's own timestamps and the real vote tally, and is a pure no-op if
- * it's not actually time yet. See `useSpeakerRoundResolution` for how
- * every connected client independently schedules a call to this at the
- * real deadline, so resolution never depends on any one browser staying
- * open.
+ * Issue #21 corrective pass: the per-seat round resolver (and its
+ * `no-active-occupancy`/`active-not-yet-expired`/`closing-not-yet-expired`/
+ * `continue`/`narrow-loss`/`decisive-replace`/`replaced-after-closing`
+ * outcome type) is superseded by the shared-round model —
+ * `lib/repositories/stage-rounds.ts`'s `resolveStageRound` (the shared
+ * 60s deadline, resolving both occupied seats independently) and
+ * `resolveSeatClosing` (an individual narrow-loss speaker's own 30s
+ * window) — see migration 00000000000024's own doc comment.
  */
-export async function resolveSpeakerRound(eventSpeakersId: string): Promise<ResolveSpeakerRoundResult> {
-  const supabase = createServiceClient();
-  const { data, error } = await supabase.rpc("resolve_speaker_round", { p_event_speakers_id: eventSpeakersId });
-  if (error) {
-    throw new Error(error.message);
-  }
-  const row = data?.[0];
-  const outcome = (row?.outcome ?? "no-active-occupancy") as ResolveSpeakerRoundOutcome;
-  if (!row || (row.profile_id === null && row.guest_id === null)) {
-    return { outcome, eventId: null, identity: null };
-  }
-  return {
-    outcome,
-    eventId: row.event_id,
-    identity: row.profile_id ? { type: "profile", id: row.profile_id } : { type: "guest", id: row.guest_id! },
-  };
-}
 
 /** Live vote tally for a speaker's current round — publicly readable, same tier as `listActiveSpeakers`. */
 export async function listSpeakerRoundVotes(eventSpeakersId: string): Promise<SpeakerRoundVote[]> {

@@ -8,7 +8,8 @@ import {
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
-  forceRoundDeadline,
+  forceStageRoundDeadline,
+  forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
 } from "./simulator-actions";
@@ -66,9 +67,14 @@ describe("simulator-actions (issue #21, Part 5) — refuse to run on production"
     await expect(simulateOpenSeat("e1", "g1")).rejects.toThrow(/not available/);
   });
 
-  it("forceRoundDeadline throws on production", async () => {
+  it("forceStageRoundDeadline throws on production", async () => {
     process.env.VERCEL_ENV = "production";
-    await expect(forceRoundDeadline("s1")).rejects.toThrow(/not available/);
+    await expect(forceStageRoundDeadline("e1")).rejects.toThrow(/not available/);
+  });
+
+  it("forceSeatClosingDeadline throws on production", async () => {
+    process.env.VERCEL_ENV = "production";
+    await expect(forceSeatClosingDeadline("s1")).rejects.toThrow(/not available/);
   });
 
   it("simulateAdvanceSelection throws on production", async () => {

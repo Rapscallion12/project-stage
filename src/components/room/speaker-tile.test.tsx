@@ -431,9 +431,9 @@ describe("SpeakerTile", () => {
     });
   });
 
-  describe("round-timer badge (issue #21, Part 1)", () => {
-    it("shows the round timer when isPreviewBuild is true, even far from the deadline", () => {
-      render(
+  describe("round-timer badge (issue #21 corrective pass — closing-phase only; the ordinary shared round countdown moved to StageRoundBadge on SpeakerStage)", () => {
+    it("shows nothing while the seat is in its ordinary active phase, in preview or production alike — the shared badge covers that now", () => {
+      const { rerender } = render(
         <SpeakerTile
           speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 45_000).toISOString() })}
           participant={undefined}
@@ -441,11 +441,9 @@ describe("SpeakerTile", () => {
           isPreviewBuild={true}
         />,
       );
-      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Round 1 · 45s");
-    });
+      expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
 
-    it("hides the round timer by default (production), far from the deadline", () => {
-      render(
+      rerender(
         <SpeakerTile
           speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 45_000).toISOString() })}
           participant={undefined}
@@ -456,19 +454,7 @@ describe("SpeakerTile", () => {
       expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
     });
 
-    it("reveals the round timer within the final ~10s even in production", () => {
-      render(
-        <SpeakerTile
-          speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 8_000).toISOString() })}
-          participant={undefined}
-          isLocal={false}
-          isPreviewBuild={false}
-        />,
-      );
-      expect(screen.getByTestId("speaker-round-timer")).toBeInTheDocument();
-    });
-
-    it("labels the closing period distinctly ('final Ns')", () => {
+    it("labels the closing period distinctly ('final Ns') in preview, even far from the deadline", () => {
       render(
         <SpeakerTile
           speaker={speaker({
@@ -483,16 +469,28 @@ describe("SpeakerTile", () => {
       expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Final 20s");
     });
 
-    it("shows the current round number in the badge, distinct from a later round", () => {
+    it("hides the closing countdown by default (production), far from the deadline", () => {
       render(
         <SpeakerTile
-          speaker={speaker({ round_phase: "active", round_number: 3, round_ends_at: new Date(Date.now() + 12_000).toISOString() })}
+          speaker={speaker({ round_phase: "closing", closing_ends_at: new Date(Date.now() + 25_000).toISOString() })}
           participant={undefined}
           isLocal={false}
-          isPreviewBuild={true}
+          isPreviewBuild={false}
         />,
       );
-      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Round 3 · 12s");
+      expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
+    });
+
+    it("reveals the closing countdown within the final ~10s even in production", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "closing", closing_ends_at: new Date(Date.now() + 8_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={false}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toBeInTheDocument();
     });
   });
 

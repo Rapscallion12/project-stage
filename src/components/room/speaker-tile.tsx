@@ -349,24 +349,22 @@ export function SpeakerTile({
 }
 
 /**
- * Issue #21, Part 1: the round-timer badge — deliberately tiny and
- * neutral (no color-shift/pulse here; that emphasis intensification is
- * the Vote *control*'s job per Part 2/H, not this identity-area badge).
- * `closing` gets a distinct label ("final Ns") since that period is a
- * guaranteed-outcome grace window, not another survival round, and
- * showing it identically to an ordinary round would misrepresent that.
+ * Issue #21 corrective pass: an *individual* seat's own round badge —
+ * narrowed to the narrow-loss closing window only, since the ordinary
+ * shared countdown now renders exactly once, at the stage level
+ * (`SpeakerStage`'s `StageRoundBadge`), never per-tile. Deliberately
+ * tiny and neutral (no color-shift/pulse here; that emphasis
+ * intensification is the Vote *control*'s job per Part 2/H, not this
+ * identity-area badge). "Final Ns" since this is a guaranteed-outcome
+ * grace window, not another survival round.
  */
-function SpeakerRoundBadge({
-  display,
-}: {
-  display: { remainingSeconds: number; phase: "active" | "closing"; roundNumber: number };
-}) {
+function SpeakerRoundBadge({ display }: { display: { remainingSeconds: number; phase: "closing" } }) {
   return (
     <span
       data-testid="speaker-round-timer"
       className="shrink-0 rounded-full bg-black/40 px-1.5 py-0.5 text-[10px] font-medium text-white/80 [text-shadow:none]"
     >
-      {display.phase === "closing" ? `Final ${display.remainingSeconds}s` : `Round ${display.roundNumber} · ${display.remainingSeconds}s`}
+      Final {display.remainingSeconds}s
     </span>
   );
 }

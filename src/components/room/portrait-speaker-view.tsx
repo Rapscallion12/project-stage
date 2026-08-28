@@ -108,6 +108,7 @@ export function PortraitSpeakerView({
   reconnectingIdentities,
   isPreviewBuild,
   simulatedGuestIds,
+  stageRound,
   messages,
   reactions,
   pendingRequests,
@@ -137,6 +138,7 @@ export function PortraitSpeakerView({
         reconnectingIdentities={reconnectingIdentities}
         isPreviewBuild={isPreviewBuild}
         simulatedGuestIds={simulatedGuestIds}
+        stageRound={stageRound}
         soloMode
       />
 

@@ -9,7 +9,8 @@ import {
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
-  forceRoundDeadline,
+  forceStageRoundDeadline,
+  forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
 } from "@/app/events/[id]/room/simulator-actions";
@@ -25,8 +26,9 @@ import { jitteredDelayMs, randomOrdinaryComment, randomSpeakerRequestComment } f
 import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
 import { useNow } from "@/hooks/use-now";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
-import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
+import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
 
 /**
  * `Math.random()` wrapped in named, module-level helpers (never called
@@ -51,7 +53,7 @@ function randomMoodBias(min: number, max: number): number {
 }
 
 /** Maps the real resolver's outcome to the short label the log/feedback lines show — see this file's own doc comment on why the outcome itself always comes from the real resolver, never invented here. */
-function resolvedOutcomeLabel(outcome: ResolveSpeakerRoundOutcome): string {
+function resolvedOutcomeLabel(outcome: SeatResolutionOutcome): string {
   switch (outcome) {
     case "continue":
       return "Continue";
@@ -97,44 +99,57 @@ const AUDIENCE_SIZE = 20;
  * target, how often) — never a parallel implementation of comments,
  * likes, votes, or selection.
  *
- * **One-tap full session** (real-device follow-up): `Start Simulated
- * Session` now seeds both stage seats itself (via `seedTwoSpeakers`,
- * called once from `startSimulation`) rather than requiring a separate
- * press of `Seed 2 Speakers` — the stage is immediately watchable, not
- * assembled by hand. `Seed 2 Speakers` stays available standalone for a
- * deterministic manual re-seed (e.g. right after an Open Seat).
+ * **One-tap full session**: `Start Simulated Session` seeds both stage
+ * seats itself (via `seedTwoSpeakers`, called once from
+ * `startSimulation`) rather than requiring a separate press of `Seed 2
+ * Speakers` — the stage is immediately watchable, not assembled by
+ * hand. `Seed 2 Speakers` stays available standalone for a deterministic
+ * manual re-seed (e.g. right after an Open Seat).
+ *
+ * **Corrective pass — real joins take precedence**: the automatic
+ * candidate-promotion loop below is the one background poll that could
+ * ever race a real person tapping an open seat (both ultimately call the
+ * same `claim_speaker_seat` RPC). Two layers close that race: (1) the
+ * RPC itself, since this pass, refuses to silently steal an
+ * already-active seat (see migration 00000000000024) — a lost race now
+ * always surfaces as a clean, caught error, never a silent takeover; (2)
+ * this component additionally *pauses* its own polling for as long as
+ * `realJoinInProgress` is true (a real join or promotion actually in
+ * flight, per `EventRoom`'s own `isJoiningSeat`/`promotionCountdown`
+ * state) — an explicit, deliberate yield, not just a fair coin-flip race.
+ *
+ * **Shared round model — corrective pass**: the stage pairing now runs
+ * one shared 60-second round (`stageRound`, from `useStageRound`) rather
+ * than two independent per-speaker clocks — Continue/Replace is still
+ * voted on and resolved per speaker independently, only the *deadline*
+ * is shared. `Force Continue`/`Force Narrow Loss`/`Force Replace` now
+ * only cast the vote split that *configures* a seat's outcome at the
+ * next shared resolution — `Resolve Round Now` is the one control that
+ * actually advances the shared deadline and invokes the real resolver
+ * for both seats at once. A seat's own individual narrow-loss closing
+ * period (Part 4's "Final 30s") is unaffected — still per-seat, still
+ * immediately forceable via `Force Replace Now`.
  *
  * **Realistic mode**: independent jittered (never perfectly periodic —
  * Part 6) `setTimeout` loops for comments, ordinary likes, Request-to-
- * Speak submissions, request-vote shifting, round voting, and — new —
- * automatic candidate promotion (`simulateAdvanceSelection`, polling
- * every 4-6s for an open seat) — each re-schedules itself with a fresh
- * random delay after firing, until `runningRef` goes false. Round votes
- * use only a random subset of the audience per tick (Part 10: "not
- * every fake viewer should vote"), and each *round* gets its own
- * independently-rolled continue-bias (`moodBiasFor`) rather than one
- * fixed constant — over enough rounds this naturally produces Continue,
- * narrow-loss, and decisive-Replace outcomes, not just whichever one a
- * single fixed bias would statistically always converge on. The
- * automatic-promotion loop is what closes the loop after a Replace: it
- * completes the same claim/grant/pool-reset sequence a real candidate's
- * own browser would (production has no mechanism for a session-less
- * simulated identity to do this itself — see `simulateAdvanceSelection`'s
- * own doc comment), but only ever for a *known simulated* winner, never
- * a real user's.
- *
- * **Deterministic mode**: one-shot buttons that combine casting an exact
- * vote split with `forceRoundDeadline` (this pass's one clock-skipping
- * adapter — see `simulator-actions.ts`) so an outcome is observable
- * immediately rather than after a real 60/30s wait. Natural simulation no
- * longer depends on these to advance — they remain for targeted testing
- * of one specific seat's outcome on demand.
+ * Speak submissions, request-vote shifting, round voting, and automatic
+ * candidate promotion — each re-schedules itself with a fresh random
+ * delay after firing, until `runningRef` goes false. Round votes use
+ * only a random subset of the audience per tick (Part 10: "not every
+ * fake viewer should vote"), and each *round* gets its own
+ * independently-rolled continue-bias per seat (`moodBiasFor`) rather
+ * than one fixed constant — over enough rounds this naturally produces
+ * Continue, narrow-loss, and decisive-Replace outcomes for either seat,
+ * not just whichever one a single fixed bias would statistically always
+ * converge on.
  */
 export function SessionSimulatorPanel({
   eventId,
   speakers,
   pendingRequests,
   messages,
+  stageRound,
+  realJoinInProgress = false,
   onSimulatedIdentitiesCreated,
   onSimulatorReset,
 }: {
@@ -142,6 +157,10 @@ export function SessionSimulatorPanel({
   speakers: EventSpeaker[];
   pendingRequests: RankedPendingRequest[];
   messages: LobbyMessage[];
+  /** The shared round clock, live — see `useStageRound`. Drives the one stage-level timer this panel shows once, at the top of the observability block. */
+  stageRound: StageRound | null;
+  /** Corrective pass: true while `EventRoom` has a real join or promotion actually in flight (`isJoiningSeat`/`promotionCountdown`) — the automatic candidate-promotion loop pauses for as long as this is true, so it can never race a real person's own explicit action. Optional/defaults false so tests/standalone use are unaffected. */
+  realJoinInProgress?: boolean;
   /** Real-device follow-up: reports every guest id this panel generates, once, at creation — the caller (EventRoom) uses this purely cosmetically, to let SpeakerTile render an obviously-simulated placeholder. Optional so this component still works standalone in tests that don't care. */
   onSimulatedIdentitiesCreated?: (ids: string[]) => void;
   /** Reset Session follow-up: called once cleanup completes, so the caller (EventRoom) can clear its own `simulatedGuestIds` set — that state is otherwise only ever added to, never removed. Optional, same reasoning as the prop above. */
@@ -180,6 +199,7 @@ export function SessionSimulatorPanel({
   const speakersRef = useRef(speakers);
   const pendingRequestsRef = useRef(pendingRequests);
   const messagesRef = useRef(messages);
+  const realJoinInProgressRef = useRef(realJoinInProgress);
   const audienceRef = useRef<SimulatedIdentity[]>([]);
   // Part 5: "Seed 2 Speakers should create the same two stable simulated
   // identities for that simulation run" — generated once in
@@ -203,10 +223,11 @@ export function SessionSimulatorPanel({
   // outcomes over time rather than always converging on the same one" —
   // a single fixed continue-bias would, over enough votes, reliably land
   // in "continue" territory almost every time (law of large numbers).
-  // Each *round* (keyed by `event_speakers.id:round_number`, so a
-  // continue outcome's fresh round gets its own independent roll) gets
-  // its own randomly-rolled bias instead, so some rounds naturally trend
-  // toward Replace and others toward Continue — see `moodBiasFor` below.
+  // Each *round* (keyed by `event_speakers.id:round_number` — which now
+  // tracks the shared round's own number, kept in sync by
+  // ensure_stage_round, so a fresh shared round gets a fresh roll for
+  // every seat) gets its own randomly-rolled bias instead, so some
+  // rounds naturally trend toward Replace and others toward Continue.
   const roundMoodRef = useRef<Map<string, number>>(new Map());
 
   function moodBiasFor(speaker: EventSpeaker): number {
@@ -230,7 +251,8 @@ export function SessionSimulatorPanel({
     speakersRef.current = speakers;
     pendingRequestsRef.current = pendingRequests;
     messagesRef.current = messages;
-  }, [speakers, pendingRequests, messages]);
+    realJoinInProgressRef.current = realJoinInProgress;
+  }, [speakers, pendingRequests, messages, realJoinInProgress]);
 
   function appendLog(line: string) {
     setLog((prev) => [`${new Date().toLocaleTimeString()} — ${line}`, ...prev].slice(0, 30));
@@ -384,10 +406,10 @@ export function SessionSimulatorPanel({
    * session." Start now performs the full setup in one tap — stable
    * audience, 2 seeded speakers (real seats, real 60s rounds), and every
    * realistic-mode activity loop, including the ones that keep the
-   * session moving on its own (round voting, and — new — automatic
-   * candidate promotion once a seat opens). `Seed 2 Speakers` stays
-   * available standalone for deterministic re-seeding (e.g. right after
-   * a manual Open Seat), not as a required extra step.
+   * session moving on its own (round voting, and automatic candidate
+   * promotion once a seat opens). `Seed 2 Speakers` stays available
+   * standalone for deterministic re-seeding (e.g. right after a manual
+   * Open Seat), not as a required extra step.
    */
   async function startSimulation() {
     const newAudience = createSimulatedAudience(AUDIENCE_SIZE);
@@ -437,18 +459,19 @@ export function SessionSimulatorPanel({
       void simulateRequestVote(eventId, target.message_id, identity.id);
     }, 4000, 10000);
 
-    // Round voting: every 3-7s, a small random subset per active round
-    // (Part 10: "not every fake viewer should vote"). Each round gets its
-    // own independently-rolled continue-bias (`moodBiasFor`) rather than
-    // one fixed constant, so outcomes vary round to round instead of
-    // always converging on Continue.
+    // Round voting: every 3-7s, a small random subset per active seat
+    // (Part 10: "not every fake viewer should vote"). Each seat's current
+    // round gets its own independently-rolled continue-bias
+    // (`moodBiasFor`) rather than one fixed constant, so outcomes vary
+    // seat to seat and round to round instead of always converging on
+    // Continue.
     schedule(() => {
-      const activeRounds = speakersRef.current.filter((s) => s.round_phase === "active");
-      for (const round of activeRounds) {
-        const bias = moodBiasFor(round);
+      const activeSeats = speakersRef.current.filter((s) => s.round_phase === "active");
+      for (const seat of activeSeats) {
+        const bias = moodBiasFor(seat);
         const voters = randomSubset(audienceRef.current, randomVoterCount(3, 8));
         for (const voter of voters) {
-          void simulateRoundVote(round.id, randomRoundChoice(bias), voter.id);
+          void simulateRoundVote(seat.id, randomRoundChoice(bias), voter.id);
         }
       }
     }, 3000, 7000);
@@ -460,10 +483,10 @@ export function SessionSimulatorPanel({
     // the exact claim a real candidate's own browser would perform. See
     // simulateAdvanceSelection's own doc comment for the full reasoning
     // and the safety check that keeps this from ever acting on a real
-    // user's behalf. This is what lets a replaced simulated speaker's
-    // seat refill itself without Open Speaker Seat or Seed 2 Speakers
-    // ever being pressed again.
+    // user's behalf. Paused entirely while `realJoinInProgress` is true —
+    // a real join/promotion always gets first refusal, never a race.
     schedule(() => {
+      if (realJoinInProgressRef.current) return;
       if (speakersRef.current.length >= 2) return;
       void simulateAdvanceSelection(eventId, Array.from(allSimulatedGuestIdsRef.current), guestDisplayNamesRef.current).then(
         (result) => {
@@ -491,7 +514,9 @@ export function SessionSimulatorPanel({
    * deletes every DB row owned by any guest id this panel has generated
    * since the last reset, then clears every piece of local run state —
    * the *next* Start Simulated Session genuinely starts fresh, with a new
-   * audience and no memory of the old one.
+   * audience and no memory of the old one (including the shared round:
+   * once both seeded seats are gone, `ensure_stage_round` marks the stage
+   * `awaiting_pairing` again server-side, same as any other double-vacancy).
    */
   async function confirmReset() {
     setResetConfirming(false);
@@ -563,16 +588,15 @@ export function SessionSimulatorPanel({
   }
 
   /**
-   * Part 3: scoped to one specific seat's `event_speakers` row — never
-   * "whichever round happens to be active first" (the old ambiguous
-   * global version). Casts the requested vote split for *that* seat only,
-   * backdates *that* seat's deadline, then lets the real
-   * `resolveSpeakerRoundAction` (via `forceRoundDeadline`) decide the
-   * actual outcome — the returned outcome, not our intended split, is
-   * what the log line and the round-status "if ended now" projection
-   * ultimately reflect.
+   * Corrective pass: scoped to one specific seat's `event_speakers`
+   * row — never a global "whichever round" ambiguity. Casts the
+   * requested vote split for *that* seat only, aiming its outcome at the
+   * *next shared resolution* — unlike the old per-speaker model, this no
+   * longer forces anything itself. `Resolve Round Now` is the separate
+   * control that actually advances the shared deadline and reports what
+   * each seat's real outcome turned out to be.
    */
-  async function castVotesAndForceForSeat(speaker: EventSpeaker, continueCount: number, replaceCount: number) {
+  function castVotesForSeat(speaker: EventSpeaker, continueCount: number, replaceCount: number, label: string) {
     const pool = requireAudience();
     if (!pool) return;
     const voters = randomSubset(pool, continueCount + replaceCount);
@@ -582,16 +606,29 @@ export function SessionSimulatorPanel({
     for (let i = 0; i < replaceCount; i++) {
       void simulateRoundVote(speaker.id, "replace", voters[continueCount + i].id);
     }
-    await new Promise((resolve) => setTimeout(resolve, 300)); // let votes land before forcing the deadline
-    const outcome = await forceRoundDeadline(speaker.id);
     const pct = replacePercentage(continueCount, replaceCount);
-    appendLog(`Seat ${speaker.seat_number} → ${resolvedOutcomeLabel(outcome)} (${pct !== null ? pct.toFixed(0) : "0"}% Replace)`);
+    appendLog(
+      `Seat ${speaker.seat_number} configured → aiming for ${label} (${pct !== null ? pct.toFixed(0) : "0"}% Replace) — click Resolve Round Now to apply`,
+    );
   }
 
-  /** The closing-phase equivalent — no further voting is accepted once a seat is in its 30s closing period (Part 3's "no new Continue/Replace vote during those 30s"), so this just backdates and resolves without casting anything. */
+  /** Backdates the shared deadline and invokes the real resolver for both occupied seats at once — the one control that actually advances the round. */
+  async function resolveRoundNow() {
+    const outcomes = await forceStageRoundDeadline(eventId);
+    if (outcomes.length === 0) {
+      appendLog("Resolve Round Now: no active shared round to resolve");
+      return;
+    }
+    for (const { eventSpeakersId, outcome } of outcomes) {
+      const seat = speakersRef.current.find((s) => s.id === eventSpeakersId);
+      appendLog(`Seat ${seat?.seat_number ?? "?"} → ${resolvedOutcomeLabel(outcome)}`);
+    }
+  }
+
+  /** The closing-phase equivalent — no further voting is accepted once a seat is in its own 30s closing period (Part 4: "no new Continue/Replace vote during those 30s"), so this just backdates that one seat's deadline and resolves it, never touching the shared clock or the other seat. */
   async function forceClosingNow(speaker: EventSpeaker) {
-    const outcome = await forceRoundDeadline(speaker.id);
-    appendLog(`Seat ${speaker.seat_number} → ${resolvedOutcomeLabel(outcome)}`);
+    const resolved = await forceSeatClosingDeadline(speaker.id);
+    appendLog(`Seat ${speaker.seat_number} → ${resolved ? "Replaced" : "not yet in closing"}`);
   }
 
   function openSeat(speaker: EventSpeaker) {
@@ -609,7 +646,7 @@ export function SessionSimulatorPanel({
    * either seat already being occupied (a real user got there first, or
    * this is a manual re-seed after only one seat opened) — each claim is
    * attempted independently so one failure never prevents the other from
-   * succeeding, which matters most for `startSimulation`'s new "one tap"
+   * succeeding, which matters most for `startSimulation`'s "one tap"
    * call: a partially-occupied stage still starts, rather than the whole
    * session bootstrap aborting on one already-taken seat.
    */
@@ -659,6 +696,11 @@ export function SessionSimulatorPanel({
       </div>
     );
   }
+
+  const sharedRemaining =
+    stageRound && stageRound.phase === "active" && now !== null
+      ? Math.max(0, Math.ceil((new Date(stageRound.ends_at).getTime() - now) / 1000))
+      : null;
 
   return (
     <div
@@ -743,35 +785,48 @@ export function SessionSimulatorPanel({
         <button type="button" data-testid="sim-shift-votes" onClick={() => shiftRequestVotes()} className="rounded bg-white/10 px-2 py-1">
           Shift Request Votes
         </button>
+        <button type="button" data-testid="sim-resolve-round" onClick={() => void resolveRoundNow()} className="rounded bg-indigo-600 px-2 py-1 font-medium">
+          Resolve Round Now
+        </button>
       </div>
 
       <div data-testid="sim-observability" className="mb-3 flex flex-col gap-2 rounded-lg bg-white/5 p-2">
-        <div className="font-semibold text-white/70">Speaker rounds</div>
+        <div data-testid="sim-shared-round" className="font-semibold text-white/90">
+          {stageRound === null
+            ? "Round: —"
+            : stageRound.phase === "awaiting_pairing"
+              ? `Round ${stageRound.round_number} · awaiting pairing`
+              : `Round ${stageRound.round_number} · ${sharedRemaining ?? "—"}s`}
+        </div>
+
         {speakers.length === 0 && <p className="text-white/40">No seats occupied</p>}
         {speakers.map((s) => {
           const tally = roundVoteTallies[s.id] ?? { continue: 0, replace: 0 };
           const pct = replacePercentage(tally.continue, tally.replace);
-          const deadline = s.round_phase === "closing" ? s.closing_ends_at : s.round_ends_at;
-          const remaining = deadline && now !== null ? Math.max(0, Math.ceil((new Date(deadline).getTime() - now) / 1000)) : null;
-          const projected = s.round_phase === "closing" ? projectedOutcomeLabel("decisive-replace") : projectedOutcomeLabel(resolveRoundOutcome(tally.continue, tally.replace));
+          const projected =
+            s.round_phase === "closing" ? projectedOutcomeLabel("decisive-replace") : projectedOutcomeLabel(resolveRoundOutcome(tally.continue, tally.replace));
+          const closingRemaining =
+            s.round_phase === "closing" && s.closing_ends_at && now !== null
+              ? Math.max(0, Math.ceil((new Date(s.closing_ends_at).getTime() - now) / 1000))
+              : null;
           return (
             <div key={s.id} data-testid="sim-round-status" className="border-t border-white/10 pt-1">
               <p className="font-medium">
-                {s.display_name} — seat {s.seat_number} — round #{s.round_number} ({s.round_phase})
+                Seat {s.seat_number} — {s.display_name}
+                {s.round_phase === "closing" ? ` (final ${closingRemaining ?? "—"}s)` : ""}
               </p>
-              <p>remaining: {remaining ?? "—"}s{s.round_phase === "closing" ? " (final grace period)" : ""}</p>
               <p>
-                continue: {tally.continue} · replace: {tally.replace}
-                {pct !== null ? ` (${pct.toFixed(0)}% replace)` : ""}
+                Continue: {tally.continue} · Replace: {tally.replace}
+                {pct !== null ? ` (${pct.toFixed(0)}% Replace)` : ""}
               </p>
-              <p data-testid="sim-projected-outcome">if ended now: {projected}</p>
+              <p data-testid="sim-projected-outcome">If round ended now: {projected}</p>
               <div className="mt-1 flex flex-wrap gap-1">
                 {s.round_phase === "active" ? (
                   <>
                     <button
                       type="button"
                       data-testid="sim-force-continue"
-                      onClick={() => void castVotesAndForceForSeat(s, 3, 0)}
+                      onClick={() => castVotesForSeat(s, 3, 0, "Continue")}
                       className="rounded bg-white/10 px-1.5 py-0.5"
                     >
                       Force Continue
@@ -779,7 +834,7 @@ export function SessionSimulatorPanel({
                     <button
                       type="button"
                       data-testid="sim-force-narrow-loss"
-                      onClick={() => void castVotesAndForceForSeat(s, 2, 3)}
+                      onClick={() => castVotesForSeat(s, 2, 3, "Narrow Loss")}
                       className="rounded bg-white/10 px-1.5 py-0.5"
                     >
                       Force Narrow Loss
@@ -787,7 +842,7 @@ export function SessionSimulatorPanel({
                     <button
                       type="button"
                       data-testid="sim-force-replace"
-                      onClick={() => void castVotesAndForceForSeat(s, 0, 2)}
+                      onClick={() => castVotesForSeat(s, 0, 2, "Replace")}
                       className="rounded bg-white/10 px-1.5 py-0.5"
                     >
                       Force Replace

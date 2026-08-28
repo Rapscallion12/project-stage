@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   claimSpeakerSeat,
@@ -74,6 +74,19 @@ describe.skipIf(!hasServiceCredentials)("speaker disconnect grace period (issue 
   afterAll(async () => {
     if (eventId) await service.from("events").delete().eq("id", eventId);
   }, 30_000);
+
+  // Issue #21 corrective pass: claim_speaker_seat no longer silently
+  // replaces an occupant, so every test in this file (each claims seat 1
+  // or 2 for its own fresh guestId) must not leak an active seat into the
+  // next one — a blanket vacate after each test, rather than threading
+  // cleanup through every individual scenario below.
+  afterEach(async () => {
+    await service
+      .from("event_speakers")
+      .update({ left_at: new Date().toISOString(), left_reason: "moderator_removed" })
+      .eq("event_id", eventId)
+      .is("left_at", null);
+  });
 
   it("markSpeakerDisconnected sets disconnected_at on the active seat, and is a safe no-op for an identity with no active seat", async () => {
     const guestId = crypto.randomUUID();

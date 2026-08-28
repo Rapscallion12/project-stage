@@ -122,6 +122,73 @@ merged to `main`.
   events carry enough data to act on. Benefits every tab watching a
   room, not just the one running the simulator. See DECISIONS.md.
 
+### Changed
+
+- **Shared round model — one clock per stage pairing, not two**
+  (issue #21, corrective pass) — real-device testing found the
+  independent per-speaker 60s round timers were the wrong product
+  behavior for a two-person conversation. The two occupied seats now
+  share one authoritative round/deadline (new `stage_rounds` table,
+  `ensure_stage_round`/`resolve_stage_round` RPCs); Continue/Replace is
+  still voted on and resolved *per speaker* at that same shared
+  boundary — Speaker A can Continue while Speaker B Replaces. A narrow
+  loss still gets its own individual 30s closing period, and the
+  retained partner is deliberately not handed a fresh independent timer
+  while that closing period runs — the next full shared round begins
+  only once the resulting pairing is re-established. `event_speakers`'
+  existing round columns are unchanged in shape (kept in sync as
+  mirrors of the shared clock), so the existing per-seat vote-casting
+  RPCs needed zero changes. `SpeakerStage` now shows one "Round N · Ns"
+  badge for the pairing; `SpeakerTile`'s own per-seat badge is
+  closing-only ("Final Ns"). The Session Simulator's per-seat Force
+  Continue/Narrow Loss/Replace buttons now only configure that seat's
+  vote split for the next shared resolution; a new "Resolve Round Now"
+  button advances the shared deadline and reports both seats' real
+  outcomes at once. See DECISIONS.md.
+
+### Fixed
+
+- **Simulator background polling could steal a real user's own seat
+  claim** (issue #21, corrective pass, real-device finding) — a real
+  join and the Session Simulator's automatic candidate-promotion loop
+  both ultimately call the same `claim_speaker_seat` RPC, which had no
+  optimistic-concurrency check: it always unconditionally ended
+  whichever row was active for a seat and inserted a new one. A lost
+  race was silent — no exception on either side — so the simulator's
+  background poll could (and once did) overwrite a real user's
+  brand-new seat with a simulated identity. Fixed at the RPC layer for
+  every caller, not just the simulator: `claim_speaker_seat` now raises
+  if the seat already has an active occupant, so a lost race always
+  surfaces as a caught, non-fatal error. The simulator's own
+  auto-advance loop additionally pauses outright whenever `EventRoom`
+  reports a real join or promotion actually in flight
+  (`realJoinInProgress`), so a real user's explicit action never has to
+  win a race at all — it's yielded to. A follow-up migration also
+  closes a gap the fix itself introduced: the new "already occupied"
+  guard originally didn't know about the existing 11-second
+  disconnect-grace/expiration logic, so a genuinely stale (past-grace,
+  never cleaned up) occupant would have permanently blocked anyone else
+  from ever claiming that seat — `claim_speaker_seat` now releases a
+  logically-expired occupant of the *target* seat first, the same
+  distinction `release_if_expired` already made for the caller's own
+  identity. See DECISIONS.md.
+- **A lost seat-claim race could leave a stuck self-preview with no way
+  to leave the stage** (issue #21, corrective pass, real-device
+  finding) — tapping an open seat prepares local camera/mic tracks
+  before the async join completes, and deliberately leaves them held on
+  a *retryable* failure (queue exists, promoted candidate, etc.) so the
+  candidate/audience state the user returns to can still use them. That
+  discipline had no matching release for the *terminal* case this
+  pass's real-device test hit: a real join lost a race and landed back
+  in plain audience — not a candidate, not pending, not mid-countdown —
+  while still holding a local track, which `SpeakerStage`'s self-preview
+  slot renders on regardless of role. New `useReleaseStuckLocalMedia`
+  hook (general, not simulator-specific — reuses `EventRoom`'s own
+  existing state) releases local media whenever every legitimate reason
+  to hold it is absent, closing the same class of role/permission
+  contradiction issue #18 fixed for the analogous `canPublish`/
+  `isSpeaker` case. See DECISIONS.md.
+
 ## [public-beta-v1] - 2026-08-26
 
 First production release of Virtual Stage to the live site

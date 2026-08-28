@@ -4,6 +4,93 @@ Newest entry first.
 
 ---
 
+## 2026-08-28 — Session 42: Corrective pass — seat-claim race, stuck self-preview, shared round model (issue #21)
+
+**Goal**: real-device testing of Session 41's build hit three blockers,
+reported together with an explicit "fix these before adding anything
+else": Start Simulated Session only produced one occupied seat, and
+tapping the remaining open seat let the simulator's background loop
+claim it out from under a real join attempt; the lost real join left a
+stuck self-preview with no way to leave the stage; and the round model
+itself needed to change from independent per-speaker 60s timers to one
+shared round per stage pairing (Continue/Replace still resolved
+independently per speaker at that shared boundary).
+
+**Root cause, traced before fixing anything**: an Explore-agent
+investigation confirmed the real join path (`handleTapEmptySeat` →
+`joinOpenSeat` → `claimSpeakerSeat`) and the simulator's automatic-
+promotion loop call the *identical* `claim_speaker_seat` RPC — one code
+path racing itself, not two different mechanisms. That RPC had no
+optimistic-concurrency check at all: it unconditionally ended whichever
+row was active for a seat and inserted a new one, with no exception to
+either caller on a lost race.
+
+**Fixed at the RPC layer, for every caller** (migration 24): `claim_speaker_seat`
+now raises if the seat already has an active row — closing the race
+generally, not with a simulator-specific patch. Two immediate follow-up
+migrations fixed problems the real-database test suite itself caught:
+migration 25 restores the pre-existing "release a logically-expired
+occupant" behavior for the *target seat* (the new guard had started
+blocking claims against a seat whose occupant was merely past its
+disconnect/inactivity grace, never yet cleaned up — a real regression,
+not just a test-fixture mismatch); migrations 26 and 27 fixed two
+numbering bugs in the new shared-round bookkeeping (a fully-continuing
+pairing never got a fresh deadline; every event's true first round
+displayed as "Round 2" instead of "Round 1"), both caught by writing the
+real-database round tests, not discovered live.
+
+**Shared round architecture**: new `stage_rounds` table (one row per
+event) holds the authoritative shared deadline; `event_speakers`' own
+round columns stay unchanged in shape and now mirror it for the active
+phase (individual narrow-loss closing periods are untouched, still
+per-seat) — chosen specifically so the existing `cast_speaker_round_vote(_as_guest)`
+RPCs needed zero changes. `ensure_stage_round` (idempotent, wired into
+every claim/vacate/resolve path) decides whether the pairing is ready
+for a fresh shared round or must wait. `resolve_stage_round` resolves
+both occupied seats independently against the one boundary in a single
+call.
+
+**Real-user-precedence guard**: beyond the RPC-level race fix, the
+simulator's own auto-advance-selection poll now pauses outright whenever
+`EventRoom` reports a real join/promotion in flight
+(`realJoinInProgress`, derived from existing `isJoiningSeat`/
+`promotionCountdown` state) — real users get first refusal by design.
+New `useReleaseStuckLocalMedia` hook (general, reuses existing
+`EventRoom` state, not a second role system) closes the stuck-preview
+finding by releasing local media whenever no legitimate reason to hold
+it remains.
+
+**Simulator panel rebuilt for the shared model**: one "Round N · Ns"
+badge shown once (`StageRoundBadge` on `SpeakerStage`); `SpeakerTile`'s
+own per-seat badge is now closing-only ("Final Ns"). Force
+Continue/Narrow Loss/Replace now only configure a seat's vote split for
+the next shared resolution; a new "Resolve Round Now" button
+(`forceStageRoundDeadline`) advances the shared deadline and reports
+both seats' real resolved outcomes at once.
+
+**Verification**: replaced the old per-speaker `speaker-rounds.test.ts`
+with `stage-rounds.test.ts` (real-database, covering the full shared-
+round lifecycle including the two numbering-bug fixes above and the new
+claim-race guard); fixed cascading fixture breakage in several
+pre-existing real-database test files that had implicitly relied on the
+now-removed silent-replace behavior as their own between-test cleanup
+(`event-speakers-expiration`, `event-speakers-disconnect-grace`,
+`event-speakers-transitions`, `event-speakers-guest-participation`, the
+LiveKit webhook route test, and `reconnect-countdown-full-path`) —
+confirmed each failure was a fixture assumption, not a masked product
+bug, before patching it. Rewrote `session-simulator-panel.test.tsx` and
+`speaker-tile.test.tsx`'s round-timer coverage for the new shared model.
+Full suite 899/899 (71 files), lint, tsc, build all clean.
+
+**Not built this pass, explicitly deferred**: a client-side reactive
+`ensureStageRound` backstop for seat-vacating paths that don't already
+call it directly (most do; a few — inactivity/disconnect release — were
+not individually re-audited this round). Fresh preview deployed;
+stopping here for the user's review per explicit instruction — not
+merged to main.
+
+---
+
 ## 2026-08-27 — Session 41: One-tap full session + closing the replacement loop (issue #21, fifth real-device follow-up)
 
 **Goal**: the simulator could produce individual pieces of activity but

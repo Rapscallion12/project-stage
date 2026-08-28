@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.17"
+    PostgrestVersion: "14.5"
   }
   graphql_public: {
     Tables: {
@@ -465,6 +465,44 @@ export type Database = {
           },
         ]
       }
+      stage_rounds: {
+        Row: {
+          ends_at: string
+          event_id: string
+          id: string
+          phase: string
+          round_number: number
+          started_at: string
+          updated_at: string
+        }
+        Insert: {
+          ends_at?: string
+          event_id: string
+          id?: string
+          phase?: string
+          round_number?: number
+          started_at?: string
+          updated_at?: string
+        }
+        Update: {
+          ends_at?: string
+          event_id?: string
+          id?: string
+          phase?: string
+          round_number?: number
+          started_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stage_rounds_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       event_speakers_active: {
@@ -611,6 +649,24 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "event_speakers"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      ensure_stage_round: {
+        Args: { p_event_id: string }
+        Returns: {
+          ends_at: string
+          event_id: string
+          id: string
+          phase: string
+          round_number: number
+          started_at: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "stage_rounds"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -913,13 +969,22 @@ export type Database = {
         Args: { p_event_id: string; p_winning_request_id: string }
         Returns: undefined
       }
-      resolve_speaker_round: {
+      resolve_seat_closing: {
         Args: { p_event_speakers_id: string }
         Returns: {
-          event_id: string
-          guest_id: string
-          outcome: string
-          profile_id: string
+          out_event_id: string
+          out_guest_id: string
+          out_outcome: string
+          out_profile_id: string
+        }[]
+      }
+      resolve_stage_round: {
+        Args: { p_event_id: string }
+        Returns: {
+          out_event_speakers_id: string
+          out_guest_id: string
+          out_outcome: string
+          out_profile_id: string
         }[]
       }
       set_current_speaker_candidate: {

@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionSimulatorPanel } from "./session-simulator-panel";
-import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
 import type { ResetSimulatorSessionResult, AdvanceSelectionResult } from "@/app/events/[id]/room/simulator-actions";
 
 const {
@@ -14,7 +15,8 @@ const {
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
-  forceRoundDeadline,
+  forceStageRoundDeadline,
+  forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
 } = vi.hoisted(() => ({
@@ -25,7 +27,10 @@ const {
   simulateRoundVote: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateSeedSpeaker: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   simulateOpenSeat: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
-  forceRoundDeadline: vi.fn<(...args: unknown[]) => Promise<ResolveSpeakerRoundOutcome>>(async () => "decisive-replace"),
+  forceStageRoundDeadline: vi.fn<(...args: unknown[]) => Promise<Array<{ eventSpeakersId: string; outcome: SeatResolutionOutcome }>>>(
+    async () => [],
+  ),
+  forceSeatClosingDeadline: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
   resetSimulatorSession: vi.fn<(...args: unknown[]) => Promise<ResetSimulatorSessionResult>>(async () => ({
     messagesDeleted: 0,
     reactionsDeleted: 0,
@@ -44,7 +49,8 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
-  forceRoundDeadline,
+  forceStageRoundDeadline,
+  forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
 }));
@@ -104,22 +110,36 @@ function request(overrides: Partial<RankedPendingRequest> = {}): RankedPendingRe
   };
 }
 
+function stageRoundFixture(overrides: Partial<StageRound> = {}): StageRound {
+  return {
+    id: "sr1",
+    event_id: "e1",
+    round_number: 1,
+    started_at: new Date().toISOString(),
+    ends_at: new Date(Date.now() + 60_000).toISOString(),
+    phase: "active",
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
 const baseProps = {
   eventId: "e1",
   speakers: [] as EventSpeaker[],
   pendingRequests: [] as RankedPendingRequest[],
   messages: [] as LobbyMessage[],
+  stageRound: null as StageRound | null,
 };
 
-/** Finds the specific per-seat round-status block for a given seat number — the redesign (real-device follow-up) scopes every force/open control inside this block, one per occupied seat, never a single ambiguous global control. */
+/** Finds the specific per-seat round-status block for a given seat number — every force/open control is scoped inside this block, one per occupied seat, never a single ambiguous global control. */
 function roundStatusForSeat(seatNumber: number): HTMLElement {
   const blocks = screen.getAllByTestId("sim-round-status");
-  const match = blocks.find((block) => block.textContent?.includes(`seat ${seatNumber}`));
+  const match = blocks.find((block) => block.textContent?.includes(`Seat ${seatNumber}`));
   if (!match) throw new Error(`No sim-round-status block found for seat ${seatNumber}`);
   return match;
 }
 
-describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", () => {
+describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pass)", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
@@ -212,13 +232,43 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
     expect(callsAfterAdvance).toBe(callsAtStop);
   });
 
-  it("shows the observability panel with round status, vote tallies, and a projected outcome for an occupied seat", () => {
-    render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ display_name: "Alex", round_number: 3 })]} />);
-    const status = screen.getByTestId("sim-round-status");
-    expect(status).toHaveTextContent("Alex");
-    expect(status).toHaveTextContent("round #3");
-    expect(status).toHaveTextContent("active");
-    expect(within(status).getByTestId("sim-projected-outcome")).toHaveTextContent("Continue +60s");
+  describe("shared round display (corrective pass — one clock, shown once)", () => {
+    it("shows the shared round badge once, plus a per-seat status block without its own round countdown", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageRound={stageRoundFixture({ round_number: 3 })}
+          speakers={[speaker({ display_name: "Alex" })]}
+        />,
+      );
+      const shared = screen.getByTestId("sim-shared-round");
+      expect(shared).toHaveTextContent("Round 3");
+
+      const status = screen.getByTestId("sim-round-status");
+      expect(status).toHaveTextContent("Seat 1 — Alex");
+      expect(within(status).getByTestId("sim-projected-outcome")).toHaveTextContent("Continue +60s");
+    });
+
+    it("shows 'awaiting pairing' rather than a ticking countdown when the stage isn't ready for a shared round", () => {
+      render(<SessionSimulatorPanel {...baseProps} stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 2 })} />);
+      expect(screen.getByTestId("sim-shared-round")).toHaveTextContent("awaiting pairing");
+    });
+
+    it("shows a placeholder before any round has ever started", () => {
+      render(<SessionSimulatorPanel {...baseProps} stageRound={null} />);
+      expect(screen.getByTestId("sim-shared-round")).toHaveTextContent("Round: —");
+    });
+
+    it("a seat in its own closing phase shows its individual final countdown alongside the shared badge", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing" })}
+          speakers={[speaker({ round_phase: "closing", closing_ends_at: new Date(Date.now() + 25_000).toISOString() })]}
+        />,
+      );
+      expect(roundStatusForSeat(1).textContent).toMatch(/final \d+s/);
+    });
   });
 
   describe("Seed 2 Speakers (Part 5 — deterministic, stable identities)", () => {
@@ -267,6 +317,16 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       // Start still completes — Stop is enabled, meaning the rest of the
       // session (comments/requests/etc. loops) still started normally.
       expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
+    });
+
+    it("surfaces the failure in the panel, rather than continuing silently, when both seats fail to seed", async () => {
+      simulateSeedSpeaker.mockImplementation(async () => {
+        throw new Error("both seats occupied");
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Could not seed simulated speakers"));
     });
   });
 
@@ -324,9 +384,21 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       expect(screen.getByTestId("sim-log")).toHaveTextContent("promoted");
       expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 2");
     });
+
+    it("never polls simulateAdvanceSelection while a real join/promotion is in progress (realJoinInProgress) — real users take precedence", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(
+        <SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} realJoinInProgress={true} />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(simulateAdvanceSelection).not.toHaveBeenCalled();
+    });
   });
 
-  describe("per-seat round-outcome forcing (real-device follow-up — never one ambiguous global control)", () => {
+  describe("per-seat vote configuration + shared Resolve Round Now (corrective pass — one shared deadline, per-seat outcomes)", () => {
     it("shows no force controls at all when no seat is occupied", () => {
       render(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
       expect(screen.queryByTestId("sim-force-continue")).not.toBeInTheDocument();
@@ -334,8 +406,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       expect(screen.queryByTestId("sim-force-replace")).not.toBeInTheDocument();
     });
 
-    it("Force Continue on seat 1 targets only seat 1, even with a second occupied seat", async () => {
-      forceRoundDeadline.mockResolvedValueOnce("continue");
+    it("Force Continue on seat 1 only casts votes for seat 1's round, even with a second occupied seat — it does not resolve anything by itself", async () => {
       render(
         <SessionSimulatorPanel
           {...baseProps}
@@ -351,13 +422,12 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       const seat1 = roundStatusForSeat(1);
       fireEvent.click(within(seat1).getByTestId("sim-force-continue"));
 
-      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("seat-1-round"));
-      expect(forceRoundDeadline).not.toHaveBeenCalledWith("seat-2-round");
+      await waitFor(() => expect(simulateRoundVote).toHaveBeenCalledWith("seat-1-round", "continue", expect.any(String)));
       expect(simulateRoundVote.mock.calls.every((call) => call[0] === "seat-1-round")).toBe(true);
+      expect(forceStageRoundDeadline).not.toHaveBeenCalled();
     });
 
-    it("Force Narrow Loss on seat 2 targets only seat 2", async () => {
-      forceRoundDeadline.mockResolvedValueOnce("narrow-loss");
+    it("Force Narrow Loss on seat 2 only casts votes for seat 2's round", async () => {
       render(
         <SessionSimulatorPanel
           {...baseProps}
@@ -373,40 +443,55 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       const seat2 = roundStatusForSeat(2);
       fireEvent.click(within(seat2).getByTestId("sim-force-narrow-loss"));
 
-      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("seat-2-round"));
-      expect(forceRoundDeadline).not.toHaveBeenCalledWith("seat-1-round");
+      await waitFor(() => expect(simulateRoundVote.mock.calls.some((call) => call[0] === "seat-2-round")).toBe(true));
       expect(simulateRoundVote.mock.calls.every((call) => call[0] === "seat-2-round")).toBe(true);
+      expect(forceStageRoundDeadline).not.toHaveBeenCalled();
     });
 
-    it("Force Replace on a seat casts a decisive replace split and reports the real resolved outcome", async () => {
-      forceRoundDeadline.mockResolvedValueOnce("decisive-replace");
+    it("Force Replace configures a decisive-replace vote split and logs that it's aiming for Replace", async () => {
       render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "round-1", seat_number: 1 })]} />);
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(within(roundStatusForSeat(1)).getByTestId("sim-force-replace"));
-      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("round-1"));
+      await waitFor(() => expect(simulateRoundVote).toHaveBeenCalled());
 
-      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 → Decisive Replace (100% Replace)");
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 configured → aiming for Replace");
     });
 
-    it("forced-outcome feedback reflects the resolver's real return value, not just the intended split", async () => {
-      // Even though this button casts a narrow-loss split, the mocked
-      // resolver below returns "continue" — the log must show what the
-      // real resolver decided, proving the outcome isn't just echoed back.
-      forceRoundDeadline.mockResolvedValueOnce("continue");
-      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "round-1", seat_number: 1 })]} />);
+    it("Resolve Round Now advances the shared deadline and reports each seat's real resolved outcome", async () => {
+      forceStageRoundDeadline.mockResolvedValueOnce([
+        { eventSpeakersId: "seat-1-round", outcome: "continue" },
+        { eventSpeakersId: "seat-2-round", outcome: "decisive-replace" },
+      ]);
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[
+            speaker({ id: "seat-1-round", seat_number: 1, display_name: "Speaker A" }),
+            speaker({ id: "seat-2-round", seat_number: 2, display_name: "Speaker B" }),
+          ]}
+        />,
+      );
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
-      fireEvent.click(within(roundStatusForSeat(1)).getByTestId("sim-force-narrow-loss"));
-      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalled());
+      fireEvent.click(screen.getByTestId("sim-resolve-round"));
+      await waitFor(() => expect(forceStageRoundDeadline).toHaveBeenCalledWith("e1"));
 
       expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 → Continue");
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 2 → Decisive Replace");
     });
 
-    it("a seat in its closing phase shows only Force Replace Now — no new vote is cast", async () => {
-      forceRoundDeadline.mockResolvedValueOnce("replaced-after-closing");
+    it("Resolve Round Now reports no active shared round rather than crashing when there's nothing to resolve", async () => {
+      forceStageRoundDeadline.mockResolvedValueOnce([]);
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-resolve-round"));
+      await waitFor(() => expect(forceStageRoundDeadline).toHaveBeenCalled());
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("no active shared round to resolve");
+    });
+
+    it("a seat in its closing phase shows only Force Replace Now — no new vote is cast, and it never touches the shared round", async () => {
       render(
         <SessionSimulatorPanel
           {...baseProps}
@@ -422,8 +507,9 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + round-testing follow-up)", 
       expect(within(status).getByTestId("sim-projected-outcome")).toHaveTextContent("Replace");
 
       fireEvent.click(within(status).getByTestId("sim-force-replace-now"));
-      await waitFor(() => expect(forceRoundDeadline).toHaveBeenCalledWith("round-1"));
+      await waitFor(() => expect(forceSeatClosingDeadline).toHaveBeenCalledWith("round-1"));
       expect(simulateRoundVote).not.toHaveBeenCalled();
+      expect(forceStageRoundDeadline).not.toHaveBeenCalled();
       expect(screen.getByTestId("sim-log")).toHaveTextContent("Seat 1 → Replaced");
     });
   });

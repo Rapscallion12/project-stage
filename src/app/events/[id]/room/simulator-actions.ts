@@ -20,15 +20,16 @@
  * couldn't already trigger through the genuine UI.
  *
  * **Three deliberate adapters, all isolated and reported**:
- * - `forceRoundDeadline` backdates `event_speakers.round_ends_at`/
- *   `closing_ends_at` directly via the service client — there is no real
- *   user pathway that skips time, and there never should be one. It exists
- *   solely so the deterministic test-panel buttons ("Force Continue
- *   Outcome," etc.) don't require literally waiting out a real 60/30
- *   second window. After backdating, it still calls the *real*
- *   `resolveSpeakerRoundAction` — the actual outcome decision (tally
- *   votes, compare thresholds, transition phase/evict) is never
- *   short-circuited, only the clock is.
+ * - `forceStageRoundDeadline`/`forceSeatClosingDeadline` backdate
+ *   `stage_rounds.ends_at`/an individual seat's own `closing_ends_at`
+ *   directly via the service client — there is no real user pathway
+ *   that skips time, and there never should be one. They exist solely
+ *   so the deterministic test-panel buttons ("Resolve Round Now,"
+ *   "Force Replace Now") don't require literally waiting out a real
+ *   60/30 second window. After backdating, they still call the *real*
+ *   `resolveStageRoundAction`/`resolveSeatClosingAction` — the actual
+ *   outcome decision (tally votes, compare thresholds, transition
+ *   phase/evict) is never short-circuited, only the clock is.
  * - `resetSimulatorSession` bulk-deletes rows by an exact guest-id list —
  *   there is no real user pathway that bulk-deletes another identity's
  *   data either. See its own doc comment for why an exact in-memory id
@@ -57,9 +58,10 @@ import {
   resetSpeakerCandidatePool,
 } from "@/lib/repositories/speaker-requests";
 import { claimSpeakerSeat, endSpeakerSeat, castSpeakerRoundVoteAsGuest } from "@/lib/repositories/event-speakers";
-import type { EventSpeaker, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { SeatResolutionOutcome } from "@/lib/repositories/stage-rounds";
 import { findOpenSeat } from "@/lib/speaker-queue";
-import { resolveSpeakerRoundAction, ensureActiveSelectionRound } from "./actions";
+import { resolveStageRoundAction, resolveSeatClosingAction, ensureActiveSelectionRound } from "./actions";
 
 function assertSimulatorAvailable(): void {
   if (!isPreviewOrDevBuild()) {
@@ -136,36 +138,47 @@ export async function simulateOpenSeat(eventId: string, guestId: string) {
 }
 
 /**
- * The one deliberate adapter — see this file's own doc comment.
- * Backdates whichever deadline is *currently* governing the round
- * (`round_ends_at` while active, `closing_ends_at` while closing) — never
- * both unconditionally, which would violate the row's own
- * `closing_ends_at_matches_phase` CHECK constraint (closing_ends_at must
- * stay null while phase is 'active'). Then calls the real
- * `resolveSpeakerRoundAction` so the round resolves immediately — its
- * return value (the real resolver's own outcome, never a value this
- * function invents) is returned here too, so the simulator panel's
- * forced-outcome feedback always reflects what the actual resolution
- * logic decided, not just what the caller intended to force.
+ * The one clock-skipping adapter for the *shared* round — see this
+ * file's own doc comment. Backdates `stage_rounds.ends_at` for the
+ * event (only when the round is genuinely 'active' — a no-op otherwise,
+ * same "never force something that isn't real" discipline every other
+ * force button here already has), then calls the real
+ * `resolveStageRoundAction` so the round resolves immediately for
+ * *both* occupied seats at once — this is the Session Simulator's
+ * "Resolve Round Now" button. Its return value (the real resolver's own
+ * per-seat outcomes, never values this function invents) is returned
+ * here too, so the simulator panel's forced-outcome feedback always
+ * reflects what the actual resolution logic decided for each seat, not
+ * just what the per-seat Force Continue/Narrow Loss/Replace buttons cast
+ * votes *aiming* for.
  */
-export async function forceRoundDeadline(eventSpeakersId: string): Promise<ResolveSpeakerRoundOutcome> {
+export async function forceStageRoundDeadline(eventId: string): Promise<Array<{ eventSpeakersId: string; outcome: SeatResolutionOutcome }>> {
   assertSimulatorAvailable();
   const supabase = createServiceClient();
   const past = new Date(Date.now() - 1000).toISOString();
 
-  const { data: row } = await supabase
-    .from("event_speakers")
-    .select("round_phase")
-    .eq("id", eventSpeakersId)
-    .single();
+  await supabase.from("stage_rounds").update({ ends_at: past }).eq("event_id", eventId).eq("phase", "active");
 
-  if (row?.round_phase === "closing") {
-    await supabase.from("event_speakers").update({ closing_ends_at: past }).eq("id", eventSpeakersId);
-  } else {
-    await supabase.from("event_speakers").update({ round_ends_at: past }).eq("id", eventSpeakersId);
-  }
+  return resolveStageRoundAction(eventId);
+}
 
-  return resolveSpeakerRoundAction(eventSpeakersId);
+/**
+ * The individual-narrow-loss-speaker equivalent — backdates *that
+ * seat's own* `closing_ends_at` (only while it's genuinely 'closing'),
+ * then calls the real `resolveSeatClosingAction`. Deliberately separate
+ * from `forceStageRoundDeadline` — Part 4's "the other speaker should
+ * not be forced into that final-30 state" means accelerating one
+ * speaker's individual closing window must never touch the shared
+ * clock or the other seat.
+ */
+export async function forceSeatClosingDeadline(eventSpeakersId: string): Promise<boolean> {
+  assertSimulatorAvailable();
+  const supabase = createServiceClient();
+  const past = new Date(Date.now() - 1000).toISOString();
+
+  await supabase.from("event_speakers").update({ closing_ends_at: past }).eq("id", eventSpeakersId).eq("round_phase", "closing");
+
+  return resolveSeatClosingAction(eventSpeakersId);
 }
 
 export type ResetSimulatorSessionResult = {

@@ -3,7 +3,7 @@ import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getParticipantIdentity, getRoomName } from "@/lib/livekit/token";
-import { claimSpeakerSeat } from "@/lib/repositories/event-speakers";
+import { claimSpeakerSeat, endSpeakerSeat } from "@/lib/repositories/event-speakers";
 import { POST } from "./route";
 
 // Only real Supabase fixtures are required — LiveKit credentials are
@@ -132,6 +132,11 @@ describe.skipIf(!hasCredentials)("LiveKit webhook route (issue #13)", () => {
     expect(data?.left_at).toBeNull();
     expect(data?.left_reason).toBeNull();
     expect(data?.disconnected_at).not.toBeNull();
+
+    // Issue #21 corrective pass: claim_speaker_seat no longer silently
+    // replaces an occupant, so seat 1 must be explicitly freed here —
+    // nothing later in this file still needs profileId seated.
+    await endSpeakerSeat(eventId, { type: "profile", id: profileId }, "moderator_removed");
   });
 
   it("is a safe no-op for a guest identity with no active seat (e.g. an audience guest disconnecting)", async () => {

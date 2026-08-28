@@ -65,6 +65,7 @@ export function DesktopRoom({
   reconnectingIdentities,
   isPreviewBuild,
   simulatedGuestIds,
+  stageRound,
   messages,
   reactions,
 }: RoomLayoutProps) {
@@ -95,6 +96,7 @@ export function DesktopRoom({
             reconnectingIdentities={reconnectingIdentities}
             isPreviewBuild={isPreviewBuild}
             simulatedGuestIds={simulatedGuestIds}
+            stageRound={stageRound}
           />
         </div>
         {joinSeatMessage && (

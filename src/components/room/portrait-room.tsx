@@ -151,6 +151,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
     reconnectingIdentities,
     isPreviewBuild,
     simulatedGuestIds,
+    stageRound,
     messages,
     reactions,
     pendingRequests,
@@ -174,6 +175,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
         reconnectingIdentities={reconnectingIdentities}
         isPreviewBuild={isPreviewBuild}
         simulatedGuestIds={simulatedGuestIds}
+        stageRound={stageRound}
         // Issue #18 UX finding: dims the stage behind the center-stage
         // "Going live" countdown — SpeakerStage's own existing scrim
         // mechanism (issue #21), reused rather than a second dimming

@@ -831,6 +831,28 @@ different dependencies. Current order:
       even alone in the pool. Round voting rolls an independent
       continue-bias per round instead of one fixed constant, so outcomes
       vary naturally over a long session. See DECISIONS.md.
+      **Corrective pass (2026-08-28, same branch)**: real-device testing
+      found the simulator's background promotion loop could race and
+      steal a real join, leaving a stuck self-preview with no Leave
+      Stage, and confirmed the per-speaker independent round timers were
+      the wrong product behavior. `claim_speaker_seat` now raises rather
+      than silently replacing an occupied seat (migration 24, closing
+      the race for every caller); two immediate follow-up migrations
+      fixed a stale-seat regression the guard introduced (25) and a
+      round-number-starts-at-2 cosmetic bug (26/27), both caught by the
+      real-database test suite before merge consideration. Round model
+      rebuilt around one shared `stage_rounds` clock per pairing —
+      Continue/Replace still resolved per speaker at that shared
+      boundary — while `event_speakers`' own round columns stay
+      unchanged in shape, so the existing vote-casting RPCs needed no
+      changes. New `useReleaseStuckLocalMedia` hook and a
+      `realJoinInProgress` guard on the simulator's own polling loop
+      close the two real-device findings generally, not with a
+      simulator-specific patch. Simulator panel rebuilt: one shared
+      round badge, per-seat force buttons now configure a vote split
+      rather than resolving immediately, new "Resolve Round Now"
+      control. Full suite 899/899, lint/tsc/build clean. See
+      DECISIONS.md and SESSION_LOG.md's Session 42.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

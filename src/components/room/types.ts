@@ -8,6 +8,7 @@ import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { RoomStatus } from "@/lib/room-status";
+import type { StageRound } from "@/lib/repositories/stage-rounds";
 
 /**
  * Shared props for the portrait/landscape presentation components —
@@ -114,4 +115,6 @@ export type RoomLayoutProps = {
    * (the only thing that ever populates it) isn't mounted in production.
    */
   simulatedGuestIds: ReadonlySet<string>;
+  /** Issue #21 corrective pass: the shared round clock for the current stage pairing — see lib/repositories/stage-rounds.ts. Null before any seat has ever been claimed for the event. Rendered once, at the stage level (SpeakerStage), never per-tile — see that component's own doc comment. */
+  stageRound: StageRound | null;
 };

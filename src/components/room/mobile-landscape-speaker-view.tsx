@@ -84,6 +84,7 @@ export function MobileLandscapeSpeakerView({
   reconnectingIdentities,
   isPreviewBuild,
   simulatedGuestIds,
+  stageRound,
   messages,
   reactions,
   pendingRequests,
@@ -113,6 +114,7 @@ export function MobileLandscapeSpeakerView({
         reconnectingIdentities={reconnectingIdentities}
         isPreviewBuild={isPreviewBuild}
         simulatedGuestIds={simulatedGuestIds}
+        stageRound={stageRound}
         soloMode
       />
 

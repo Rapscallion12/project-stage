@@ -3,9 +3,11 @@ import { SpeakerTile } from "@/components/room/speaker-tile";
 import { SelfPreview } from "@/components/room/self-preview";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { cn } from "@/lib/utils";
+import { useStageRoundCountdown } from "@/hooks/use-stage-round-countdown";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
+import type { StageRound } from "@/lib/repositories/stage-rounds";
 
 /**
  * The video-first stage (issue #20) — both seats, full-bleed, filling
@@ -133,6 +135,7 @@ export function SpeakerStage({
   soloMode = false,
   isPreviewBuild = false,
   simulatedGuestIds,
+  stageRound = null,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -162,7 +165,10 @@ export function SpeakerStage({
   isPreviewBuild?: boolean;
   /** Session Simulator real-device follow-up: guest ids the simulator generated in this tab — see RoomLayoutProps' own doc comment. Optional so every non-preview caller/test can omit it; treated as empty when absent. */
   simulatedGuestIds?: ReadonlySet<string>;
+  /** Issue #21 corrective pass: the shared round clock for the current pairing — see this component's own "shared round badge" doc comment below. Optional, defaulting to null (no badge), so every existing caller/test that doesn't care can omit it. */
+  stageRound?: StageRound | null;
 }) {
+  const stageRoundDisplay = useStageRoundCountdown(stageRound, isPreviewBuild);
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
     // Issue #18 consistency fix: soloMode and isSpeaker are two props
     // from the same caller that must agree — only PortraitSpeakerView/
@@ -246,6 +252,9 @@ export function SpeakerStage({
       {/* Self-preview slot (issue #22) — hidden entirely, not just an empty placeholder, when there's no local media to show. */}
       {localVideoTrack && <SelfPreview track={localVideoTrack} />}
 
+      {/* Shared round badge (issue #21 corrective pass) — see this component's own doc comment above the stageRound prop; rendered exactly once, here, never per-tile. */}
+      {stageRoundDisplay && <StageRoundBadge display={stageRoundDisplay} />}
+
       {/* Scrim (issue #21) — driven by scrimOpacity; see the doc comment above. */}
       <div
         data-testid="room-scrim"
@@ -253,6 +262,27 @@ export function SpeakerStage({
         className={cn("pointer-events-none absolute inset-0 bg-black", !scrimInstant && "transition-opacity duration-200")}
         style={{ opacity: scrimOpacity }}
       />
+    </div>
+  );
+}
+
+/**
+ * Issue #21 corrective pass: the *one* authoritative round timer for
+ * the whole stage pairing — "the two people are participating in one
+ * conversation window," Part 3's explicit product direction, replacing
+ * the previous per-speaker badges. Positioned top-center, above/between
+ * both tiles regardless of portrait/landscape — a clear shared location
+ * neither seat "owns." `pointer-events-none` so it never blocks a tap on
+ * a tile underneath, same discipline the scrim already uses.
+ */
+function StageRoundBadge({ display }: { display: { remainingSeconds: number; roundNumber: number } }) {
+  return (
+    <div
+      data-testid="stage-round-timer"
+      aria-hidden="true"
+      className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow"
+    >
+      Round {display.roundNumber} · {display.remainingSeconds}s
     </div>
   );
 }

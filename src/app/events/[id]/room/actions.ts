@@ -15,9 +15,10 @@ import {
   releaseExpiredInactiveSpeaker,
   castSpeakerRoundVote,
   castSpeakerRoundVoteAsGuest,
-  resolveSpeakerRound,
 } from "@/lib/repositories/event-speakers";
-import type { SeatIdentity, ResolveSpeakerRoundOutcome } from "@/lib/repositories/event-speakers";
+import type { SeatIdentity } from "@/lib/repositories/event-speakers";
+import { resolveStageRound, resolveSeatClosing } from "@/lib/repositories/stage-rounds";
+import type { SeatResolutionOutcome } from "@/lib/repositories/stage-rounds";
 import {
   getPendingRequestForIdentity,
   markSpeakerRequestGranted,
@@ -635,15 +636,17 @@ export async function voteOnSpeakerRound(
 }
 
 /**
- * Issue #21, Part 1/4: triggers the one authoritative round resolution
- * for a specific seated speaker — see `resolveSpeakerRound`
- * (lib/repositories/event-speakers.ts) for what this actually decides.
- * Called from `useSpeakerRoundResolution`'s scheduled deadline timer, by
- * *any* connected client — never trusted to run on its own schedule,
- * always safe to call early/late/repeatedly.
+ * Issue #21 corrective pass: triggers the one authoritative resolution
+ * of the *shared* round deadline for a stage pairing — see
+ * `resolveStageRound` (lib/repositories/stage-rounds.ts) for what this
+ * actually decides (both occupied seats' Continue/Replace outcomes,
+ * independently, against the one shared deadline). Called from
+ * `useStageRoundResolution`'s scheduled deadline timer, by *any*
+ * connected client — never trusted to run on its own schedule, always
+ * safe to call early/late/repeatedly.
  *
- * On a replacement outcome (`decisive-replace`/`replaced-after-closing`),
- * immediately revokes the departing speaker's LiveKit publish rights —
+ * On a replacement outcome (`decisive-replace`) for a given seat,
+ * immediately revokes that departing speaker's LiveKit publish rights —
  * the same "instant revoke, not left to their next token request"
  * discipline every other eviction path in this app already follows
  * (`checkAndEvictInactiveSpeaker`). Does *not* separately trigger Phase
@@ -652,14 +655,31 @@ export async function voteOnSpeakerRound(
  * `checkPromotionEligibility` — no second seat-opening signal needed,
  * per explicit instruction not to build a second selection path.
  */
-export async function resolveSpeakerRoundAction(eventSpeakersId: string): Promise<ResolveSpeakerRoundOutcome> {
-  const result = await resolveSpeakerRound(eventSpeakersId);
-  if (
-    (result.outcome === "decisive-replace" || result.outcome === "replaced-after-closing") &&
-    result.eventId &&
-    result.identity
-  ) {
+export async function resolveStageRoundAction(eventId: string): Promise<Array<{ eventSpeakersId: string; outcome: SeatResolutionOutcome }>> {
+  const results = await resolveStageRound(eventId);
+  for (const result of results) {
+    if (result.outcome === "decisive-replace") {
+      await syncPublishPermission({ eventId, identity: result.identity, canPublish: false });
+    }
+  }
+  return results.map((r) => ({ eventSpeakersId: r.eventSpeakersId, outcome: r.outcome }));
+}
+
+/**
+ * The individual-narrow-loss-speaker equivalent — see
+ * `resolveSeatClosing` (lib/repositories/stage-rounds.ts). Same
+ * "any connected client, always safe to call early/late/repeatedly"
+ * shape, and the same instant-publish-revoke discipline: a closing-
+ * period expiry is always a replacement (never any other outcome), so
+ * the revoke happens whenever this actually resolved something. Returns
+ * whether it did (`false` for the ordinary no-op case: not yet expired,
+ * or no such closing seat) — used by the Session Simulator's "Force
+ * Replace Now" to report accurate feedback without a second fetch.
+ */
+export async function resolveSeatClosingAction(eventSpeakersId: string): Promise<boolean> {
+  const result = await resolveSeatClosing(eventSpeakersId);
+  if (result) {
     await syncPublishPermission({ eventId: result.eventId, identity: result.identity, canPublish: false });
   }
-  return result.outcome;
+  return result !== null;
 }

@@ -3,6 +3,119 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-28 — Corrective pass: seat-claim race closed at the RPC layer, stuck self-preview reconciled, round model rebuilt around one shared clock (issue #21)
+
+**Context**: real-device testing of the Phase 2/simulator build exposed
+three blockers, all traced back to the same underlying design gap. Explicit
+instruction to fix these before adding anything else, to reuse the #18
+seat/role reconciliation rather than invent a simulator-specific one, and
+not to build the eventual production round-timer-hiding behavior yet
+(full visibility wanted for this preview).
+
+**Root cause, traced not guessed**: `handleTapEmptySeat`'s real join and
+the Session Simulator's automatic candidate-promotion loop both call the
+exact same `claim_speaker_seat` RPC — confirmed via a dedicated
+investigation before writing any fix, not assumed. That RPC had no
+optimistic-concurrency check: it always unconditionally ended whichever
+row was active for a seat and inserted a new one, silently, with no
+exception to either caller. The tester's own real join landed first; the
+simulator's background poll then raced the identical RPC and won,
+overwriting the real seat with a simulated identity — the seat-stealing
+bug. The same lost claim also left `prepareLocalMedia`'s deliberately-held
+tracks (held on purpose for the *retryable* failure paths) with no release
+for this *terminal* one, producing the stuck self-preview with no Leave
+Stage.
+
+**Fix scope — general, not simulator-specific, per explicit instruction**:
+`claim_speaker_seat` now raises if the seat already has an active
+occupant, same pattern as its existing "identity already holds a seat"
+check, closing the race for every caller (real users, moderator actions,
+the simulator) uniformly at the source of truth. This surfaced a second,
+pre-existing gap the new guard would otherwise have introduced: a
+genuinely stale (past the 11s disconnect/inactivity grace, never yet
+cleaned up) occupant would now permanently block anyone else from ever
+claiming that seat, since the guard only checked `left_at is null`, not
+expiration. Fixed in an immediate follow-up migration by releasing a
+logically-expired *target-seat* occupant first, mirroring the identical
+distinction `release_if_expired` (migration 18) already made for the
+*caller's own* identity. On top of the RPC fix, the simulator's own
+auto-advance-selection poll additionally pauses outright whenever
+`EventRoom` reports a real join or promotion in flight
+(`realJoinInProgress`, derived from existing `isJoiningSeat`/
+`promotionCountdown` state) — real users get first refusal by design, not
+just by winning a database race. `useReleaseStuckLocalMedia` (new, general
+hook) releases local media whenever every legitimate reason to hold it —
+seated, joining, pending request, promotion countdown, mic-request
+composer mode — is absent, reusing `EventRoom`'s existing state exactly as
+instructed rather than adding a second role system.
+
+**Round model rebuilt: one shared clock, still per-speaker outcomes**: the
+existing per-speaker independent 60s timers were an explicit correction —
+"that is not the product behavior I want now." Chose a hybrid architecture
+specifically to avoid touching the already-working vote-casting RPCs:
+`event_speakers`' round columns (`round_number`/`round_started_at`/
+`round_ends_at`/`round_phase`/`closing_ends_at`) stay unchanged in shape
+and keep governing individual narrow-loss closing periods untouched; a new
+`stage_rounds` table (one row per event) holds the authoritative shared
+deadline for the *active* phase, and `ensure_stage_round` (idempotent,
+called from every seat-claim/vacate/resolve path) keeps each occupied
+seat's own round bookkeeping synced to it. `cast_speaker_round_vote(_as_guest)`
+needed zero changes — they only ever check the per-seat `round_phase`,
+unaffected by where the deadline authoritatively lives.
+`resolve_stage_round` resolves both occupied seats independently against
+the one shared boundary in a single call (same integer-cross-multiplication
+thresholds, byte-for-byte, as the superseded per-speaker resolver) and
+itself calls `ensure_stage_round` once at the end to decide whether the
+next shared round starts immediately (both continued) or the stage waits
+(any vacancy or an individual closing period in progress) — this is the
+mechanism that satisfies "don't give a retained speaker another
+independent timer while waiting for their partner's replacement," since a
+lone continuing seat's `round_number`/`round_ends_at` simply aren't synced
+again until the pairing is whole. The old per-speaker `resolve_speaker_round`
+is dropped, not left dead.
+
+**Two numbering bugs found by the real-database test suite itself, fixed
+before merge**: (1) `ensure_stage_round` only ever advanced a stale round
+when its phase was `awaiting_pairing` — a fully-continuing pairing (phase
+stays `active`, `resolve_stage_round` never touches `stage_rounds` itself)
+had no path to ever get a fresh deadline, so a "both continue" outcome
+would have left the badge showing an already-expired countdown forever.
+Fixed by also advancing when the round is still `active` but its own
+`ends_at` has already passed — safe unconditionally, since
+`resolve_stage_round`'s own guard means this state is only ever reached
+after a deadline has genuinely elapsed. (2) The very first pairing for any
+event always displayed "Round 2," never "Round 1" — the single-seat
+placeholder `ensure_stage_round` creates while waiting for a second seat
+defaulted to `round_number` 1, so the *first real* transition to active
+incremented it to 2. Since claiming is always sequential (one seat then
+the other — how a real join, and the simulator's own seeding, both work),
+this hit every single pairing, not an edge case. Fixed by starting that
+placeholder at 0, since it was never a real round.
+
+**Simulator panel updated to match**: `Force Continue`/`Force Narrow
+Loss`/`Force Replace` no longer resolve anything themselves — they only
+cast the vote split that *aims* a seat's outcome at the next shared
+resolution, since a single seat's force button can no longer unilaterally
+end a *shared* deadline. A new `Resolve Round Now` button
+(`forceStageRoundDeadline`) backdates the shared deadline and invokes the
+real resolver for both seats at once, reporting each seat's actual
+resolved outcome — deliberately separate from the individual seat's own
+`Force Replace Now` (`forceSeatClosingDeadline`) during its closing
+period, which still only touches that one seat.
+
+**Tradeoffs**: fixing the pre-existing test suite's own fixtures (several
+files across `event-speakers-*.test.ts` and the LiveKit webhook route
+test) to explicitly vacate a seat before re-claiming it, since they'd
+implicitly relied on the now-removed silent-replace behavior as their own
+cleanup mechanism — a straightforward, mechanical fix once the actual
+regression (a permanently-stuck stale seat) was ruled out and the
+remaining failures were confirmed to be test-fixture assumptions, not
+product bugs. Did not chase every seat-vacating RPC for a client-side
+reactive `ensureStageRound` backstop this round (e.g. the inactivity/
+disconnect-release paths already call it themselves, but a hypothetical
+future path that doesn't would go unnoticed until its own next claim) —
+explicitly deferred, not silently skipped.
+
 ## 2026-08-27 — Session Simulator: one-tap full session + closing the replacement loop (issue #21, fifth real-device follow-up)
 
 **Context**: the simulator could produce individual pieces of activity,

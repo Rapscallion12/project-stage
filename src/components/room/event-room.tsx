@@ -14,7 +14,9 @@ import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
 import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
 import { useOwnSeatExpirationConfirmation } from "@/hooks/use-own-seat-expiration-confirmation";
 import { useSeatReconciliation } from "@/hooks/use-seat-reconciliation";
-import { useSpeakerRoundResolution } from "@/hooks/use-speaker-round-resolution";
+import { useReleaseStuckLocalMedia } from "@/hooks/use-release-stuck-local-media";
+import { useStageRound } from "@/hooks/use-stage-round";
+import { useStageRoundResolution } from "@/hooks/use-stage-round-resolution";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -396,6 +398,21 @@ export function EventRoom({
     refetch: refetchSpeakers,
   });
 
+  // Issue #21 corrective pass, real-device finding: closes the stuck
+  // self-preview/no-Leave-Stage state a lost seat-claim race could leave
+  // behind — see this hook's own doc comment for the exact mechanism.
+  // General fix (not simulator-specific): releases local media whenever
+  // every legitimate reason to hold it is absent.
+  useReleaseStuckLocalMedia({
+    isSpeaker,
+    isJoiningSeat,
+    hasPendingRequest,
+    promotionCountdown,
+    micRequestMode,
+    localVideoTrack: connection.localVideoTrack,
+    releaseLocalMedia: connection.releaseLocalMedia,
+  });
+
   // Real-device reconnect-grace-period finding, issue #18 UX finding:
   // enabled only once LiveKit is actually meant to be connected
   // (canConnect/"ready") — kept for interface parity even though the
@@ -408,13 +425,19 @@ export function EventRoom({
     enabled: canConnect,
   });
 
-  // Issue #21, Part 1/15: schedules the authoritative Continue/Replace
-  // round deadline trigger for every currently-occupied seat — runs
-  // unconditionally (not gated on canConnect/isSpeaker), so any
-  // connected client, audience included, can be the one whose timer
-  // fires and keeps a round resolving even if neither seated speaker's
-  // own tab is around to do it. See the hook's own doc comment.
-  useSpeakerRoundResolution(speakers);
+  // Issue #21 corrective pass: the shared round clock's live state —
+  // resyncs on every Realtime SUBSCRIBED, same discipline
+  // useActiveSpeakers already established.
+  const stageRound = useStageRound(event.id);
+
+  // Issue #21, Part 1/15 (corrective pass: now one shared deadline per
+  // stage pairing, plus per-seat closing deadlines): schedules the
+  // authoritative resolution trigger — runs unconditionally (not gated
+  // on canConnect/isSpeaker), so any connected client, audience
+  // included, can be the one whose timer fires and keeps a round
+  // resolving even if neither seated speaker's own tab is around to do
+  // it. See the hook's own doc comment.
+  useStageRoundResolution(event.id, stageRound, speakers);
 
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
@@ -516,6 +539,7 @@ export function EventRoom({
     toggleCamera: connection.toggleCamera,
     isPreviewBuild,
     simulatedGuestIds,
+    stageRound,
   };
 
   return (
@@ -580,6 +604,8 @@ export function EventRoom({
           speakers={speakers}
           pendingRequests={pendingRequests}
           messages={messages}
+          stageRound={stageRound}
+          realJoinInProgress={isJoiningSeat || promotionCountdown !== null}
           onSimulatedIdentitiesCreated={registerSimulatedGuestIds}
           onSimulatorReset={() => setSimulatedGuestIds(new Set())}
         />
