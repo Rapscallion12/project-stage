@@ -3,6 +3,143 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-28 — Second corrective pass: seeding race traced to a database bug, shared-round timer repositioned, weighted-selection made observable, Vote UI shows sentiment (issue #21)
+
+**Context**: further real-device testing of the shared-round build found
+five things: the round timer overlapped the room header; a speaker wasn't
+replaced by the expected Request-to-Speak candidate; one simulation start
+produced incomplete seating, fixed by Stop/Start; Continue/Replace vote
+detail wasn't visible anywhere; and the simulator risked drifting into a
+parallel fake implementation instead of staying a genuine end-to-end
+harness. Explicit instruction: trace root causes rather than adding
+retries, don't "fix" legitimate weighted randomness, and reuse production
+decision logic and data paths wherever a real browser identity could
+physically perform the same action.
+
+**Seeding race, traced to an actual database bug, not flaky UI**: the
+Session Simulator's `seedTwoSpeakers` claimed both seats via
+`Promise.allSettled` — genuinely concurrent RPC calls. `ensure_stage_round`
+(migration 24) read seat occupancy *before* creating/locking the
+`stage_rounds` row and had no conflict handling on its cold-start INSERT.
+On a brand-new event, both concurrent `claim_speaker_seat` calls could
+reach `ensure_stage_round` with no row yet visible to either transaction;
+the loser's INSERT hit `stage_rounds_event_uniq`'s bare unique_violation —
+an *uncaught* Postgres error that rolled back its entire transaction,
+including the seat claim itself. That's the exact "Stop/Start fixes it"
+signature: the first attempt raced and lost a seat invisibly; the second
+attempt's `stage_rounds` row already existed, so the race window was gone.
+Fixed in the database (migration 00000000000028): the INSERT now uses
+`ON CONFLICT (event_id) DO NOTHING`, and occupancy is read *after* the
+round row is locked/created — Postgres blocks a second transaction's
+conflicting INSERT until the first commits, so by the time the loser
+reads occupancy, the winner's own seat claim has already committed and is
+visible; both seats are correctly counted regardless of which claim
+"wins." Verified with a dedicated real-database test that claims both
+seats via genuine `Promise.all` concurrency on a fresh event (the exact
+scenario that used to fail) and asserts both succeed with a synced active
+round. The simulator's own seeding was additionally changed from
+concurrent to sequential — not a workaround for the database bug (already
+fixed at its root), but a better match for what it's simulating: two
+people claiming seats moments apart, not at the identical instant — and
+it's what makes each seat's own success/failure independently reportable
+(`"Seeding Seat 1…"` / `"Seeding Seat 2…"` / `"Starting Round 1…"`, with
+the real error message on a genuine failure, never a swallowed or generic
+one, per explicit instruction not to leave a half-started simulation
+unreported).
+
+**Timer placement — root cause was two absolutely-positioned overlays
+sharing one coordinate, not a z-index fight**: `StageRoundBadge` sat
+`top-2` of the stage box; `PortraitRoom`'s own event-title status pill is
+a *separate* absolutely-positioned overlay at `top-0` of the same box —
+both near-identical top-of-screen positions, hence the overlap. Since both
+tiles are equal `flex-1` siblings (stacked in portrait, side-by-side in
+landscape), the exact center of the stage box is always the seam the
+`speaker-divider` itself already occupies — moving the badge to
+`top-1/2`/`left-1/2` (both axes, one CSS rule) reaches "the boundary
+between the two speaker areas" in *both* orientations from a single
+position, not a per-orientation special case, and no other layer (top
+chrome, self-preview, ambient comments, controls, Vote panel) is ever
+positioned at center-stage.
+
+**Replacement-selection: investigated the actual algorithm before
+touching anything**. Re-read `selectWeightedCandidate`
+(`lib/speaker-selection.ts`) and its wiring
+(`ensureActiveSelectionRound`, `freeze_speaker_candidates`,
+`set_current_speaker_candidate`) end to end — the fixed rank weights
+`[3, 2, 1]` correctly produce a 50/33/17 split among a full Top 3, exactly
+as designed and previously decided; `freeze_speaker_candidates`'
+idempotent-freeze (migration 20) correctly returns the same frozen
+pick on repeated calls, so `simulateAdvanceSelection`'s own second
+`freezeSpeakerCandidates()` call can't re-roll or diverge from
+`ensureActiveSelectionRound`'s pick. No bug found — a rank-1 candidate
+losing the weighted draw to rank-2 exactly 33% of the time (or worse) is
+the designed behavior, and without visibility into the frozen ranking and
+its odds, that's indistinguishable from a bug to whoever's watching.
+Concluded the fix is observability, per explicit instruction not to "fix"
+legitimate randomness: the simulator now shows the frozen Top 3 (name,
+frozen vote count, and the real weighted odds for that pool size — reusing
+`SELECTION_RANK_WEIGHTS` directly, never a re-derived curve), which
+candidate is selected, and whether they're still joining or have already
+promoted into a specific seat (cross-referenced against the live
+`speakers` list — the same identity, never a separate guess). Candidate
+display names are resolved the same way the real room UI would (the
+request's own chat message's `author_display_name`), falling back to the
+simulator's own generated-name map only for a message not yet in the live
+window.
+
+**Reset must produce a genuinely clean "Round 1," without ever risking
+real speaker state**: `resetSimulatorSession` deleted simulated seats via
+a raw bulk `DELETE`, bypassing `end_speaker_seat`/`leave_speaker_seat`
+entirely — meaning `ensure_stage_round` was never triggered as a side
+effect, leaving `stage_rounds` completely stale (still `active`, with
+whatever round_number it had). Investigated the same "shared production
+state — resync, never blind-delete" question the original doc comment
+already answered for `speaker_selection_rounds`, and reached a different
+conclusion for a different reason: `stage_rounds` genuinely has nothing
+left depending on it once *zero* seats remain occupied (real or
+simulated) — at that point it's deleted outright, which is what lets the
+next pairing start cleanly at round_number 1 instead of continuing a
+stale counter, the explicit product requirement. If a real speaker is
+still seated (a mixed real+simulated stage) after Reset removes the
+simulated occupant, the row is never deleted — only resynced via
+`ensureStageRound`, so their own shared round state reflects the reduced
+occupancy without being destroyed.
+
+**Vote UI gets real sentiment display, still lightweight**: the audience
+Vote panel previously wrote votes but never showed anyone the tally.
+Added a live poll of `speaker_round_votes` (same public-SELECT RLS tier
+the simulator's own tally poll already relies on) — but *only while the
+panel is open*, never a standing subscription, per explicit "lightweight,
+not a permanent polling dashboard" instruction. Percentages only (a
+two-color bar), not raw counts — counts stay in the simulator, where
+debugging detail belongs; the product surface favors the number that
+actually communicates outcome direction. Zero votes reads "No votes yet ·
+defaults to Continue" rather than a bare 0%/0% that could read as a real,
+decided sentiment. A speaker in their Final 30s closing period shows
+"Replacement decided" and loses the Continue/Replace buttons *entirely*
+(not just disabled) — that decision is locked, so there's nothing left to
+offer a tap on. The trigger emblem gains a "Vote · Ns" countdown label in
+the shared round's final ~10 seconds (the same `ROUND_TIMER_REVEAL_SECONDS`
+boundary the timer badge uses), still never auto-opening the panel.
+
+**A ref can't be read during render — react-hooks/refs caught it, not a
+manual review**: the new candidate-name lookup initially read
+`guestDisplayNamesRef.current` directly in JSX. Fixed by mirroring that
+ref into a small piece of parallel React state
+(`guestDisplayNames`), written at the same two call sites the ref already
+was — the ref itself stays for the scheduled-timer/handler reads that
+still need it (e.g. `simulateAdvanceSelection`'s own argument).
+
+**Tradeoffs**: did not chase every seat-vacating RPC for a client-side
+reactive `ensureStageRound` backstop this round either (same deferral as
+the previous pass) — the database-layer race fix removes the actual
+failure mode that made this urgent. Several pre-existing test files that
+call `mockImplementation` on shared simulator-action mocks were found to
+leak that override across later tests (`vi.clearAllMocks()` doesn't reset
+custom implementations) — fixed by restoring the default implementation
+in this file's own `afterEach`, a latent test-isolation gap this pass's
+own new tests exposed rather than introduced.
+
 ## 2026-08-28 — Corrective pass: seat-claim race closed at the RPC layer, stuck self-preview reconciled, round model rebuilt around one shared clock (issue #21)
 
 **Context**: real-device testing of the Phase 2/simulator build exposed

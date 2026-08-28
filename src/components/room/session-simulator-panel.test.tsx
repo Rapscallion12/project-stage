@@ -55,13 +55,29 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   simulateAdvanceSelection,
 }));
 
-const { supabaseFrom } = vi.hoisted(() => ({
-  supabaseFrom: vi.fn(() => ({
-    select: vi.fn(() => ({
-      in: vi.fn(async () => ({ data: [] })),
-    })),
-  })),
-}));
+const { supabaseFrom, stageRoundRow, roundVotesData } = vi.hoisted(() => {
+  const stageRoundRow: { current: { round_number: number; phase: string } | null } = {
+    current: { round_number: 1, phase: "active" },
+  };
+  const roundVotesData: { current: Array<{ event_speakers_id: string; choice: "continue" | "replace" }> } = { current: [] };
+  const supabaseFrom = vi.fn((table: string) => {
+    if (table === "stage_rounds") {
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            maybeSingle: vi.fn(async () => ({ data: stageRoundRow.current })),
+          })),
+        })),
+      };
+    }
+    return {
+      select: vi.fn(() => ({
+        in: vi.fn(async () => ({ data: roundVotesData.current })),
+      })),
+    };
+  });
+  return { supabaseFrom, stageRoundRow, roundVotesData };
+});
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({ from: supabaseFrom }),
@@ -143,6 +159,14 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
   afterEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+    stageRoundRow.current = { round_number: 1, phase: "active" };
+    roundVotesData.current = [];
+    // vi.clearAllMocks() only clears call/result history — a test that
+    // overrides a mock's *implementation* via mockImplementation (not
+    // -Once) would otherwise leak that override into every later test.
+    // Restored explicitly here, not just left to each such test's own
+    // cleanup, so this can never happen silently again.
+    simulateSeedSpeaker.mockImplementation(async () => {});
   });
 
   it("renders the tooling panel with Start/Stop controls", () => {
@@ -269,6 +293,37 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       );
       expect(roundStatusForSeat(1).textContent).toMatch(/final \d+s/);
     });
+
+    it("shows 'No votes yet' rather than a misleading tally when nobody has voted on a seat yet", async () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", display_name: "Alex" })]} />);
+      await waitFor(() => expect(supabaseFrom).toHaveBeenCalled());
+      expect(roundStatusForSeat(1)).toHaveTextContent("No votes yet");
+    });
+
+    it("shows Continue/Replace counts, percentages, and the total votes cast, from the same authoritative tally the resolver uses", async () => {
+      roundVotesData.current = [
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "replace" },
+        { event_speakers_id: "s1", choice: "replace" },
+        { event_speakers_id: "s1", choice: "replace" },
+        { event_speakers_id: "s1", choice: "replace" },
+        { event_speakers_id: "s1", choice: "replace" },
+      ];
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", display_name: "Dapper Rabbit" })]} />);
+      const status = await waitFor(() => {
+        const el = roundStatusForSeat(1);
+        expect(el).toHaveTextContent("12 votes cast");
+        return el;
+      });
+      expect(status).toHaveTextContent("Continue 7 · 58%");
+      expect(status).toHaveTextContent("Replace 5 · 42%");
+    });
   });
 
   describe("Seed 2 Speakers (Part 5 — deterministic, stable identities)", () => {
@@ -320,13 +375,73 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     });
 
     it("surfaces the failure in the panel, rather than continuing silently, when both seats fail to seed", async () => {
-      simulateSeedSpeaker.mockImplementation(async () => {
+      // mockImplementationOnce (not the persistent mockImplementation) —
+      // this must not leak its failure into later tests' default
+      // (successful) seeding behavior.
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        throw new Error("both seats occupied");
+      });
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
         throw new Error("both seats occupied");
       });
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
 
       await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Could not seed simulated speakers"));
+    });
+
+    it("reports the real error message for a genuine seed failure, not a swallowed/generic one", async () => {
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        throw new Error("seat 1 in event e1 is already occupied");
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("seat 1 in event e1 is already occupied"));
+    });
+
+    it("reports each step progressively — Starting session, Seeding Seat 1, Seeding Seat 2, Starting Round 1 — rather than one opaque final result", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      const log = screen.getByTestId("sim-log");
+      await waitFor(() => expect(log).toHaveTextContent("Starting session…"));
+      expect(log).toHaveTextContent("Seeding Seat 1…");
+      expect(log).toHaveTextContent("Seeding Seat 2…");
+      await waitFor(() => expect(log).toHaveTextContent("Starting Round 1…"));
+    });
+
+    it("claims seat 1 before seat 2, sequentially — never both at once (issue #21, second corrective pass: concurrent claims raced a real database bug)", async () => {
+      const callOrder: number[] = [];
+      simulateSeedSpeaker.mockImplementation(async (...args: unknown[]) => {
+        const seatNumber = args[3] as number;
+        callOrder.push(seatNumber);
+        // If seat 2 were claimed concurrently with seat 1 rather than
+        // strictly after it, this delay would let seat 2's call resolve
+        // *first* and prove the two were racing — it never does.
+        if (seatNumber === 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      expect(callOrder).toEqual([1, 2]);
+    });
+
+    it("reports the resulting shared round's real state after both seats seed successfully", async () => {
+      stageRoundRow.current = { round_number: 1, phase: "active" };
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Round 1 active"));
+    });
+
+    it("reports clearly, rather than silently, if the shared round unexpectedly failed to start after a successful seed", async () => {
+      stageRoundRow.current = { round_number: 1, phase: "awaiting_pairing" };
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("the shared round did not start"));
     });
   });
 
@@ -531,6 +646,63 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fireEvent.click(within(roundStatusForSeat(2)).getByTestId("sim-open-seat"));
       expect(simulateOpenSeat).toHaveBeenCalledWith("e1", "g-speaker-2");
       expect(simulateOpenSeat).not.toHaveBeenCalledWith("e1", "g-speaker-1");
+    });
+  });
+
+  describe("Selection observability (Part 3/4 — making the weighted draw legible, not changing it)", () => {
+    it("shows no frozen selection when no seat is opening", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      expect(screen.getByText("No candidate selection in progress")).toBeInTheDocument();
+    });
+
+    it("shows the frozen Top 3 with rank, vote counts, and the real weighted odds — never invented math", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: false }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 5, is_current_candidate: true }),
+            request({ id: "r3", guest_id: "g3", message_id: "m3", frozen_rank: 3, frozen_vote_count: 3, is_current_candidate: false }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Calm Sparrow", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Eager Deer", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+              { id: "m3", author_display_name: "Restless Wolf", author_profile_id: null, author_guest_id: "g3", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      const candidates = screen.getAllByTestId("sim-frozen-candidate");
+      expect(candidates[0]).toHaveTextContent("#1 Calm Sparrow — 8 votes — 50%");
+      expect(candidates[1]).toHaveTextContent("#2 Eager Deer — 5 votes — 33%");
+      expect(candidates[1]).toHaveTextContent("selected");
+      expect(candidates[2]).toHaveTextContent("#3 Restless Wolf — 3 votes — 17%");
+
+      // #2 won the weighted draw despite #1 having more votes — exactly
+      // the "was this a bug, or legitimate randomness" case this
+      // observability exists to answer.
+      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("Selected: Eager Deer");
+    });
+
+    it("reports 'joining' before the candidate occupies a seat, and 'promoted (Seat N)' once they do — the same identity, read from the real speakers list, never a separate guess", () => {
+      const { rerender } = render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 4, is_current_candidate: true })]}
+        />,
+      );
+      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("joining");
+      expect(screen.getByTestId("sim-selection-status")).not.toHaveTextContent("promoted");
+
+      rerender(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 4, is_current_candidate: true })]}
+          speakers={[speaker({ id: "seat-2", seat_number: 2, guest_id: "g1", profile_id: null })]}
+        />,
+      );
+      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("promoted (Seat 2)");
     });
   });
 

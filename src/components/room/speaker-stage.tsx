@@ -267,20 +267,28 @@ export function SpeakerStage({
 }
 
 /**
- * Issue #21 corrective pass: the *one* authoritative round timer for
- * the whole stage pairing — "the two people are participating in one
- * conversation window," Part 3's explicit product direction, replacing
- * the previous per-speaker badges. Positioned top-center, above/between
- * both tiles regardless of portrait/landscape — a clear shared location
- * neither seat "owns." `pointer-events-none` so it never blocks a tap on
- * a tile underneath, same discipline the scrim already uses.
+ * Issue #21, second corrective pass (real-device finding): the badge
+ * previously sat at the top of the whole stage box (`top-2`), which put
+ * it directly under — visually overlapping — the room header's own
+ * top-of-screen chrome (the event title pill in `PortraitRoom` et al.
+ * are separate absolutely-positioned overlays at the *same* top edge).
+ * It now sits dead center of the stage instead: both tiles are equal
+ * `flex-1` siblings (stacked in portrait, side-by-side in landscape), so
+ * the exact center of this box is always the seam the `speaker-divider`
+ * itself occupies — "the boundary between the two speaker areas," per
+ * explicit instruction, in *both* orientations from one position, not a
+ * per-orientation special case. Nothing else in this component's layout
+ * (top chrome, self-preview, ambient comments, controls, Vote panel) is
+ * ever positioned at center-stage, so this reaches a clean spot no other
+ * layer contests. `pointer-events-none` so it never blocks a tap on a
+ * tile underneath, same discipline the scrim already uses.
  */
 function StageRoundBadge({ display }: { display: { remainingSeconds: number; roundNumber: number } }) {
   return (
     <div
       data-testid="stage-round-timer"
       aria-hidden="true"
-      className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow"
+      className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow"
     >
       Round {display.roundNumber} · {display.remainingSeconds}s
     </div>

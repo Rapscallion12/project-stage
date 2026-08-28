@@ -24,11 +24,26 @@ import {
 } from "@/lib/simulator/identities";
 import { jitteredDelayMs, randomOrdinaryComment, randomSpeakerRequestComment } from "@/lib/simulator/content";
 import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
+import { SELECTION_RANK_WEIGHTS } from "@/lib/speaker-selection";
 import { useNow } from "@/hooks/use-now";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
+
+/**
+ * The exact same rank-weighted odds `selectWeightedCandidate`
+ * (`lib/speaker-selection.ts`) actually draws against — reusing
+ * `SELECTION_RANK_WEIGHTS` directly rather than re-deriving the curve,
+ * per Part 19's "reuse production decision logic, do not duplicate
+ * business rules." Display-only: this never influences the real draw,
+ * which happens once, server-side, in `ensureActiveSelectionRound`.
+ */
+function weightedSelectionOdds(count: number): number[] {
+  const weights = Array.from({ length: count }, (_, i) => SELECTION_RANK_WEIGHTS[i] ?? 1);
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  return weights.map((w) => (w / total) * 100);
+}
 
 /**
  * `Math.random()` wrapped in named, module-level helpers (never called
@@ -217,8 +232,13 @@ export function SessionSimulatorPanel({
   // rather than re-derived, since `simulateAdvanceSelection` needs a
   // display name for whichever simulated identity gets promoted, and the
   // audience pool that originally generated it may have been superseded
-  // by a later Start.
+  // by a later Start. A ref (for the scheduled-timer/handler reads that
+  // need it, e.g. `simulateAdvanceSelection`'s own argument), mirrored
+  // into state (`guestDisplayNames` below) purely so `candidateName` can
+  // read it during render — react-hooks/refs correctly forbids reading a
+  // ref's `.current` inside the render body itself.
   const guestDisplayNamesRef = useRef<Record<string, string>>({});
+  const [guestDisplayNames, setGuestDisplayNames] = useState<Record<string, string>>({});
   // Part 3: "the simulator should naturally be capable of producing all
   // outcomes over time rather than always converging on the same one" —
   // a single fixed continue-bias would, over enough votes, reliably land
@@ -237,6 +257,25 @@ export function SessionSimulatorPanel({
     const bias = randomMoodBias(0.2, 0.9);
     roundMoodRef.current.set(key, bias);
     return bias;
+  }
+
+  /**
+   * A human-readable name for a Request-to-Speak candidate — `speaker_requests`
+   * itself carries no display name (only `message_id`), so this resolves
+   * it the same way the real room UI would: the request's own chat
+   * message's `author_display_name` first (works for real *and*
+   * simulated requesters alike, since `simulateRequestToSpeak` writes a
+   * real message row through the real `requestToSpeakAsGuest` path), then
+   * this panel's own generated-name map as a fallback for a message not
+   * yet present in the live `messages` window, then a truncated id as a
+   * last resort so the observability panel never renders a blank name.
+   */
+  function candidateName(request: RankedPendingRequest): string {
+    const fromMessage = messages.find((m) => m.id === request.message_id)?.author_display_name;
+    if (fromMessage) return fromMessage;
+    const guestName = request.guest_id ? guestDisplayNames[request.guest_id] : undefined;
+    if (guestName) return guestName;
+    return `(${(request.profile_id ?? request.guest_id ?? "unknown").slice(0, 8)})`;
   }
 
   // react-hooks/refs: writing a ref during render is disallowed even for
@@ -412,6 +451,7 @@ export function SessionSimulatorPanel({
    * Open Seat), not as a required extra step.
    */
   async function startSimulation() {
+    appendLog("Starting session…");
     const newAudience = createSimulatedAudience(AUDIENCE_SIZE);
     audienceRef.current = newAudience;
     setAudience(newAudience);
@@ -422,10 +462,11 @@ export function SessionSimulatorPanel({
       allSimulatedGuestIdsRef.current.add(identity.id);
       guestDisplayNamesRef.current[identity.id] = identity.displayName;
     }
+    setGuestDisplayNames({ ...guestDisplayNamesRef.current });
     onSimulatedIdentitiesCreated?.(allNewIdentities.map((identity) => identity.id));
     runningRef.current = true;
     setRunning(true);
-    appendLog(`Started — ${AUDIENCE_SIZE} simulated audience identities generated`);
+    appendLog(`${AUDIENCE_SIZE} simulated audience identities generated`);
 
     await seedTwoSpeakers();
 
@@ -529,6 +570,7 @@ export function SessionSimulatorPanel({
 
     allSimulatedGuestIdsRef.current = new Set();
     guestDisplayNamesRef.current = {};
+    setGuestDisplayNames({});
     roundMoodRef.current = new Map();
     audienceRef.current = [];
     seedSpeakersRef.current = null;
@@ -642,30 +684,66 @@ export function SessionSimulatorPanel({
   }
 
   /**
-   * Claims both seats for the run's two stable identities. Tolerant of
-   * either seat already being occupied (a real user got there first, or
-   * this is a manual re-seed after only one seat opened) — each claim is
-   * attempted independently so one failure never prevents the other from
-   * succeeding, which matters most for `startSimulation`'s "one tap"
-   * call: a partially-occupied stage still starts, rather than the whole
-   * session bootstrap aborting on one already-taken seat.
+   * Claims both seats for the run's two stable identities, one at a time
+   * — issue #21, second corrective pass, real-device finding. Previously
+   * claimed both seats *concurrently* (`Promise.allSettled` firing two
+   * simultaneous `claim_speaker_seat` calls), which raced a genuine
+   * database bug: on a brand-new event with no `stage_rounds` row yet,
+   * both concurrent calls' own `ensure_stage_round` step could try to
+   * insert that row at once, and the loser's uncaught unique-constraint
+   * violation rolled back its *entire* transaction — including the seat
+   * claim itself — silently leaving only one seat occupied. Fixed at the
+   * root, in the database (migration 00000000000028): the insert is now
+   * conflict-safe. Claiming sequentially here besides is what makes this
+   * mirror the realistic case the fix targets — two people (or a person
+   * and this panel) claiming seats moments apart, not at the exact same
+   * instant — and it's what makes each step's own success/failure
+   * individually reportable below, rather than an ambiguous combined
+   * result. Each step is still independently tolerant of that one seat
+   * already being occupied (a real user got there first, or this is a
+   * manual re-seed after only one seat opened) — a genuine per-step
+   * failure is logged with its real error message, never swallowed, per
+   * "either reach the valid two-speaker state or clearly report the
+   * actual failure."
    */
   async function seedTwoSpeakers() {
     const pool = requireAudience();
     const seedSpeakers = seedSpeakersRef.current;
     if (!pool || !seedSpeakers) return;
     const [a, b] = seedSpeakers;
-    const results = await Promise.allSettled([
-      simulateSeedSpeaker(eventId, a.id, a.displayName, 1),
-      simulateSeedSpeaker(eventId, b.id, b.displayName, 2),
-    ]);
-    const seated = [a, b].filter((_, i) => results[i].status === "fulfilled");
-    if (seated.length === 2) {
-      appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2 (real claim_speaker_seat RPC)`);
-    } else if (seated.length === 1) {
-      appendLog(`Seeded 1 simulated speaker (${seated[0].displayName}) — the other seat was already occupied`);
+
+    appendLog("Seeding Seat 1…");
+    const seat1Ok = await claimSeedSeat(a, 1);
+
+    appendLog("Seeding Seat 2…");
+    const seat2Ok = await claimSeedSeat(b, 2);
+
+    if (seat1Ok && seat2Ok) {
+      appendLog("Starting Round 1…");
+      const supabase = createClient();
+      const { data: round } = await supabase.from("stage_rounds").select("round_number, phase").eq("event_id", eventId).maybeSingle();
+      if (round?.phase === "active") {
+        appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2, Round ${round.round_number} active`);
+      } else {
+        appendLog(
+          `Seeded 2 stable simulated speakers, but the shared round did not start (phase: ${round?.phase ?? "unknown"}) — this is unexpected; check server logs`,
+        );
+      }
+    } else if (seat1Ok || seat2Ok) {
+      appendLog(`Seeded 1 simulated speaker (${seat1Ok ? a.displayName : b.displayName}) — the other seat was already occupied`);
     } else {
       appendLog("Could not seed simulated speakers — both seats already occupied");
+    }
+  }
+
+  /** One seat-claim attempt for `seedTwoSpeakers` above — returns whether it succeeded, logging the real error (not a swallowed failure) when it didn't. */
+  async function claimSeedSeat(identity: SimulatedIdentity, seatNumber: 1 | 2): Promise<boolean> {
+    try {
+      await simulateSeedSpeaker(eventId, identity.id, identity.displayName, seatNumber);
+      return true;
+    } catch (err) {
+      appendLog(`Seat ${seatNumber} seed failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      return false;
     }
   }
 
@@ -701,6 +779,32 @@ export function SessionSimulatorPanel({
     stageRound && stageRound.phase === "active" && now !== null
       ? Math.max(0, Math.ceil((new Date(stageRound.ends_at).getTime() - now) / 1000))
       : null;
+
+  /**
+   * Part 3/4: "was the #1 request legitimately outdrawn by the weighted
+   * random pick, or did something actually fail" — answerable only if
+   * the panel shows the *same* frozen ranking/weights/pick the real
+   * resolver used, never a separate guess. `pendingRequests` already
+   * carries `frozen_rank`/`frozen_vote_count`/`is_current_candidate` set
+   * by the real `freeze_speaker_candidates`/`set_current_speaker_candidate`
+   * RPCs (see `ensureActiveSelectionRound`, actions.ts) — this just reads
+   * them, live, for as long as the frozen round's members are still
+   * `pending` (a promoted/expired member drops out of `pendingRequests`
+   * once the pool resets, at which point the activity log's own
+   * "promoted" line is the durable record of what happened).
+   */
+  const frozenCandidates = pendingRequests
+    .filter((r) => r.frozen_rank !== null)
+    .sort((a, b) => (a.frozen_rank ?? 0) - (b.frozen_rank ?? 0));
+  const frozenOdds = weightedSelectionOdds(frozenCandidates.length);
+  const selectedCandidate = frozenCandidates.find((r) => r.is_current_candidate) ?? null;
+  const selectedSeat = selectedCandidate
+    ? (speakers.find(
+        (s) =>
+          (selectedCandidate.profile_id && s.profile_id === selectedCandidate.profile_id) ||
+          (selectedCandidate.guest_id && s.guest_id === selectedCandidate.guest_id),
+      ) ?? null)
+    : null;
 
   return (
     <div
@@ -802,7 +906,9 @@ export function SessionSimulatorPanel({
         {speakers.length === 0 && <p className="text-white/40">No seats occupied</p>}
         {speakers.map((s) => {
           const tally = roundVoteTallies[s.id] ?? { continue: 0, replace: 0 };
-          const pct = replacePercentage(tally.continue, tally.replace);
+          const totalVotes = tally.continue + tally.replace;
+          const replacePct = replacePercentage(tally.continue, tally.replace);
+          const continuePct = replacePct === null ? null : 100 - replacePct;
           const projected =
             s.round_phase === "closing" ? projectedOutcomeLabel("decisive-replace") : projectedOutcomeLabel(resolveRoundOutcome(tally.continue, tally.replace));
           const closingRemaining =
@@ -815,11 +921,20 @@ export function SessionSimulatorPanel({
                 Seat {s.seat_number} — {s.display_name}
                 {s.round_phase === "closing" ? ` (final ${closingRemaining ?? "—"}s)` : ""}
               </p>
-              <p>
-                Continue: {tally.continue} · Replace: {tally.replace}
-                {pct !== null ? ` (${pct.toFixed(0)}% Replace)` : ""}
-              </p>
-              <p data-testid="sim-projected-outcome">If round ended now: {projected}</p>
+              {totalVotes === 0 ? (
+                <p className="text-white/40">No votes yet</p>
+              ) : (
+                <>
+                  <p>
+                    Continue {tally.continue} · {continuePct?.toFixed(0)}%
+                  </p>
+                  <p>
+                    Replace {tally.replace} · {replacePct?.toFixed(0)}%
+                  </p>
+                  <p className="text-white/50">{totalVotes} votes cast</p>
+                </>
+              )}
+              <p data-testid="sim-projected-outcome">Projected: {projected}</p>
               <div className="mt-1 flex flex-wrap gap-1">
                 {s.round_phase === "active" ? (
                   <>
@@ -870,16 +985,41 @@ export function SessionSimulatorPanel({
         {pendingRequests.length === 0 && <p className="text-white/40">No pending requests</p>}
         {pendingRequests.slice(0, 3).map((r, i) => (
           <p key={r.id} data-testid="sim-top-request">
-            #{i + 1} {r.profile_id ? "profile" : "guest"}:{(r.profile_id ?? r.guest_id ?? "").slice(0, 8)} — {r.voteCount} votes
-            {r.frozen_rank !== null ? ` · frozen #${r.frozen_rank} (${r.frozen_vote_count} at freeze)` : ""}
-            {r.is_current_candidate && (
-              <span data-testid="sim-selected-candidate" className="font-semibold text-emerald-400">
-                {" "}
-                — selected
-              </span>
-            )}
+            #{i + 1} {candidateName(r)} — {r.voteCount} votes
           </p>
         ))}
+
+        {/*
+          Part 3/4: makes the weighted-selection draw legible — "did #1
+          legitimately lose the weighted draw, or did something actually
+          fail" is unanswerable without seeing the same frozen
+          ranking/odds/pick the real resolver used. See `frozenCandidates`'
+          own doc comment above.
+        */}
+        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Selection</div>
+        {frozenCandidates.length === 0 ? (
+          <p className="text-white/40">No candidate selection in progress</p>
+        ) : (
+          <>
+            <p className="text-white/50">Frozen Top {frozenCandidates.length}:</p>
+            {frozenCandidates.map((r, i) => (
+              <p key={r.id} data-testid="sim-frozen-candidate">
+                #{r.frozen_rank} {candidateName(r)} — {r.frozen_vote_count} votes — {frozenOdds[i]?.toFixed(0)}%
+                {r.is_current_candidate && (
+                  <span data-testid="sim-selected-candidate" className="font-semibold text-emerald-400">
+                    {" "}
+                    — selected
+                  </span>
+                )}
+              </p>
+            ))}
+            {selectedCandidate && (
+              <p data-testid="sim-selection-status">
+                Selected: {candidateName(selectedCandidate)} — {selectedSeat ? `promoted (Seat ${selectedSeat.seat_number})` : "joining"}
+              </p>
+            )}
+          </>
+        )}
 
         <div className="border-t border-white/10 pt-1">
           <p data-testid="sim-pool-reset-count">pool resets observed: {poolResetCount}</p>

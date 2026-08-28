@@ -359,3 +359,65 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     expect(ensureError?.code).toBe("42501");
   });
 });
+
+/**
+ * Issue #21, second corrective pass: real-device testing found "Start
+ * Simulated Session" intermittently produced only one occupied seat,
+ * fixed by Stop/Start again — the signature of a lost race, not a flaky
+ * UI. Traced to `ensure_stage_round`'s cold-start INSERT having no
+ * conflict handling: two seats claimed at nearly the same instant (the
+ * simulator's own former `Promise.allSettled` seeding, or two real
+ * people tapping both open seats together) could both reach
+ * `ensure_stage_round` with no `stage_rounds` row yet visible to either
+ * transaction, and the loser's uncaught unique-constraint violation
+ * rolled back its *entire* transaction — including the seat claim
+ * itself. Migration 00000000000028 fixes this at the database layer.
+ * This test needs its own fresh event (not the shared one above) — the
+ * scenario under test specifically requires *no* stage_rounds row to
+ * exist yet, which is only true once, before any other test in this
+ * file has touched the event.
+ */
+describe.skipIf(!hasServiceCredentials)("stage rounds — concurrent cold-start race (migration 00000000000028 regression)", () => {
+  let service: ReturnType<typeof createServiceClient>;
+  let eventId: string;
+
+  beforeAll(async () => {
+    service = createServiceClient();
+    const { data: event, error } = await service
+      .from("events")
+      .insert({
+        title: "Issue #21 second corrective pass — concurrent seat-claim race fixture event",
+        scheduled_start: new Date(Date.now() - 60_000).toISOString(),
+        lobby_opens_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      })
+      .select("id")
+      .single();
+    if (error || !event) throw new Error(error?.message ?? "failed to create test event");
+    eventId = event.id;
+  }, 30_000);
+
+  afterAll(async () => {
+    if (eventId) await service.from("events").delete().eq("id", eventId);
+  }, 30_000);
+
+  it("two seats claimed at the exact same instant, on a brand-new event with no prior stage_rounds row, both succeed and the shared round starts active", async () => {
+    const [seat1, seat2] = await Promise.all([
+      claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Concurrent Claimant A"),
+      claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Concurrent Claimant B"),
+    ]);
+
+    expect(seat1.left_at).toBeNull();
+    expect(seat2.left_at).toBeNull();
+
+    const { data: round } = await service.from("stage_rounds").select("*").eq("event_id", eventId).single();
+    expect(round).not.toBeNull();
+    expect(round!.phase).toBe("active");
+
+    const { data: seat1Row } = await service.from("event_speakers").select("round_number, round_ends_at").eq("id", seat1.id).single();
+    const { data: seat2Row } = await service.from("event_speakers").select("round_number, round_ends_at").eq("id", seat2.id).single();
+    expect(seat1Row!.round_number).toBe(round!.round_number);
+    expect(seat1Row!.round_ends_at).toBe(round!.ends_at);
+    expect(seat2Row!.round_number).toBe(round!.round_number);
+    expect(seat2Row!.round_ends_at).toBe(round!.ends_at);
+  });
+});

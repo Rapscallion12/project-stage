@@ -4,6 +4,79 @@ Newest entry first.
 
 ---
 
+## 2026-08-28 — Session 43: Second corrective pass — seeding race traced to a DB bug, timer repositioned, weighted-selection observable, Vote UI shows sentiment (issue #21)
+
+**Goal**: continued real-device testing of Session 42's shared-round
+build surfaced five more things, reported together with "address these
+before adding unrelated features": the timer overlapped the room header;
+a speaker wasn't replaced by the candidate expected; one simulation start
+produced incomplete seating (fixed by Stop/Start); Continue/Replace vote
+detail wasn't visible; and an explicit instruction to keep the simulator
+a genuine end-to-end harness rather than a parallel fake implementation.
+
+**Seeding race — traced, not patched with a retry**: confirmed the exact
+mechanism before writing any fix. `seedTwoSpeakers` claimed both seats
+concurrently (`Promise.allSettled`); `ensure_stage_round`'s cold-start
+INSERT had no conflict handling, so two simultaneous claims on a brand-new
+event could race an uncaught unique-constraint violation that silently
+rolled back one seat's *entire* claim transaction — exactly why Stop/Start
+"fixed" it (the second attempt's `stage_rounds` row already existed, no
+race window left). Fixed in the database (migration 00000000000028: `ON
+CONFLICT DO NOTHING` plus reading occupancy *after* the round row locks,
+so Postgres's own blocking-on-conflicting-insert behavior serializes the
+two transactions correctly). Verified with a new real-database test using
+genuine `Promise.all` concurrency on a fresh event — the exact scenario
+that used to fail. Seeding is now also sequential (not concurrent) in the
+simulator itself, with per-step progress logging and the real error
+message on a genuine failure.
+
+**Timer placement**: root cause was two separate absolutely-positioned
+overlays (the badge, the room's own event-title pill) sharing the same
+top-of-screen coordinate — not a z-index problem. Moved the badge to dead
+center of the stage box, which is always the seam between the two equal
+`flex-1` tiles in both portrait and landscape, from one CSS rule.
+
+**Replacement-selection — investigated before concluding anything**:
+re-read `selectWeightedCandidate`'s rank-weighted odds (3/2/1 → 50/33/17
+split) and its full wiring end to end. No bug found — a rank-1 candidate
+losing the weighted draw exactly matches the already-agreed design.
+Delivered observability instead of touching the algorithm, per explicit
+instruction: the simulator now shows the frozen Top 3 with real weighted
+odds, the selected candidate, and whether they're joining or have
+promoted into a specific seat (cross-referenced against live seat
+occupancy, never a separate guess).
+
+**Reset**: fixed a real gap — the bulk seat DELETE never triggered
+`ensure_stage_round`, leaving a stale round counter after every reset.
+Now deletes `stage_rounds` outright when Reset leaves the stage empty
+(the next pairing starts cleanly at Round 1), or resyncs it (never
+deletes) when a real speaker is still seated, protecting their state.
+
+**Vote UI**: added live Continue/Replace percentage display (a two-color
+bar, polled only while the panel is open), a distinct "No votes yet"
+zero-participation state, a locked "Replacement decided" presentation
+once a speaker's Final 30s begins (buttons removed entirely, not just
+disabled), and a "Vote · Ns" countdown label on the trigger during the
+shared round's final ~10 seconds — all reusing the same
+`speaker_round_votes`/`replacePercentage` authoritative path the resolver
+and simulator already use.
+
+**Verification**: new real-database tests for the concurrent-claim race
+fix and Reset's stage_rounds cleanup/resync; rewrote/extended
+`session-simulator-panel.test.tsx` and `speaker-vote-panel.test.tsx` for
+every behavior above. Fixed a latent test-isolation gap this pass's own
+new tests exposed (a `mockImplementation` override leaking across tests
+via `vi.clearAllMocks()`, which doesn't reset custom implementations).
+Full suite 919/919 (71 files), lint, tsc, build all clean.
+
+**Not built this pass, explicitly deferred**: a client-side reactive
+`ensureStageRound` backstop for seat-vacating paths that don't already
+call it directly — same deferral as the previous pass; the database-layer
+race fix removes the failure mode that made this urgent. Fresh preview
+deployed; stopping here for the user's review — not merged to main.
+
+---
+
 ## 2026-08-28 — Session 42: Corrective pass — seat-claim race, stuck self-preview, shared round model (issue #21)
 
 **Goal**: real-device testing of Session 41's build hit three blockers,

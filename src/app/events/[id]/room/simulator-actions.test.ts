@@ -310,6 +310,57 @@ describe.skipIf(!hasServiceCredentials)("resetSimulatorSession (real database) �
         .eq("id", realRequestId);
     }
   });
+
+  it("issue #21 second corrective pass: deletes the shared stage_rounds row when Reset leaves zero seats occupied, so the next pairing starts fresh at Round 1", async () => {
+    const simGuestA = crypto.randomUUID();
+    const simGuestB = crypto.randomUUID();
+    const seatA = await claimSpeakerSeat(eventId, { type: "guest", id: simGuestA }, 1, "Sim A");
+    const seatB = await claimSpeakerSeat(eventId, { type: "guest", id: simGuestB }, 2, "Sim B");
+
+    const { data: roundBefore } = await service.from("stage_rounds").select("*").eq("event_id", eventId).maybeSingle();
+    expect(roundBefore?.phase).toBe("active");
+
+    await resetSimulatorSession(eventId, [simGuestA, simGuestB]);
+
+    const { data: roundAfter } = await service.from("stage_rounds").select("*").eq("event_id", eventId).maybeSingle();
+    expect(roundAfter).toBeNull();
+
+    const { data: remainingSeats } = await service.from("event_speakers").select("id").in("id", [seatA.id, seatB.id]).is("left_at", null);
+    expect(remainingSeats).toEqual([]);
+
+    // The next pairing genuinely starts fresh — round_number 1, not a
+    // stale counter continuing from before the reset.
+    const freshA = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Fresh A");
+    const freshB = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Fresh B");
+    try {
+      const { data: freshRound } = await service.from("stage_rounds").select("round_number, phase").eq("event_id", eventId).single();
+      expect(freshRound!.round_number).toBe(1);
+      expect(freshRound!.phase).toBe("active");
+    } finally {
+      await endSpeakerSeat(eventId, { type: "guest", id: freshA.guest_id! }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: freshB.guest_id! }, "moderator_removed");
+    }
+  });
+
+  it("resyncs (never deletes) the shared stage_rounds row when a real speaker is still seated after Reset — real state is untouched, never destroyed", async () => {
+    const realGuestId = crypto.randomUUID();
+    const simGuestId = crypto.randomUUID();
+    const realSeat = await claimSpeakerSeat(eventId, { type: "guest", id: realGuestId }, 1, "Real Speaker");
+    await claimSpeakerSeat(eventId, { type: "guest", id: simGuestId }, 2, "Sim Speaker");
+
+    try {
+      await resetSimulatorSession(eventId, [simGuestId]);
+
+      const { data: roundAfter } = await service.from("stage_rounds").select("*").eq("event_id", eventId).maybeSingle();
+      expect(roundAfter).not.toBeNull();
+      expect(roundAfter!.phase).toBe("awaiting_pairing"); // one real seat alone can't sustain an active shared round
+
+      const { data: realSeatAfter } = await service.from("event_speakers").select("id, left_at").eq("id", realSeat.id).single();
+      expect(realSeatAfter!.left_at).toBeNull(); // completely untouched
+    } finally {
+      await endSpeakerSeat(eventId, { type: "guest", id: realGuestId }, "moderator_removed");
+    }
+  });
 });
 
 /**

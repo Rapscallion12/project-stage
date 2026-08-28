@@ -1,10 +1,24 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeakerVotePanel } from "./speaker-vote-panel";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 const { voteOnSpeakerRound } = vi.hoisted(() => ({ voteOnSpeakerRound: vi.fn() }));
 vi.mock("@/app/events/[id]/room/actions", () => ({ voteOnSpeakerRound }));
+
+const { supabaseVotesData, supabaseFrom } = vi.hoisted(() => {
+  const supabaseVotesData: { current: Array<{ event_speakers_id: string; choice: "continue" | "replace" }> } = { current: [] };
+  const supabaseFrom = vi.fn(() => ({
+    select: vi.fn(() => ({
+      in: vi.fn(async () => ({ data: supabaseVotesData.current })),
+    })),
+  }));
+  return { supabaseVotesData, supabaseFrom };
+});
+
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: () => ({ from: supabaseFrom }),
+}));
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -28,9 +42,10 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   };
 }
 
-describe("SpeakerVotePanel (issue #21, Part 2 — Continue/Replace)", () => {
+describe("SpeakerVotePanel (issue #21, Part 2 — Continue/Replace; second corrective pass — sentiment display)", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    supabaseVotesData.current = [];
   });
 
   it("renders the inert Vote emblem when no seat is occupied", () => {
@@ -98,7 +113,7 @@ describe("SpeakerVotePanel (issue #21, Part 2 — Continue/Replace)", () => {
     expect(screen.getByTestId("vote-replace")).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("disables both choices once the round is in its closing period — the outcome is already decided", () => {
+  it("removes both choices entirely once the round is in its closing period — the outcome is already decided, not just disabled", () => {
     render(
       <SpeakerVotePanel
         speakers={[speaker({ id: "s1", round_phase: "closing", closing_ends_at: new Date(Date.now() + 20_000).toISOString() })]}
@@ -106,8 +121,9 @@ describe("SpeakerVotePanel (issue #21, Part 2 — Continue/Replace)", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("watch-vote-emblem"));
-    expect(screen.getByTestId("vote-continue")).toBeDisabled();
-    expect(screen.getByTestId("vote-replace")).toBeDisabled();
+    expect(screen.queryByTestId("vote-continue")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("vote-replace")).not.toBeInTheDocument();
+    expect(screen.getByTestId("speaker-vote-locked")).toHaveTextContent("Replacement decided");
   });
 
   it("resets the displayed choice when a new round begins (round_number changes)", () => {
@@ -139,5 +155,67 @@ describe("SpeakerVotePanel (issue #21, Part 2 — Continue/Replace)", () => {
     const continueButtons = screen.getAllByTestId("vote-continue");
     expect(continueButtons[1]).toHaveAttribute("aria-pressed", "false");
     expect(replaceButtons[1]).toHaveAttribute("aria-pressed", "false");
+  });
+
+  describe("sentiment display (second corrective pass, Part 9-11)", () => {
+    it("shows 'No votes yet' rather than a misleading 0%/0% when nobody has voted", async () => {
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      await waitFor(() => expect(supabaseFrom).toHaveBeenCalled());
+      expect(screen.getByTestId("speaker-vote-sentiment")).toHaveTextContent("No votes yet");
+    });
+
+    it("shows Continue/Replace percentages once votes exist, computed from the authoritative tally", async () => {
+      supabaseVotesData.current = [
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "replace" },
+      ];
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      await waitFor(() => expect(screen.getByTestId("speaker-vote-sentiment")).toHaveTextContent("75%"));
+      expect(screen.getByTestId("speaker-vote-sentiment")).toHaveTextContent("25%");
+    });
+
+    it("does not poll vote tallies until the panel is actually opened", () => {
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      expect(supabaseFrom).not.toHaveBeenCalled();
+    });
+
+    it("shows the viewer's own selection distinctly from the sentiment percentages", async () => {
+      supabaseVotesData.current = [
+        { event_speakers_id: "s1", choice: "continue" },
+        { event_speakers_id: "s1", choice: "replace" },
+      ];
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      fireEvent.click(screen.getByTestId("vote-replace"));
+      await waitFor(() => expect(screen.getByTestId("speaker-vote-sentiment")).toHaveTextContent("50%"));
+      expect(screen.getByTestId("vote-replace")).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  describe("final-10s emphasis (Part 13)", () => {
+    it("shows a 'Vote · Ns' countdown on the trigger once a round nears its shared deadline", () => {
+      render(
+        <SpeakerVotePanel speakers={[speaker({ id: "s1", round_ends_at: new Date(Date.now() + 8_000).toISOString() })]} isPreviewBuild={false} />,
+      );
+      expect(screen.getByTestId("vote-emphasis-countdown")).toBeInTheDocument();
+    });
+
+    it("shows no countdown far from the deadline", () => {
+      render(
+        <SpeakerVotePanel speakers={[speaker({ id: "s1", round_ends_at: new Date(Date.now() + 45_000).toISOString() })]} isPreviewBuild={false} />,
+      );
+      expect(screen.queryByTestId("vote-emphasis-countdown")).not.toBeInTheDocument();
+    });
+
+    it("does not open the panel automatically just because the deadline is near", () => {
+      render(
+        <SpeakerVotePanel speakers={[speaker({ id: "s1", round_ends_at: new Date(Date.now() + 8_000).toISOString() })]} isPreviewBuild={false} />,
+      );
+      expect(screen.queryByTestId("speaker-vote-panel")).not.toBeInTheDocument();
+    });
   });
 });

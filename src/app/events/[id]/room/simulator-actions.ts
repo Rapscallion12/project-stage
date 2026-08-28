@@ -59,6 +59,7 @@ import {
 } from "@/lib/repositories/speaker-requests";
 import { claimSpeakerSeat, endSpeakerSeat, castSpeakerRoundVoteAsGuest } from "@/lib/repositories/event-speakers";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import { ensureStageRound } from "@/lib/repositories/stage-rounds";
 import type { SeatResolutionOutcome } from "@/lib/repositories/stage-rounds";
 import { findOpenSeat } from "@/lib/speaker-queue";
 import { resolveStageRoundAction, resolveSeatClosingAction, ensureActiveSelectionRound } from "./actions";
@@ -246,6 +247,21 @@ export type ResetSimulatorSessionResult = {
  *    transitively to any remaining `speaker_request_votes` on it, and to
  *    any remaining `event_chat_message_reactions` on it (e.g. a real
  *    like on a fake comment — same reasoning as step 4).
+ * 6. `stage_rounds` (issue #21, second corrective pass) — the shared
+ *    round clock is deleted outright, but *only* when step 4 leaves the
+ *    event with zero occupied seats at all (real or simulated): with
+ *    nobody seated, nothing could possibly depend on that row's
+ *    round_number/deadline surviving, and dropping it is what lets the
+ *    *next* Start Simulated Session begin cleanly at "Round 1" instead
+ *    of continuing to increment a stale counter — the explicit product
+ *    requirement for Reset. If a real speaker is still seated (a mixed
+ *    real+simulated stage), the row is never deleted — only resynced via
+ *    `ensureStageRound`, the same self-healing call every seat-vacate
+ *    path already makes, so their own shared round state is reduced to
+ *    match the new (likely solo, `awaiting_pairing`) occupancy rather
+ *    than being destroyed. Same "shared production state — resync,
+ *    never blind-delete" precedent this doc comment already applies to
+ *    `speaker_selection_rounds` below.
  *
  * **`speaker_selection_rounds` is deliberately left untouched.** It has
  * no guest/profile column at all, and its only writer,
@@ -303,6 +319,18 @@ export async function resetSimulatorSession(eventId: string, guestIds: string[])
     .delete({ count: "exact" })
     .eq("event_id", eventId)
     .in("author_guest_id", guestIds);
+
+  const { count: remainingOccupied } = await supabase
+    .from("event_speakers")
+    .select("*", { count: "exact", head: true })
+    .eq("event_id", eventId)
+    .is("left_at", null);
+
+  if ((remainingOccupied ?? 0) === 0) {
+    await supabase.from("stage_rounds").delete().eq("event_id", eventId);
+  } else {
+    await ensureStageRound(eventId);
+  }
 
   return {
     messagesDeleted: messagesDeleted ?? 0,

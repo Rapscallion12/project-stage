@@ -11,7 +11,53 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Fixed
+
+- **Session Simulator: seeding race, shared-round timer placement,
+  Reset leaving a stale round counter** (issue #21, second corrective
+  pass) — real-device testing found `ensure_stage_round`'s cold-start
+  INSERT had no conflict handling: two seats claimed within the same
+  instant (the simulator's own concurrent seeding, or two real people
+  tapping both open seats together) could race a genuine database bug
+  that silently rolled back one seat's claim entirely, intermittently
+  leaving only one speaker seated. Fixed at the database layer
+  (migration 28), plus the simulator now seeds seats sequentially with
+  step-by-step progress reporting ("Seeding Seat 1…", "Seeding Seat
+  2…", "Starting Round 1…") and surfaces a genuine failure's real error
+  message instead of a generic one. The shared round timer badge
+  previously overlapped the room header (both sat at the same top-of-
+  screen position); it now sits at the visual seam between the two
+  speaker tiles, in both orientations. Reset Session now clears the
+  shared `stage_rounds` row when it leaves the stage empty, so the next
+  session starts cleanly at "Round 1" instead of continuing a stale
+  counter — and correctly resyncs (never deletes) it when a real
+  speaker is still seated, so their own round state is never destroyed.
+  See DECISIONS.md.
+
 ### Added
+
+- **Weighted-selection observability + Continue/Replace vote detail in
+  the Session Simulator** (issue #21, second corrective pass) — a
+  replaced speaker not being who was expected is answerable now: the
+  panel shows the frozen Top 3 (name, vote count, and the real weighted
+  odds each rank actually drew against — never invented math), which
+  candidate was selected, and whether they're still joining or have
+  promoted into a specific seat. Each occupied seat's Continue/Replace
+  block now shows raw counts, percentages, and the total votes cast, all
+  read from the same authoritative tally the round resolver uses.
+- **Audience Vote surface now shows live sentiment** (issue #21, second
+  corrective pass) — opening the Vote panel shows each speaker's
+  Continue/Replace percentages (a compact two-color bar), reusing the
+  exact same tally/percentage calculation the resolver and the
+  simulator both use. Zero participation reads "No votes yet · defaults
+  to Continue" rather than a bare 0%/0% that could look like a real,
+  decided sentiment. A speaker whose round has entered its Final 30s
+  closing period shows "Replacement decided" and its Continue/Replace
+  buttons disappear entirely — that outcome is already locked, not open
+  for another vote. As a round's shared deadline approaches its final
+  ~10 seconds, the Vote trigger itself gains a "Vote · Ns" countdown
+  label and increased visual emphasis, without ever auto-opening the
+  panel. See DECISIONS.md.
 
 - **Discussion Expanded** (issue #21) — a tap-opened bottom sheet for
   intentionally browsing the live comment stream, opened from an

@@ -853,6 +853,34 @@ different dependencies. Current order:
       rather than resolving immediately, new "Resolve Round Now"
       control. Full suite 899/899, lint/tsc/build clean. See
       DECISIONS.md and SESSION_LOG.md's Session 42.
+      **Second corrective pass (2026-08-28, same branch)**: traced the
+      simulator's intermittent incomplete-seeding bug to a real database
+      race — `ensure_stage_round`'s cold-start INSERT had no conflict
+      handling, so two seats claimed within the same instant (concurrent
+      simulator seeding, or two real people) could roll back one seat's
+      claim entirely via an uncaught unique-constraint violation, exactly
+      matching the "Stop/Start fixes it" symptom. Fixed in the database
+      (migration 28: `ON CONFLICT DO NOTHING` plus reading occupancy
+      after the round row locks), verified with a real-`Promise.all`
+      concurrency test; simulator seeding also made sequential with
+      per-step progress logging. Round timer moved from the stage's top
+      edge (overlapping the room header's own top-of-screen chrome) to
+      dead center — the seam between the two equal-width/height tiles in
+      both orientations. Investigated a "wrong candidate replaced the
+      speaker" report by re-reading the weighted-selection algorithm end
+      to end — found no bug (a rank-1 candidate losing the draw ~33-50%
+      of the time is the agreed design) — delivered observability instead
+      of touching it: the simulator now shows the frozen Top 3 with real
+      weighted odds, the selected candidate, and joining/promoted status.
+      Reset Session now deletes the shared `stage_rounds` row when it
+      leaves the stage empty (clean "Round 1" next time) or resyncs
+      (never deletes) it when a real speaker remains seated. Audience
+      Vote panel gained live Continue/Replace percentages (polled only
+      while open), a "No votes yet" zero-participation state, a locked
+      "Replacement decided" presentation during Final 30s, and a
+      "Vote · Ns" final-10s emphasis label. Full suite 919/919,
+      lint/tsc/build clean. See DECISIONS.md and SESSION_LOG.md's
+      Session 43.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
