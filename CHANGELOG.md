@@ -11,6 +11,62 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Changed
+
+- **Next-speaker selection is now deterministic — highest votes wins**
+  (issue #21, third corrective pass) — replaces the previous weighted-
+  random draw among a frozen Top 3 (fixed rank weights, 50/33/17 odds)
+  entirely. The eligible Request-to-Speak candidate with the most
+  audience votes is selected; an exact tie is broken by the earliest
+  still-active request — both authoritative in the database
+  (`freeze_speaker_candidates`' existing ranking already ordered by
+  `vote_count desc, created_at asc, id asc`), shared identically by real
+  users and the simulator, never re-derived per caller. `lib/speaker-
+  selection.ts` (the weighted-draw module) is retired entirely, not left
+  half-active. A candidate can withdraw their Request-to-Speak at any
+  point before actually occupying the seat — while simply waiting in the
+  pool, or during their own Going Live transition — immediately removing
+  them from eligibility; the next-highest-voted eligible candidate is
+  authorized in their place, using the same deterministic ranking, never
+  a fresh random draw. The Session Simulator now shows "Next Speaker"
+  observability (frozen ranking, selected candidate, and a plain-language
+  reason — "Highest vote count" or "Tied at N votes · earlier request")
+  with no weighted-odds display, and occasionally withdraws a simulated
+  candidate's own pending request as part of natural simulated activity.
+  See DECISIONS.md.
+- **Seat claims after initial stage formation require Request-to-Speak
+  selection authorization** (issue #21, third corrective pass,
+  real-device finding) — after a speaker was removed, tapping the newly
+  open seat let the tapper become the next speaker directly, bypassing
+  Request-to-Speak entirely. The stage now distinguishes *initial
+  formation* (before the event's first two speakers are both seated —
+  direct joins remain available, as always) from *ongoing replacement*
+  (an empty seat is controlled by selection, never first-tap): once
+  established — permanently, for the rest of the event — a direct seat
+  claim is rejected server-side (`claim_speaker_seat` itself, migration
+  00000000000029, re-checking authorization at the source of truth, not
+  merely trusted from the caller) unless the claiming identity is the
+  event's currently authorized selected candidate. An unauthorized claim
+  loses even when submitted concurrently with the authorized candidate's
+  own claim — never a race. The empty-seat tile itself stops being
+  tappable and shows "Selecting next speaker…" instead of a misleading
+  "Tap to join" CTA. See DECISIONS.md.
+- **Vote surface now shows live sentiment, and dismisses like an ordinary
+  popover** (issue #21, third corrective pass) — tapping outside the
+  open Vote panel, or pressing Escape, closes it; the viewer's own
+  Continue/Replace selection is never erased by closing it, and reopening
+  shows the same choice highlighted.
+- **Avatars in Expanded Comments and the ambient comment feed** (issue
+  #21, third corrective pass, real-device finding: no avatar/placeholder
+  was visible at all for either surface) — a new shared
+  `ParticipantAvatar` component (profile-photo-ready, currently always
+  falling through to an initials placeholder since no such column exists
+  yet) replaces the previous bare-text rows, and replaces `SpeakerTile`'s
+  own four duplicated inline initials circles — one canonical avatar
+  presentation, reused everywhere, not a second avatar system per
+  surface. Works identically for authenticated, guest, and simulated
+  identities, since all three already resolve to a plain display name.
+
 ### Fixed
 
 - **Session Simulator: seeding race, shared-round timer placement,

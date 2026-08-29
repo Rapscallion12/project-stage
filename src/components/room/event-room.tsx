@@ -204,11 +204,20 @@ export function EventRoom({
         void refetchSpeakers();
         return;
       }
-      if (result.reason === "queue-exists") {
+      if (result.reason === "queue-exists" || result.reason === "selection-required") {
         // Issue #27's explicit queue-protection UX: a bystander tapping
         // an empty tile when a real queue exists falls back to the
         // normal request flow instead of being told "no" and left
-        // stranded — this is that fallback, not an error.
+        // stranded — this is that fallback, not an error. Issue #21,
+        // third corrective pass: `selection-required` means the same
+        // fallback applies for a different reason — the stage has moved
+        // past initial formation, so this seat is never directly
+        // tappable again regardless of queue length; submitting a
+        // Request-to-Speak is the only path to it now. This branch
+        // shouldn't even be reachable in practice once SpeakerStage
+        // stops wiring `onTapEmptySeat` at all for an established-stage
+        // empty seat (see that component's own doc comment) — kept as a
+        // defensive fallback for a stale client, never trusted alone.
         setMicRequestMode(true);
         return;
       }

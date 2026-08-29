@@ -224,11 +224,26 @@ export async function leaveSpeakerSeatAsGuest(eventId: string, guestId: string):
  * could invoke directly. See DECISIONS.md's authorization-model entries
  * for issues #13 and #16.
  */
+/**
+ * `bypassSelectionAuthorization` (issue #21, third corrective pass —
+ * migration 00000000000029): once a stage has ever been established
+ * (both seats occupied simultaneously at least once), the RPC itself
+ * rejects a direct claim unless the claiming identity is the event's
+ * currently authorized Request-to-Speak candidate — re-checked at the
+ * source of truth, not merely trusted from the caller. Defaults to
+ * `false` for every ordinary caller (`joinOpenSeat`, `claimOpenSeat`,
+ * `simulateAdvanceSelection`); `true` is reserved for the Session
+ * Simulator's own `simulateSeedSpeaker` bootstrapping adapter, which
+ * still cannot steal an already-occupied seat (migration
+ * 00000000000024's guard applies unconditionally regardless of this
+ * flag) — see that migration's own doc comment for the full reasoning.
+ */
 export async function claimSpeakerSeat(
   eventId: string,
   identity: SeatIdentity,
   seatNumber: 1 | 2,
   guestDisplayName?: string,
+  bypassSelectionAuthorization = false,
 ): Promise<EventSpeaker> {
   const supabase = createServiceClient();
   const { data, error } = await supabase.rpc("claim_speaker_seat", {
@@ -237,6 +252,7 @@ export async function claimSpeakerSeat(
     p_profile_id: identity.type === "profile" ? identity.id : undefined,
     p_guest_id: identity.type === "guest" ? identity.id : undefined,
     p_guest_display_name: identity.type === "guest" ? guestDisplayName : undefined,
+    p_bypass_selection_authorization: bypassSelectionAuthorization,
   });
   if (error || !data) {
     throw new Error(error?.message ?? "claim_speaker_seat returned no row");

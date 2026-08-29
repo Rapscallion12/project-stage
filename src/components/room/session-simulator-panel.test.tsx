@@ -655,13 +655,13 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByText("No candidate selection in progress")).toBeInTheDocument();
     });
 
-    it("shows the frozen Top 3 with rank, vote counts, and the real weighted odds — never invented math", () => {
+    it("shows the frozen Top 3 with rank and vote counts, no weighted odds — highest votes wins", () => {
       render(
         <SessionSimulatorPanel
           {...baseProps}
           pendingRequests={[
-            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: false }),
-            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 5, is_current_candidate: true }),
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: true }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 5, is_current_candidate: false }),
             request({ id: "r3", guest_id: "g3", message_id: "m3", frozen_rank: 3, frozen_vote_count: 3, is_current_candidate: false }),
           ]}
           messages={
@@ -674,15 +674,33 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         />,
       );
       const candidates = screen.getAllByTestId("sim-frozen-candidate");
-      expect(candidates[0]).toHaveTextContent("#1 Calm Sparrow — 8 votes — 50%");
-      expect(candidates[1]).toHaveTextContent("#2 Eager Deer — 5 votes — 33%");
-      expect(candidates[1]).toHaveTextContent("selected");
-      expect(candidates[2]).toHaveTextContent("#3 Restless Wolf — 3 votes — 17%");
+      expect(candidates[0]).toHaveTextContent("#1 Calm Sparrow — 8 votes");
+      expect(candidates[0]).toHaveTextContent("selected");
+      expect(candidates[0]).not.toHaveTextContent("%");
+      expect(candidates[1]).toHaveTextContent("#2 Eager Deer — 5 votes");
+      expect(candidates[2]).toHaveTextContent("#3 Restless Wolf — 3 votes");
 
-      // #2 won the weighted draw despite #1 having more votes — exactly
-      // the "was this a bug, or legitimate randomness" case this
-      // observability exists to answer.
-      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("Selected: Eager Deer");
+      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("Selected: Calm Sparrow");
+      expect(screen.getByTestId("sim-selection-reason")).toHaveTextContent("Highest vote count");
+    });
+
+    it("explains a tie as the reason, not a weighted draw — earliest request wins", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: true }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 8, is_current_candidate: false }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Calm Sparrow", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Eager Deer", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      expect(screen.getByTestId("sim-selection-reason")).toHaveTextContent("Tied at 8 votes · earlier request");
     });
 
     it("reports 'joining' before the candidate occupies a seat, and 'promoted (Seat N)' once they do — the same identity, read from the real speakers list, never a separate guess", () => {

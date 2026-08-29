@@ -70,22 +70,34 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
       .is("left_at", null);
   }
 
-  /** Claims a fresh seat 1 for speaker1 only — vacates BOTH seat numbers first (position-independent, safe to call regardless of what an earlier test left behind), then leaves seat 2 vacant so the stage stays awaiting_pairing. */
+  /**
+   * Claims a fresh seat 1 for speaker1 only — vacates BOTH seat numbers
+   * first (position-independent, safe to call regardless of what an
+   * earlier test left behind), then leaves seat 2 vacant so the stage
+   * stays awaiting_pairing. Passes `bypassSelectionAuthorization: true`
+   * (issue #21, third corrective pass) — this file is about the shared
+   * round clock, not about Request-to-Speak selection authorization
+   * (which has its own dedicated test file,
+   * seat-claim-authorization.test.ts), and this same shared event
+   * legitimately becomes "established" partway through this file's own
+   * test sequence, which would otherwise make every later claim here
+   * fail a check unrelated to what's actually under test.
+   */
   async function claimSeat1Only(): Promise<string> {
     await endExistingSeat("speaker1");
     await endExistingSeat("speaker2");
     await service.from("event_speakers").update({ left_at: new Date().toISOString(), left_reason: "voluntary" }).eq("event_id", eventId).in("seat_number", [1, 2]).is("left_at", null);
-    const row = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker1.id }, 1);
+    const row = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker1.id }, 1, undefined, true);
     return row.id;
   }
 
-  /** Claims fresh seats for both speaker1 (seat 1) and speaker2 (seat 2) — the pairing that starts the shared round. Ends any existing occupant of either seat number first, same "clean seat" discipline as the old file's claimFreshSeat. */
+  /** Claims fresh seats for both speaker1 (seat 1) and speaker2 (seat 2) — the pairing that starts the shared round. Ends any existing occupant of either seat number first, same "clean seat" discipline as the old file's claimFreshSeat. Bypasses selection authorization — see `claimSeat1Only`'s own doc comment for why. */
   async function claimBothSeats(): Promise<[string, string]> {
     await endExistingSeat("speaker1");
     await endExistingSeat("speaker2");
     await service.from("event_speakers").update({ left_at: new Date().toISOString(), left_reason: "voluntary" }).eq("event_id", eventId).in("seat_number", [1, 2]).is("left_at", null);
-    const row1 = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker1.id }, 1);
-    const row2 = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker2.id }, 2);
+    const row1 = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker1.id }, 1, undefined, true);
+    const row2 = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker2.id }, 2, undefined, true);
     return [row1.id, row2.id];
   }
 
@@ -326,8 +338,11 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     expect(round.phase).toBe("awaiting_pairing");
     const roundNumberWhileWaiting = round.round_number;
 
-    // Refilling seat 2 starts the next shared round for the resulting pairing.
-    const newSeat2 = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker2.id }, 2);
+    // Refilling seat 2 starts the next shared round for the resulting
+    // pairing. Bypasses selection authorization — see `claimSeat1Only`'s
+    // own doc comment; this test is about round bookkeeping, not
+    // Request-to-Speak selection.
+    const newSeat2 = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.speaker2.id }, 2, undefined, true);
     round = await getStageRound();
     expect(round.phase).toBe("active");
     expect(round.round_number).toBe(roundNumberWhileWaiting + 1);

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExpandedComments } from "./expanded-comments";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
@@ -79,6 +79,38 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     render(<ExpandedComments {...baseProps} open onClose={onClose} messages={[]} />);
     fireEvent.click(screen.getByTestId("expanded-comments-close"));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("avatars (issue #21, third corrective pass — real-device finding: no avatar/placeholder was visible at all)", () => {
+    it("shows an initials placeholder for each comment row, since no profile-image column exists yet", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ author_display_name: "Jamie Rivera" })]} />);
+      const row = screen.getByTestId("expanded-comment-row");
+      expect(within(row).getByTestId("participant-avatar-initials")).toHaveTextContent("JA");
+    });
+
+    it("shows a placeholder for a guest identity the same way as an authenticated one — identity-agnostic", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ author_profile_id: null, author_guest_id: "g1", author_display_name: "Curious Fox" })]}
+        />,
+      );
+      expect(within(screen.getByTestId("expanded-comment-row")).getByTestId("participant-avatar-initials")).toHaveTextContent("CU");
+    });
+
+    it("shows a placeholder for a Request-to-Speak row in Top Speaker Requests too", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", author_display_name: "Dapper Rabbit", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1" })]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-top-request-row");
+      expect(within(row).getByTestId("participant-avatar-initials")).toHaveTextContent("DA");
+    });
   });
 
   describe("Recent Comments — newest to oldest, frozen snapshot", () => {

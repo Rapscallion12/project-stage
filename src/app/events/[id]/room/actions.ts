@@ -36,7 +36,7 @@ import {
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
 import { decideClaimEligibility, findOpenSeat, type ClaimDecision } from "@/lib/speaker-queue";
-import { selectWeightedCandidate } from "@/lib/speaker-selection";
+import { isStageEstablished } from "@/lib/repositories/stage-rounds";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 export type GetLiveKitTokenResult = { token: string } | { error: string };
@@ -220,26 +220,38 @@ const CLAIM_REJECTION_MESSAGES = {
 } as const;
 
 /**
- * Issue #21, Phase 1: ensures a seat opening has an active, resolved
- * selection round before eligibility is checked — the freeze (rank the
- * current pending pool, snapshot the Top 3) and the weighted-random pick
- * both happen here, lazily, on first need, rather than via a background
- * job (this serverless deployment has none — same reasoning every other
- * "evaluate on next real activity" mechanism in this codebase already
- * uses, see DECISIONS.md's voting-window entry).
+ * Issue #21, third corrective pass: selection is now deterministic —
+ * "the eligible Request-to-Speak candidate with the most audience votes
+ * wins," no weighted/random draw. `freeze_speaker_candidates`
+ * (migration 00000000000019/20) already ranks its snapshot by
+ * `vote_count desc, created_at asc, id asc` — highest votes first,
+ * earliest request breaking a tie — so `rank 1` *is* the deterministic
+ * winner; no separate tiebreak logic is needed here, and the ordering is
+ * authoritative in the database, shared identically by every caller
+ * (real users and the simulator alike), not re-derived per caller. The
+ * previous weighted-random system (`lib/speaker-selection.ts`,
+ * `SELECTION_RANK_WEIGHTS`, `Math.random()`) is retired entirely — see
+ * DECISIONS.md for why (simplicity, predictability, a direct connection
+ * between votes and outcome, per explicit instruction not to leave it
+ * half-active).
+ *
+ * Ensures a seat opening has an active, resolved selection round before
+ * eligibility is checked — the freeze (snapshot the eligible pool) and
+ * the deterministic pick both happen here, lazily, on first need, rather
+ * than via a background job (this serverless deployment has none — same
+ * reasoning every other "evaluate on next real activity" mechanism in
+ * this codebase already uses, see DECISIONS.md's voting-window entry).
  *
  * Safe to call on every poll: `freezeSpeakerCandidates` is itself
  * idempotent (returns the existing active round's candidates instead of
  * erroring if one's already in flight — see migration
- * 00000000000020) — this function only performs the weighted pick when
- * the round doesn't already have one (`is_current` false on every
- * returned candidate), so a second/third call never re-rolls the dice
- * for an already-decided round.
- *
- * The weighted pick itself (`selectWeightedCandidate`, `Math.random()`)
- * runs here — in a Server Action, on the server — never in a client
- * component, satisfying "the authoritative selection must happen
- * server-side."
+ * 00000000000020) — this function only performs the pick when the round
+ * doesn't already have one (`is_current` false on every returned
+ * candidate), so a second/third call never re-decides an already-decided
+ * round. A withdrawn/declined winner's fallback to the next-ranked
+ * candidate is handled entirely by `withdraw_speaker_request(_as_guest)`
+ * itself (same frozen `rank` order, migration 00000000000019) — this
+ * function only ever makes the *first* pick for a freshly frozen round.
  *
  * Exported (not just used internally by `resolveClaimDecision`) so
  * `simulator-actions.ts`'s `simulateAdvanceSelection` can trigger the
@@ -254,13 +266,8 @@ export async function ensureActiveSelectionRound(eventId: string): Promise<void>
   if (candidates.length === 0) return;
   if (candidates.some((c) => c.is_current)) return;
 
-  const winnerId = selectWeightedCandidate(
-    candidates.map((c) => ({ requestId: c.request_id, rank: c.rank })),
-    Math.random(),
-  );
-  if (winnerId) {
-    await setCurrentSpeakerCandidate(candidates[0].round_id, winnerId);
-  }
+  const winner = candidates.find((c) => c.rank === 1) ?? candidates[0];
+  await setCurrentSpeakerCandidate(winner.round_id, winner.request_id);
 }
 
 /**
@@ -311,8 +318,9 @@ async function resolveClaimDecision(
  * mechanism, just client-side UX; this is still the one and only place
  * eligibility is actually decided and enforced.
  *
- * Issue #21, Phase 1: with the weighted-random selection round now in
- * play, there is at most *one* eligible identity at a time (the round's
+ * Issue #21, Phase 1 (selection now deterministic — third corrective
+ * pass): with a selection round in play, there is at most *one* eligible
+ * identity at a time (the round's
  * `is_current_candidate`) rather than the old top-3-race model's several
  * simultaneously-eligible requesters — the race-safety note below is
  * about `claim_speaker_seat`'s own unique-index protection against a
@@ -419,6 +427,25 @@ export type JoinOpenSeatResult =
    * handling of this reason.
    */
   | { ok: false; reason: "already-speaking"; seatNumber: 1 | 2 }
+  /**
+   * Issue #21, third corrective pass (real-device finding): once the
+   * event's stage has ever achieved its initial two-speaker pairing,
+   * tapping a newly-empty seat can no longer claim it directly — that
+   * seat is controlled by Request-to-Speak selection now, not first-tap.
+   * A distinct, typed reason (not folded into `queue-exists`, even
+   * though the caller's own UI currently treats them the same way —
+   * falling back to the composer's request mode) because they mean
+   * different things: `queue-exists` is "other people are already
+   * waiting, join the queue too"; this is "direct joins are never
+   * available here anymore, regardless of queue length." See
+   * `isStageEstablished` (lib/repositories/stage-rounds.ts) for the
+   * authoritative signal, and migration 00000000000029's
+   * `claim_speaker_seat` for the actual, database-level enforcement this
+   * check exists only to give a clean early message for — a client that
+   * somehow reached the claim below anyway would still be rejected
+   * there, never trusted based on this check alone.
+   */
+  | { ok: false; reason: "selection-required" }
   | { ok: false; reason: "error"; error: string };
 
 /**
@@ -429,7 +456,18 @@ export type JoinOpenSeatResult =
  * there's no ranking to go through. No request message, no separate
  * claim step: one tap, one round-trip.
  *
- * Queue protection is the actual point of this function, checked here
+ * **Only available during initial stage formation** (issue #21, third
+ * corrective pass) — once the event's stage has ever achieved its
+ * initial two-speaker pairing, this refuses outright regardless of
+ * whether a seat happens to be empty right now (`isStageEstablished`,
+ * checked before the queue-protection check below); an empty seat after
+ * that point is controlled by Request-to-Speak selection
+ * (`claimOpenSeat`), not this function. The database's own
+ * `claim_speaker_seat` (migration 00000000000029) enforces the same rule
+ * independently — this early check exists only for a clean typed
+ * rejection, never as the actual authority.
+ *
+ * Queue protection is the second point of this function, checked here
  * server-side (never trusted from the client): if *any* pending
  * `speaker_requests` exist for the event, this refuses outright and
  * returns `"queue-exists"` — the caller (the empty tile's tap handler)
@@ -460,6 +498,10 @@ export async function joinOpenSeat(eventId: string): Promise<JoinOpenSeatResult>
   const alreadySeated = await getActiveSeatForIdentity(eventId, identity);
   if (alreadySeated) {
     return { ok: false, reason: "already-speaking", seatNumber: alreadySeated.seat_number };
+  }
+
+  if (await isStageEstablished(eventId)) {
+    return { ok: false, reason: "selection-required" };
   }
 
   const [activeSpeakers, ranked] = await Promise.all([

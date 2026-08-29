@@ -30,7 +30,7 @@ export type SpeakerRequest = {
   frozen_rank: number | null;
   /** Vote count snapshot at freeze time — null until frozen. */
   frozen_vote_count: number | null;
-  /** True for exactly one request per active round — the current weighted-random pick, or the current runner-up after an advance. */
+  /** True for exactly one request per active round — the current deterministic (highest-votes) pick, or the current runner-up after an advance. */
   is_current_candidate: boolean;
   /** True once this request was the current candidate and failed to claim the seat (withdrew) — excluded from future re-selection within the same round, per Section D. */
   selection_failed: boolean;
@@ -321,7 +321,7 @@ export async function freezeSpeakerCandidates(eventId: string): Promise<FrozenCa
   }));
 }
 
-/** Commits the weighted-random pick (or a runner-up advancement) computed in application code — see lib/speaker-selection.ts. Trusted-server-only. */
+/** Commits the deterministic highest-votes pick (or a runner-up advancement) computed in application code — see actions.ts' `ensureActiveSelectionRound`. Trusted-server-only. */
 export async function setCurrentSpeakerCandidate(roundId: string, requestId: string): Promise<void> {
   const supabase = createServiceClient();
   const { error } = await supabase.rpc("set_current_speaker_candidate", {

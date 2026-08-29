@@ -5,6 +5,7 @@ import {
   simulateLike,
   simulateRequestToSpeak,
   simulateRequestVote,
+  simulateWithdrawRequest,
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
@@ -50,6 +51,11 @@ describe("simulator-actions (issue #21, Part 5) — refuse to run on production"
   it("simulateRequestVote throws on production", async () => {
     process.env.VERCEL_ENV = "production";
     await expect(simulateRequestVote("e1", "m1", "g1")).rejects.toThrow(/not available/);
+  });
+
+  it("simulateWithdrawRequest throws on production", async () => {
+    process.env.VERCEL_ENV = "production";
+    await expect(simulateWithdrawRequest("e1", "g1")).rejects.toThrow(/not available/);
   });
 
   it("simulateRoundVote throws on production", async () => {
@@ -345,8 +351,12 @@ describe.skipIf(!hasServiceCredentials)("resetSimulatorSession (real database) �
   it("resyncs (never deletes) the shared stage_rounds row when a real speaker is still seated after Reset — real state is untouched, never destroyed", async () => {
     const realGuestId = crypto.randomUUID();
     const simGuestId = crypto.randomUUID();
-    const realSeat = await claimSpeakerSeat(eventId, { type: "guest", id: realGuestId }, 1, "Real Speaker");
-    await claimSpeakerSeat(eventId, { type: "guest", id: simGuestId }, 2, "Sim Speaker");
+    // Bypasses selection authorization (issue #21, third corrective
+    // pass) — this shared event may already be "established" from an
+    // earlier test in this file, which is irrelevant to what's under
+    // test here (Reset's own stage_rounds handling).
+    const realSeat = await claimSpeakerSeat(eventId, { type: "guest", id: realGuestId }, 1, "Real Speaker", true);
+    await claimSpeakerSeat(eventId, { type: "guest", id: simGuestId }, 2, "Sim Speaker", true);
 
     try {
       await resetSimulatorSession(eventId, [simGuestId]);

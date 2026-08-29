@@ -53,6 +53,7 @@ import { insertMessage, insertReaction } from "@/lib/repositories/chat";
 import {
   requestToSpeakAsGuest,
   castSpeakerRequestVoteAsGuest,
+  withdrawSpeakerRequestAsGuest,
   freezeSpeakerCandidates,
   markSpeakerRequestGranted,
   resetSpeakerCandidatePool,
@@ -116,12 +117,49 @@ export async function simulateRequestVote(eventId: string, messageId: string, gu
   await castSpeakerRequestVoteAsGuest(eventId, messageId, guestId);
 }
 
+/**
+ * Issue #21, third corrective pass, item 18: natural simulated audience
+ * behavior occasionally changes its mind, same as real people — a
+ * pending Request-to-Speak candidate withdrawing before selection ever
+ * happens, exercising the exact same "next-highest-voted candidate wins"
+ * re-ranking (`withdraw_speaker_request_as_guest`, migration 19) a real
+ * user's own withdrawal would. Calls the exact real RPC a real guest's
+ * own "Cancel Request" tap would — no simulator-specific withdrawal
+ * logic. Already a safe no-op (returns `null`, never throws) if the
+ * request was already granted/withdrawn/expired by the time this fires —
+ * see `withdrawSpeakerRequestAsGuest`'s own doc comment.
+ */
+export async function simulateWithdrawRequest(eventId: string, guestId: string) {
+  assertSimulatorAvailable();
+  await withdrawSpeakerRequestAsGuest(eventId, guestId);
+}
+
 export async function simulateRoundVote(eventSpeakersId: string, choice: "continue" | "replace", guestId: string) {
   assertSimulatorAvailable();
   await castSpeakerRoundVoteAsGuest(eventSpeakersId, choice, guestId);
 }
 
-/** Bootstraps the initial "2 speakers, where appropriate" seed (Part 5) — skips the request/selection preamble purely for quick setup convenience, but still goes through the exact real `claim_speaker_seat` RPC (its own uniqueness/race-safety included), not a raw insert. Every subsequent speaker change from this point on flows through the real round-resolution -> Phase 1 selection pipeline, same as any other seat. */
+/**
+ * Bootstraps the initial "2 speakers, where appropriate" seed (Part 5) —
+ * skips the request/selection preamble purely for quick setup
+ * convenience, but still goes through the exact real `claim_speaker_seat`
+ * RPC (its own uniqueness/race-safety included), not a raw insert. Every
+ * subsequent speaker change from this point on flows through the real
+ * round-resolution -> Phase 1 selection pipeline, same as any other seat.
+ *
+ * The one caller in this file that passes `bypassSelectionAuthorization:
+ * true` (issue #21, third corrective pass, migration 00000000000029) —
+ * this is a manual, operator-triggered re-seed tool ("Seed 2 Speakers"),
+ * used for deterministic test setup even after the stage has already
+ * been established once, when the real Request-to-Speak authorization
+ * check would otherwise correctly refuse it (nobody is the currently
+ * selected candidate at that moment). Still cannot steal an
+ * already-occupied seat — migration 00000000000024's guard applies
+ * unconditionally regardless of this flag. `simulateAdvanceSelection`
+ * below deliberately does *not* use this bypass: it claims on behalf of
+ * a real, frozen, authorized winner, so it exercises the exact same
+ * authorization check a real user's claim would.
+ */
 export async function simulateSeedSpeaker(
   eventId: string,
   guestId: string,
@@ -129,7 +167,7 @@ export async function simulateSeedSpeaker(
   seatNumber: 1 | 2,
 ) {
   assertSimulatorAvailable();
-  await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, seatNumber, displayName);
+  await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, seatNumber, displayName, true);
 }
 
 /** "Open Speaker Seat" deterministic test-panel action — ends whichever seat is asked for, the same `end_speaker_seat` RPC a moderator-removal would use. Real eviction, not a display trick: the seat is genuinely open afterward, picked up by Phase 1's own polling exactly like any other opening. */

@@ -6,6 +6,7 @@ import {
   simulateLike,
   simulateRequestToSpeak,
   simulateRequestVote,
+  simulateWithdrawRequest,
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
@@ -24,7 +25,6 @@ import {
 } from "@/lib/simulator/identities";
 import { jitteredDelayMs, randomOrdinaryComment, randomSpeakerRequestComment } from "@/lib/simulator/content";
 import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
-import { SELECTION_RANK_WEIGHTS } from "@/lib/speaker-selection";
 import { useNow } from "@/hooks/use-now";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -32,17 +32,21 @@ import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
 
 /**
- * The exact same rank-weighted odds `selectWeightedCandidate`
- * (`lib/speaker-selection.ts`) actually draws against — reusing
- * `SELECTION_RANK_WEIGHTS` directly rather than re-deriving the curve,
- * per Part 19's "reuse production decision logic, do not duplicate
- * business rules." Display-only: this never influences the real draw,
- * which happens once, server-side, in `ensureActiveSelectionRound`.
+ * Issue #21, third corrective pass: selection is now deterministic —
+ * highest vote count wins, earliest active request breaks a tie (the
+ * exact order `freeze_speaker_candidates` already ranks by). This
+ * mirrors that same reasoning purely for the observability label, never
+ * deciding anything itself — the real pick happens once, server-side, in
+ * `ensureActiveSelectionRound`.
  */
-function weightedSelectionOdds(count: number): number[] {
-  const weights = Array.from({ length: count }, (_, i) => SELECTION_RANK_WEIGHTS[i] ?? 1);
-  const total = weights.reduce((sum, w) => sum + w, 0);
-  return weights.map((w) => (w / total) * 100);
+function selectionReason(frozen: RankedPendingRequest[]): string {
+  const winner = frozen.find((r) => r.frozen_rank === 1);
+  if (!winner) return "";
+  const runnerUp = frozen.find((r) => r.frozen_rank === 2);
+  if (runnerUp && runnerUp.frozen_vote_count === winner.frozen_vote_count) {
+    return `Tied at ${winner.frozen_vote_count} votes · earlier request`;
+  }
+  return "Highest vote count";
 }
 
 /**
@@ -500,6 +504,22 @@ export function SessionSimulatorPanel({
       void simulateRequestVote(eventId, target.message_id, identity.id);
     }, 4000, 10000);
 
+    // Issue #21, third corrective pass, item 18: occasional natural
+    // withdrawal — a simulated candidate changing their mind before
+    // selection, same as a real person tapping "Cancel Request." Low
+    // frequency (every 25-45s) and only ever targets a *simulated*
+    // request (checked against this run's own generated guest ids) —
+    // never a real viewer's genuine request, which this identity has no
+    // business touching. Exercises the exact same deterministic
+    // re-ranking (next-highest-voted eligible candidate) a real
+    // withdrawal would.
+    schedule(() => {
+      const pending = pendingRequestsRef.current.filter((r) => r.guest_id && allSimulatedGuestIdsRef.current.has(r.guest_id));
+      if (pending.length === 0) return;
+      const target = randomElement(pending);
+      void simulateWithdrawRequest(eventId, target.guest_id!);
+    }, 25000, 45000);
+
     // Round voting: every 3-7s, a small random subset per active seat
     // (Part 10: "not every fake viewer should vote"). Each seat's current
     // round gets its own independently-rolled continue-bias
@@ -781,10 +801,10 @@ export function SessionSimulatorPanel({
       : null;
 
   /**
-   * Part 3/4: "was the #1 request legitimately outdrawn by the weighted
-   * random pick, or did something actually fail" — answerable only if
-   * the panel shows the *same* frozen ranking/weights/pick the real
-   * resolver used, never a separate guess. `pendingRequests` already
+   * Issue #21, third corrective pass: "was #1 legitimately not the pick,
+   * or did something actually fail" — now trivially answerable, since
+   * selection is deterministic (highest votes, earliest-request
+   * tiebreak) rather than a weighted draw. `pendingRequests` already
    * carries `frozen_rank`/`frozen_vote_count`/`is_current_candidate` set
    * by the real `freeze_speaker_candidates`/`set_current_speaker_candidate`
    * RPCs (see `ensureActiveSelectionRound`, actions.ts) — this just reads
@@ -796,7 +816,6 @@ export function SessionSimulatorPanel({
   const frozenCandidates = pendingRequests
     .filter((r) => r.frozen_rank !== null)
     .sort((a, b) => (a.frozen_rank ?? 0) - (b.frozen_rank ?? 0));
-  const frozenOdds = weightedSelectionOdds(frozenCandidates.length);
   const selectedCandidate = frozenCandidates.find((r) => r.is_current_candidate) ?? null;
   const selectedSeat = selectedCandidate
     ? (speakers.find(
@@ -990,21 +1009,21 @@ export function SessionSimulatorPanel({
         ))}
 
         {/*
-          Part 3/4: makes the weighted-selection draw legible — "did #1
-          legitimately lose the weighted draw, or did something actually
-          fail" is unanswerable without seeing the same frozen
-          ranking/odds/pick the real resolver used. See `frozenCandidates`'
-          own doc comment above.
+          Issue #21, third corrective pass: makes deterministic selection
+          legible — "did #1 legitimately not win, or did something
+          actually fail" is answerable from the same frozen ranking the
+          real resolver used. See `frozenCandidates`' own doc comment
+          above. No weighted odds anymore — highest votes wins, ties
+          break on earliest request.
         */}
-        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Selection</div>
+        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Next Speaker</div>
         {frozenCandidates.length === 0 ? (
           <p className="text-white/40">No candidate selection in progress</p>
         ) : (
           <>
-            <p className="text-white/50">Frozen Top {frozenCandidates.length}:</p>
-            {frozenCandidates.map((r, i) => (
+            {frozenCandidates.map((r) => (
               <p key={r.id} data-testid="sim-frozen-candidate">
-                #{r.frozen_rank} {candidateName(r)} — {r.frozen_vote_count} votes — {frozenOdds[i]?.toFixed(0)}%
+                #{r.frozen_rank} {candidateName(r)} — {r.frozen_vote_count} votes
                 {r.is_current_candidate && (
                   <span data-testid="sim-selected-candidate" className="font-semibold text-emerald-400">
                     {" "}
@@ -1014,9 +1033,14 @@ export function SessionSimulatorPanel({
               </p>
             ))}
             {selectedCandidate && (
-              <p data-testid="sim-selection-status">
-                Selected: {candidateName(selectedCandidate)} — {selectedSeat ? `promoted (Seat ${selectedSeat.seat_number})` : "joining"}
-              </p>
+              <>
+                <p data-testid="sim-selection-status">
+                  Selected: {candidateName(selectedCandidate)} — {selectedSeat ? `promoted (Seat ${selectedSeat.seat_number})` : "joining"}
+                </p>
+                <p data-testid="sim-selection-reason" className="text-white/50">
+                  Reason: {selectionReason(frozenCandidates)}
+                </p>
+              </>
             )}
           </>
         )}

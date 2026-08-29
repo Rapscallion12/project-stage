@@ -193,7 +193,15 @@ export function SpeakerStage({
   // prioritize in those cases.
   const seat1 = bySeat(1);
   const seat2 = bySeat(2);
-  const promoteOpenSeat = !isSpeaker && (seat1 === null) !== (seat2 === null);
+  // Issue #21, third corrective pass: "has this stage ever achieved its
+  // initial two-speaker pairing" — permanent once true, reusing
+  // `stageRound.round_number` exactly as `isStageEstablished`
+  // (lib/repositories/stage-rounds.ts, the server-side source of truth
+  // this mirrors) does. Once true, an empty seat is never a direct-join
+  // opportunity again — see `onTapEmptySeat`'s gating and
+  // `replacementPending` below.
+  const established = stageRound !== null && stageRound.round_number >= 1;
+  const promoteOpenSeat = !isSpeaker && !established && (seat1 === null) !== (seat2 === null);
 
   function renderTile(seatNumber: 1 | 2) {
     const seat = seatNumber === 1 ? seat1 : seat2;
@@ -217,13 +225,22 @@ export function SpeakerStage({
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
           mediaError={mediaError}
-          onTapEmptySeat={isSpeaker ? undefined : onTapEmptySeat}
+          // Issue #21, third corrective pass: an empty seat stops being
+          // a tap target the moment the stage has ever been established
+          // — real-device finding, tapping it used to bypass
+          // Request-to-Speak selection entirely. The database's own
+          // `claim_speaker_seat` (migration 00000000000029) enforces
+          // this independently regardless of what this prop does; this
+          // is what keeps the *tile itself* from ever inviting a tap
+          // that could only fail.
+          onTapEmptySeat={isSpeaker || (seat === null && established) ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           isInactive={identity !== null && reconnectingIdentities.has(identity)}
           orientation={orientation}
           clearTopChrome={seatNumber === 1}
           isPreviewBuild={isPreviewBuild}
           isSimulated={Boolean(seat?.guest_id && simulatedGuestIds?.has(seat.guest_id))}
+          replacementPending={established}
         />
       </div>
     );

@@ -196,6 +196,64 @@ describe("SpeakerVotePanel (issue #21, Part 2 — Continue/Replace; second corre
     });
   });
 
+  describe("tap-away dismissal (Part 2 — a transient overlay, not modal)", () => {
+    it("tapping outside the open panel closes it", () => {
+      render(
+        <div>
+          <div data-testid="outside">elsewhere</div>
+          <SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />
+        </div>,
+      );
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      expect(screen.getByTestId("speaker-vote-panel")).toBeInTheDocument();
+
+      fireEvent.pointerDown(screen.getByTestId("outside"));
+      expect(screen.queryByTestId("speaker-vote-panel")).not.toBeInTheDocument();
+    });
+
+    it("pressing Escape closes the open panel", () => {
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      expect(screen.getByTestId("speaker-vote-panel")).toBeInTheDocument();
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByTestId("speaker-vote-panel")).not.toBeInTheDocument();
+    });
+
+    it("interacting inside the panel (e.g. casting a vote) never closes it", () => {
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+
+      fireEvent.pointerDown(screen.getByTestId("vote-continue"));
+      fireEvent.click(screen.getByTestId("vote-continue"));
+      expect(screen.getByTestId("speaker-vote-panel")).toBeInTheDocument();
+    });
+
+    it("closing the panel does not erase the viewer's vote — reopening shows the same selection", () => {
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      fireEvent.click(screen.getByTestId("vote-replace"));
+      expect(voteOnSpeakerRound).toHaveBeenCalledWith("s1", "replace");
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByTestId("speaker-vote-panel")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("watch-vote-emblem"));
+      expect(screen.getByTestId("vote-replace")).toHaveAttribute("aria-pressed", "true");
+      // Reopening never re-casts the vote — only the one tap did.
+      expect(voteOnSpeakerRound).toHaveBeenCalledTimes(1);
+    });
+
+    it("tapping the emblem again still toggles the panel closed, alongside the outside-tap/Escape dismissal", () => {
+      render(<SpeakerVotePanel speakers={[speaker({ id: "s1" })]} isPreviewBuild={false} />);
+      const emblem = screen.getByTestId("watch-vote-emblem");
+      fireEvent.click(emblem);
+      expect(screen.getByTestId("speaker-vote-panel")).toBeInTheDocument();
+      fireEvent.click(emblem);
+      expect(screen.queryByTestId("speaker-vote-panel")).not.toBeInTheDocument();
+    });
+  });
+
   describe("final-10s emphasis (Part 13)", () => {
     it("shows a 'Vote · Ns' countdown on the trigger once a round nears its shared deadline", () => {
       render(

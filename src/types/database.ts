@@ -590,6 +590,7 @@ export type Database = {
       }
       claim_speaker_seat: {
         Args: {
+          p_bypass_selection_authorization?: boolean
           p_event_id: string
           p_guest_display_name?: string
           p_guest_id?: string

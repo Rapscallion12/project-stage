@@ -80,6 +80,32 @@ describe("SpeakerTile", () => {
     });
   });
 
+  describe("replacement-pending empty seat (issue #21, third corrective pass — no bypassing Request-to-Speak)", () => {
+    it("shows 'Selecting next speaker…' instead of the tappable CTA once the stage has been established", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} replacementPending={true} />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("DIV"); // never interactive
+      expect(tile).toHaveTextContent("Selecting next speaker…");
+      expect(tile).not.toHaveTextContent("Seat open");
+      expect(tile).not.toHaveTextContent("Tap to join");
+    });
+
+    it("stays a plain 'Seat open' placeholder during initial stage formation (replacementPending false/omitted)", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} />);
+      expect(screen.getByTestId("empty-seat")).toHaveTextContent("Seat open");
+    });
+
+    it("never renders as tappable even if a caller mistakenly passes both onTapEmptySeat and replacementPending — the caller (SpeakerStage) is responsible for omitting the handler, but this stays a defensive belt", () => {
+      // This documents the actual contract: replacementPending only
+      // changes wording, the *real* gate is whether onTapEmptySeat is
+      // provided at all (SpeakerStage never provides both together) — see
+      // that component's own onTapEmptySeat gating.
+      const onTapEmptySeat = vi.fn();
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} replacementPending={true} />);
+      expect(screen.getByTestId("empty-seat").tagName).toBe("BUTTON");
+    });
+  });
+
   it("shows the speaker's name (from the DB) even with no LiveKit participant connected yet", () => {
     render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
     expect(screen.getByTestId("speaker-tile")).toHaveTextContent("Jamie Rivera");

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { ParticipantAvatar } from "@/components/room/participant-avatar";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 /** Distance (px) from the bottom still counted as "at the live edge" — matches ExpandedComments' own near-bottom threshold. */
@@ -117,20 +118,23 @@ export function AmbientComments({
           data-testid="ambient-comment"
           data-message-id={message.id}
           onClick={onExpand}
-          className="max-w-[220px] shrink-0 animate-[ambient-comment-enter_250ms_ease-out] truncate rounded-full px-3 py-1.5 text-left text-xs text-white"
+          className="flex max-w-[220px] shrink-0 animate-[ambient-comment-enter_250ms_ease-out] items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-left text-xs text-white"
           style={{
             backgroundColor: message.is_speaker_request ? "rgb(251 146 60 / 0.22)" : "rgb(0 0 0 / 0.32)",
             border: message.is_speaker_request ? "1px solid rgb(251 146 60 / 0.5)" : undefined,
           }}
         >
-          {message.is_speaker_request && (
-            <span aria-hidden="true" title="Requested the mic">
-              🎙{" "}
-            </span>
-          )}
-          <span className="font-medium">{message.author_display_name}</span>
-          {": "}
-          {message.body}
+          <ParticipantAvatar name={message.author_display_name} size="xs" />
+          <span className="truncate">
+            {message.is_speaker_request && (
+              <span aria-hidden="true" title="Requested the mic">
+                🎙{" "}
+              </span>
+            )}
+            <span className="font-medium">{message.author_display_name}</span>
+            {": "}
+            {message.body}
+          </span>
         </button>
       ))}
     </div>

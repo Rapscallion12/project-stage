@@ -39,6 +39,27 @@ export async function getStageRound(eventId: string): Promise<StageRound | null>
 }
 
 /**
+ * Issue #21, third corrective pass: "has this event's stage ever
+ * achieved its initial two-speaker pairing" — the authoritative,
+ * permanent (never reverts once true) signal that separates initial
+ * stage formation (direct seat joins permitted) from ongoing replacement
+ * (seat claims require Request-to-Speak selection authorization — see
+ * migration 00000000000029's `claim_speaker_seat`). `round_number` only
+ * ever reaches 1, and never returns to 0, once `ensure_stage_round` has
+ * seen both seats occupied simultaneously at least once — reusing that
+ * existing fact rather than a new column. `joinOpenSeat` (room/actions.ts)
+ * reads this to return a clean, typed rejection before ever attempting a
+ * claim the database would reject anyway; the database's own check
+ * (inside `claim_speaker_seat` itself) remains the actual authoritative
+ * enforcement, this is purely for a better error message.
+ */
+export async function isStageEstablished(eventId: string): Promise<boolean> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("stage_rounds").select("round_number").eq("event_id", eventId).maybeSingle();
+  return (data?.round_number ?? 0) >= 1;
+}
+
+/**
  * The shared round's one authoritative resolution — see migration
  * 00000000000024's `resolve_stage_round` for the full per-seat decision
  * (mirrors `lib/speaker-round.ts`'s `resolveRoundOutcome` exactly, once

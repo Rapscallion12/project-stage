@@ -881,6 +881,27 @@ different dependencies. Current order:
       "Vote · Ns" final-10s emphasis label. Full suite 919/919,
       lint/tsc/build clean. See DECISIONS.md and SESSION_LOG.md's
       Session 43.
+      **Third corrective pass (2026-08-29, same branch)**: removed the
+      weighted-random selection draw entirely — highest votes now wins
+      deterministically, tie broken by earliest active request, reusing
+      `freeze_speaker_candidates`' already-correct ranking rather than
+      adding new tiebreak logic. The significant fix: seat claims now
+      require Request-to-Speak selection authorization once the stage's
+      initial two-speaker pairing has ever been established (reusing
+      `stage_rounds.round_number >= 1` as the authoritative, permanent
+      signal) — enforced inside `claim_speaker_seat` itself (migration
+      29), not just a UI hide, proven with a real-database test where an
+      unauthorized claim submitted concurrently with the authorized
+      candidate's own claim always loses. Caught (and fixed, migrations
+      30/31) a real Postgres gotcha along the way: `CREATE OR REPLACE`
+      with a new trailing parameter created a stale, ungoverned function
+      overload rather than replacing in place. New shared
+      `ParticipantAvatar` component replaces four duplicated inline
+      initials circles in `SpeakerTile` and adds avatars to Expanded
+      Comments/ambient comments, previously bare text. Vote panel now
+      dismisses on outside-tap/Escape without erasing the viewer's
+      selection. Full suite 935/935, lint/tsc/build clean. See
+      DECISIONS.md and SESSION_LOG.md's Session 44.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -4,6 +4,85 @@ Newest entry first.
 
 ---
 
+## 2026-08-29 — Session 44: Third corrective pass — deterministic selection, seat-claim authorization after stage established, avatars, tap-away Vote (issue #21)
+
+**Goal**: real-device testing continued well, with five new observations:
+missing avatars in Expanded Comments; Vote staying open when tapping
+away; a request to simplify next-speaker selection to deterministic
+highest-votes; Request-to-Speak withdrawal before/during promotion; and
+the most significant — becoming the next speaker by tapping a newly-open
+seat, bypassing Request-to-Speak entirely.
+
+**Deterministic selection**: removed the weighted-random draw
+(`lib/speaker-selection.ts`) entirely — `freeze_speaker_candidates`'
+existing ranking (vote count desc, created_at asc, id asc) already *is*
+the deterministic rule, so `ensureActiveSelectionRound` now just picks
+rank 1; no new tiebreak logic needed. Confirmed `withdraw_speaker_request
+(_as_guest)`'s existing "advance to next unfailed candidate by
+frozen_rank" already used this same order, so withdrawal-during-Going-
+Live composes correctly with zero SQL changes.
+
+**Withdrawal before/during Going Live**: investigated before building
+anything — `RoomControls`' existing Withdraw/Cancel buttons and
+`ChatPanel`'s composer toggle already route through
+`useAutomaticPromotion`'s `cancel()` → `withdrawSpeakerRequest`, which
+already handles both cases correctly. No new implementation needed,
+only new real-database verification tests.
+
+**Seat-claim authorization (the significant fix)**: traced the bug to
+`joinOpenSeat` having no way to know it was being used *after* initial
+stage formation. Found the authoritative signal already existed —
+`stage_rounds.round_number >= 1`, permanent once true — and enforced
+authorization **inside `claim_speaker_seat` itself** (migration
+00000000000029), not just as a `joinOpenSeat` pre-check, per explicit
+"don't just hide the button" instruction: once established, only the
+event's currently authorized selected candidate may claim a seat,
+re-verified at the RPC regardless of caller. Proved with a real-database
+test submitting an unauthorized claim *concurrently* with the authorized
+one — unauthorized always loses. `SpeakerStage`/`SpeakerTile` stop
+wiring `onTapEmptySeat` for an established-stage empty seat, showing
+"Selecting next speaker…" instead.
+
+**A second real Postgres gotcha, caught by the test suite**: adding
+`claim_speaker_seat`'s new trailing parameter via `CREATE OR REPLACE`
+created a genuinely new function overload rather than replacing in
+place (confirmed via the regenerated types showing a duplicated `Args`
+union) — the stale 5-argument overload skipped the new check entirely,
+and the new 6-argument one didn't inherit the old grants, briefly
+letting an ordinary authenticated (even anonymous) caller invoke it
+directly. Both fixed in two follow-up migrations (drop the stale
+overload; restate the original's grants explicitly) — worth remembering
+generally for any future defaulted-parameter addition to a SECURITY
+DEFINER function.
+
+**Avatars**: no `profiles.avatar_url` column exists yet — built one
+shared `ParticipantAvatar` component (image-ready, currently always
+falling through to initials) and used it in both `ExpandedComments` and
+`AmbientComments`, and refactored `SpeakerTile`'s four duplicated inline
+initials circles onto it too — one canonical presentation, not a second
+avatar system.
+
+**Vote tap-away dismissal**: outside-pointerdown + Escape listeners,
+active only while open; closing never erases the viewer's already-cast
+vote.
+
+**Verification**: new real-database test file
+(`seat-claim-authorization.test.ts`, 12 tests) covering initial
+formation, established-stage rejection, authorized-candidate success,
+the concurrent race, the full end-to-end regression scenario, and
+deterministic selection/tiebreak/withdrawal; extended
+`session-simulator-panel.test.tsx`, `speaker-stage.test.tsx`,
+`speaker-tile.test.tsx`, `speaker-vote-panel.test.tsx`,
+`expanded-comments.test.tsx`, `ambient-comments.test.tsx`. Full suite
+935/935 (71 files), lint, tsc, build all clean.
+
+**Not built this pass**: no schema change for a real profile-image
+column (out of scope, not requested — the component is ready for one).
+Fresh preview deployed; stopping here for the user's review — not
+merged to main.
+
+---
+
 ## 2026-08-28 — Session 43: Second corrective pass — seeding race traced to a DB bug, timer repositioned, weighted-selection observable, Vote UI shows sentiment (issue #21)
 
 **Goal**: continued real-device testing of Session 42's shared-round

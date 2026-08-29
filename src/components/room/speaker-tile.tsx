@@ -6,13 +6,10 @@ import { cn } from "@/lib/utils";
 import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import { useSpeakerRoundCountdown } from "@/hooks/use-speaker-round-countdown";
 import { inactiveSince } from "@/lib/speaker-presence";
+import { ParticipantAvatar } from "@/components/room/participant-avatar";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
-
-function initials(name: string): string {
-  return name.trim().slice(0, 2).toUpperCase() || "?";
-}
 
 /** Compact label for the tile's own placeholder — RoomControls still shows the full sentence below; this is just enough to explain the icon at a glance. */
 function mediaErrorShortLabel(error: NonNullable<MediaError>): string {
@@ -67,6 +64,7 @@ export function SpeakerTile({
   clearTopChrome = false,
   isPreviewBuild = false,
   isSimulated = false,
+  replacementPending = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -144,6 +142,18 @@ export function SpeakerTile({
    * changes what that branch says.
    */
   isSimulated?: boolean;
+  /**
+   * Issue #21, third corrective pass: true once the stage has ever
+   * achieved its initial two-speaker pairing — see `SpeakerStage`'s own
+   * `established` doc comment. Only meaningful when `speaker` is null:
+   * an empty seat past this point is controlled by Request-to-Speak
+   * selection, not a direct-join opportunity, so it renders
+   * "Selecting next speaker…" instead of the tappable "Seat open" CTA —
+   * `onTapEmptySeat` is never wired for this case either (see
+   * `SpeakerStage`), so this only ever affects the non-interactive
+   * placeholder's own wording, never a second gate on the same decision.
+   */
+  replacementPending?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -211,23 +221,31 @@ export function SpeakerTile({
     // the server decides that (see joinOpenSeat), never this component —
     // a queue existing falls back to the composer's request mode instead
     // of anything shown here.
-    return onTapEmptySeat ? (
-      <button
-        type="button"
-        data-testid="empty-seat"
-        onClick={onTapEmptySeat}
-        disabled={isJoiningSeat}
-        className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted transition-colors hover:bg-accent/5 hover:text-accent disabled:opacity-60"
-      >
-        <p className="text-sm font-medium">{isJoiningSeat ? "Joining…" : "Seat open"}</p>
-        {!isJoiningSeat && <p className="text-xs">Tap to join</p>}
-      </button>
-    ) : (
+    if (onTapEmptySeat) {
+      return (
+        <button
+          type="button"
+          data-testid="empty-seat"
+          onClick={onTapEmptySeat}
+          disabled={isJoiningSeat}
+          className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted transition-colors hover:bg-accent/5 hover:text-accent disabled:opacity-60"
+        >
+          <p className="text-sm font-medium">{isJoiningSeat ? "Joining…" : "Seat open"}</p>
+          {!isJoiningSeat && <p className="text-xs">Tap to join</p>}
+        </button>
+      );
+    }
+    // Issue #21, third corrective pass: past initial stage formation,
+    // an empty seat is never tappable again — see `replacementPending`'s
+    // own doc comment above. Rendered as a plain, non-interactive
+    // status, not a disabled-looking CTA, so it never reads as "you
+    // could tap this if only X" — there's genuinely nothing to tap.
+    return (
       <div
         data-testid="empty-seat"
         className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted"
       >
-        <p className="text-sm font-medium">Seat open</p>
+        <p className="text-sm font-medium">{replacementPending ? "Selecting next speaker…" : "Seat open"}</p>
       </div>
     );
   }
@@ -258,9 +276,7 @@ export function SpeakerTile({
           }}
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/10 text-accent transition-colors hover:bg-accent/15 active:bg-accent/20"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/20 text-lg font-semibold">
-            {initials(speaker.display_name)}
-          </div>
+          <ParticipantAvatar name={speaker.display_name} size="md" className="bg-accent/20" />
           <p className="px-4 text-center text-xs font-medium">Tap to enable camera &amp; mic</p>
         </button>
       ) : isLocal && hasVideo ? (
@@ -272,9 +288,7 @@ export function SpeakerTile({
           data-testid="own-seat-live"
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/5 text-foreground"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
-            {initials(speaker.display_name)}
-          </div>
+          <ParticipantAvatar name={speaker.display_name} size="md" />
           <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
         </div>
       ) : isInactive ? (
@@ -282,9 +296,7 @@ export function SpeakerTile({
           data-testid="speaker-inactive"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
-            {initials(speaker.display_name)}
-          </div>
+          <ParticipantAvatar name={speaker.display_name} size="md" />
           <p className="text-xs" data-testid="audience-inactive-countdown">
             {reconnectSecondsRemaining === 0
               ? // Issue #18 expiration-enforcement finding: never a stuck
@@ -301,9 +313,7 @@ export function SpeakerTile({
           data-testid="simulated-speaker-placeholder"
           className="flex h-full w-full flex-col items-center justify-center gap-2 border-2 border-dashed border-accent/40 bg-accent/5 text-accent"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/20 text-lg font-semibold">
-            {initials(speaker.display_name)}
-          </div>
+          <ParticipantAvatar name={speaker.display_name} size="md" className="bg-accent/20" />
           <p className="text-xs font-medium" data-testid="simulated-speaker-label">
             Simulated speaker
           </p>
@@ -313,9 +323,7 @@ export function SpeakerTile({
           data-testid="no-video-placeholder"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
-            {initials(speaker.display_name)}
-          </div>
+          <ParticipantAvatar name={speaker.display_name} size="md" />
           <p className="text-xs">{isLocal && mediaError ? mediaErrorShortLabel(mediaError) : "Camera off"}</p>
         </div>
       )}

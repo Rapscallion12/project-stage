@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition, type PointerEvent 
 import { addReaction } from "@/app/events/[id]/lobby/actions";
 import { voteForSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { ChatPanel } from "@/components/lobby/chat-panel";
+import { ParticipantAvatar } from "@/components/room/participant-avatar";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 
@@ -386,8 +387,10 @@ function CommentRow({
       data-testid={testId}
       data-message-id={message.id}
       onClick={handleTap}
-      className={`flex flex-col gap-0.5 py-2 transition-transform ${justLiked ? "scale-[1.02]" : ""}`}
+      className={`flex gap-2 py-2 transition-transform ${justLiked ? "scale-[1.02]" : ""}`}
     >
+      <ParticipantAvatar name={message.author_display_name} size="sm" className="mt-0.5" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-medium text-white/90">{message.author_display_name}</span>
         {message.is_speaker_request && (
@@ -422,6 +425,7 @@ function CommentRow({
             </span>
           )
         )}
+      </div>
       </div>
     </div>
   );

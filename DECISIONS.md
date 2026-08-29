@@ -3,6 +3,134 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-29 — Third corrective pass: deterministic selection replaces weighted-random, seat claims require selection authorization after initial stage formation, avatars, tap-away Vote (issue #21)
+
+**Context**: real-device testing continued to go well, but surfaced five
+more things: missing avatars in Expanded Comments; the Vote surface
+staying open when tapping away; a request to simplify next-speaker
+selection from weighted-random to highest-votes (with deterministic
+tiebreaking); Request-to-Speak users needing to withdraw before
+promotion completes; and — the most architecturally significant — being
+able to become the next speaker by simply tapping a newly-open seat,
+bypassing Request-to-Speak entirely.
+
+**Deterministic selection — a genuine simplification, not a workaround**:
+removed the weighted-random draw (`lib/speaker-selection.ts`,
+`SELECTION_RANK_WEIGHTS`, `Math.random()`) entirely, per explicit
+instruction not to leave it half-active. `ensureActiveSelectionRound`
+now just picks `rank 1` from the already-frozen pool —
+`freeze_speaker_candidates`' own ranking (`vote_count desc, created_at
+asc, id asc`, unchanged) already *is* "highest votes wins, earliest
+request breaks a tie," so no new tiebreak logic was needed anywhere,
+only the removal of the extra randomized step on top of it. This also
+meant `withdraw_speaker_request(_as_guest)`'s existing "advance to next
+unfailed candidate by frozen_rank" logic (migration 19, unchanged)
+needed zero changes — it was always walking the same deterministic
+order, previously used only for a *declined winner's* fallback, now also
+the primary selection rule. Investigated whether the frozen-Top-3-of-3
+snapshot concept itself was now obsolete (item 5's "Top 3 must freeze
+specifically for a random draw" framing) and concluded no: freezing
+still serves a real, independent purpose — a stable snapshot so votes
+continuing to change during a Going-Live window can't retroactively
+steal an already-issued opportunity (item 15) — kept the freeze, removed
+only the draw. `lib/speaker-selection.ts` and its test file are deleted
+outright, not left dead.
+
+**Withdrawal before/during Going Live — investigated before building
+anything new, found already implemented**: traced `RoomControls`'
+existing "Withdraw" (waiting)/"Cancel" (mid-countdown) buttons and
+`ChatPanel`'s composer toggle, both already routing through
+`useAutomaticPromotion`'s `cancel()` → `withdrawSpeakerRequest`, which
+already handles both "withdraw while merely waiting" (the request simply
+never gets frozen/selected) and "decline after being selected" (the SQL
+above already advances to the next unfailed candidate). No new UI or
+withdrawal logic was needed — only the deterministic-selection change
+above, which this flow already composed with correctly. Verified with
+new real-database tests rather than assumed correct from reading the
+code alone.
+
+**Seat-claim authorization — the architecturally significant fix**: the
+actual bug was that `joinOpenSeat` (built for a viewer directly claiming
+a genuinely uncontested seat) had no way to know it was being used
+*after* the stage's initial pairing, when an empty seat is supposed to
+be controlled by selection instead. Needed one authoritative,
+permanent-once-true "has this stage ever achieved its initial two-seat
+pairing" signal — considered a new `events` column, but
+`stage_rounds.round_number` already encodes exactly this fact (it only
+ever reaches 1, and never returns to 0, once `ensure_stage_round` has
+seen both seats occupied simultaneously at least once — established in
+the previous corrective pass's migration 27) — reused it instead
+(`isStageEstablished`, lib/repositories/stage-rounds.ts). Enforced
+**inside `claim_speaker_seat` itself** (migration 00000000000029), not
+only in `joinOpenSeat`'s own pre-check — per explicit "do not solve this
+by hiding the button, a fast/stale/malicious client must not bypass it"
+instruction: once established, every claim (from any caller) is rejected
+unless the claiming identity is re-verified, at the RPC, to be the
+event's currently authorized selected candidate. `joinOpenSeat` also
+gained its own early check (a clean typed `selection-required` result),
+but that's UX polish, not the actual security boundary — proven by a
+real-database race test that submits an unauthorized direct claim
+*concurrently* with the authorized candidate's own claim and confirms
+the unauthorized one always loses, never based on arrival order.
+`SpeakerStage`/`SpeakerTile` stop wiring `onTapEmptySeat` at all for an
+empty seat once established, replacing the tappable CTA with "Selecting
+next speaker…" — the UI and the database now agree, rather than the UI
+merely hiding a control the database would have rejected anyway.
+
+**A narrow, explicit bypass for the Session Simulator's own manual
+re-seed tool** (`simulateSeedSpeaker`, "Seed 2 Speakers"): added a new
+`p_bypass_selection_authorization` parameter to `claim_speaker_seat`,
+defaulting false for every ordinary caller. `simulateAdvanceSelection`
+deliberately does *not* use it — it claims on behalf of a real, frozen,
+authorized winner, so it exercises the exact same authorization check a
+real user's claim would, keeping the simulator a genuine end-to-end
+harness rather than a parallel bypass path, per explicit instruction.
+
+**A second Postgres gotcha found via the real-database test suite, not
+manual review**: adding that new trailing parameter via `CREATE OR
+REPLACE FUNCTION` did not replace `claim_speaker_seat` in place —
+Postgres treated the 6-argument version as a genuinely new overload
+alongside the untouched 5-argument original (confirmed directly via the
+regenerated TypeScript types showing two distinct `Args` shapes for the
+same function name). Two real consequences, both caught by the test
+suite rather than assumed away: (1) a caller resolving to the old
+5-argument overload would skip the new authorization check entirely —
+fixed by explicitly dropping the stale overload; (2) the *new*
+6-argument function object didn't inherit whatever revoked-from-public
+state the old one had, so an ordinary authenticated (and even
+anonymous) caller could suddenly call it directly — fixed by restating
+the same `revoke ... from public` / `grant ... to service_role` the
+original always had. Worth remembering generally: adding a new
+DEFAULTed trailing parameter to an existing SECURITY DEFINER function
+via `CREATE OR REPLACE` is not safe to assume is in-place — always
+verify via the regenerated types (a duplicated `Args` union is the
+tell) and re-state grants explicitly rather than assuming inheritance.
+
+**Avatars**: no `profiles.avatar_url` column exists (checked against
+`src/types/database.ts` before writing anything) — built one shared
+`ParticipantAvatar` component (image-ready, but every caller today
+correctly falls through to an initials placeholder) and used it in both
+`ExpandedComments` and `AmbientComments` (the "compact/live" and
+"Expanded" surfaces the instruction asked to share a presentation), and
+refactored `SpeakerTile`'s four previously-duplicated inline initials
+circles onto the same component — one canonical avatar system, not one
+per surface.
+
+**Vote tap-away dismissal**: a `pointerdown`-on-`document` listener
+(outside-target check via the panel's own container ref) plus an
+Escape-key listener, both only attached while the panel is actually
+open. Closing only ever changes `open` — the viewer's already-cast vote
+is untouched server-side and reappears highlighted on reopen, same as
+before this change.
+
+**Tradeoffs**: did not extend selection's frozen-pool size beyond 3 (no
+product signal asked for it, and the user's own examples throughout this
+request stayed at three). Simulator's own natural "occasional
+withdrawal" is deliberately narrow-scoped — a low-frequency tick that
+only ever withdraws a *simulated* identity's own pending request (never
+a real user's), matching the standing "simulator identities must never
+touch real user state" invariant.
+
 ## 2026-08-28 — Second corrective pass: seeding race traced to a database bug, shared-round timer repositioned, weighted-selection made observable, Vote UI shows sentiment (issue #21)
 
 **Context**: further real-device testing of the shared-round build found

@@ -45,6 +45,11 @@ describe("AmbientComments (issue #21) — live-stream-style feed, not a self-exp
     expect(bubble).toHaveTextContent("hi");
   });
 
+  it("shows an avatar placeholder for each bubble — the same canonical presentation Expanded Comments uses (issue #21, third corrective pass)", () => {
+    render(<AmbientComments messages={[makeMessage({ author_display_name: "Jamie Rivera" })]} />);
+    expect(screen.getByTestId("participant-avatar-initials")).toHaveTextContent("JA");
+  });
+
   it("marks a request-to-speak message with the mic badge, distinct from an ordinary comment", () => {
     render(
       <AmbientComments

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { voteOnSpeakerRound } from "@/app/events/[id]/room/actions";
 import { createClient } from "@/lib/supabase/client";
 import { useNow } from "@/hooks/use-now";
@@ -80,6 +80,37 @@ export function SpeakerVotePanel({
 }) {
   const [open, setOpen] = useState(false);
   const [myChoices, setMyChoices] = useState<Record<string, "continue" | "replace">>({});
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Part 2: the expanded panel is a dismissible transient surface, not a
+  // modal — tapping anywhere outside it (a real pointerdown target
+  // outside this component's own DOM, not just "anywhere") or pressing
+  // Escape closes it, same as any ordinary popover. Only listens while
+  // actually open, and only on the *document*, so interacting inside the
+  // panel (a vote tap, scrolling the row list) never triggers this —
+  // those events never reach `document` as an *outside* target, they
+  // just bubble through this component's own subtree first. Closing only
+  // ever calls `setOpen(false)` — the viewer's `myChoices` selection is
+  // untouched, so reopening shows the same highlighted choice again (the
+  // authoritative vote itself was already recorded server-side the
+  // moment they tapped it, same as before this change).
+  useEffect(() => {
+    if (!open) return;
+    function handlePointerDown(event: PointerEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   // Votes reset when a new round begins — drop any locally-remembered
   // choice for a round that's no longer the current one. Reset during
@@ -168,7 +199,7 @@ export function SpeakerVotePanel({
   }
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         type="button"
         data-testid="watch-vote-emblem"

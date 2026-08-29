@@ -31,12 +31,13 @@ export type ClaimDecision =
  * something more deliberately audience-driven." It now reads one
  * already-computed fact instead of re-deriving eligibility from a
  * ranking: whether the caller's own pending request is the *currently
- * selected* candidate of an active weighted-random selection round (see
- * `lib/speaker-selection.ts` for how that pick is made, and
- * `resolveClaimDecision` in room/actions.ts for how the round itself
- * gets created/ensured before this runs). No identity-matching against a
- * ranked list is needed here anymore — the caller already fetched their
- * *own* request row.
+ * selected* candidate of an active selection round — issue #21, third
+ * corrective pass: the pick itself is now deterministic (highest votes,
+ * earliest request tiebreak), not weighted-random; see
+ * `ensureActiveSelectionRound` in room/actions.ts for how that pick is
+ * made and how the round itself gets created/ensured before this runs.
+ * No identity-matching against a ranked list is needed here anymore —
+ * the caller already fetched their *own* request row.
  */
 export function decideClaimEligibility(params: {
   /** The caller's own pending request row, or null if they have none. Only `is_current_candidate` is read — the caller already scoped this to their own identity. */

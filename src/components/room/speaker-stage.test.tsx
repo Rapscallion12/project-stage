@@ -3,6 +3,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeakerStage } from "./speaker-stage";
 import type { LocalVideoTrack } from "livekit-client";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { StageRound } from "@/lib/repositories/stage-rounds";
+
+function stageRoundFixture(overrides: Partial<StageRound> = {}): StageRound {
+  return {
+    id: "sr1",
+    event_id: "e1",
+    round_number: 1,
+    started_at: new Date().toISOString(),
+    ends_at: new Date(Date.now() + 60_000).toISOString(),
+    phase: "active",
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
 
 /** A minimal stand-in for a real LocalVideoTrack — SelfPreview only ever calls attach/detach on it. */
 function fakeVideoTrack(): LocalVideoTrack {
@@ -160,6 +174,52 @@ describe("SpeakerStage", () => {
       expect(emptySeat.tagName).toBe("DIV");
       fireEvent.click(emptySeat);
       expect(onTapEmptySeat).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("established-stage empty seat is never tappable (issue #21, third corrective pass — no bypassing Request-to-Speak)", () => {
+    it("stays a tappable direct-join CTA during initial stage formation (stageRound null — never established)", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} stageRound={null} />);
+      const [firstSeat] = screen.getAllByTestId("empty-seat");
+      expect(firstSeat.tagName).toBe("BUTTON");
+      expect(firstSeat).toHaveTextContent("Seat open");
+    });
+
+    it("stops being tappable, and reads 'Selecting next speaker…', once the stage has been established (stageRound.round_number >= 1)", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1 })]}
+          orientation="portrait"
+          {...baseProps}
+          onTapEmptySeat={onTapEmptySeat}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.tagName).toBe("DIV");
+      expect(emptySeat).toHaveTextContent("Selecting next speaker…");
+      fireEvent.click(emptySeat);
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+    });
+
+    it("never visually promotes the open seat (order-first) once established — that priority was for a genuinely tappable opportunity", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1 })]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture({ round_number: 2 })}
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.closest('[class*="min-h-0"]')?.className).not.toMatch(/\border-first\b/);
+    });
+
+    it("a round that never went active (round_number 0, still awaiting its first pairing) does not count as established", () => {
+      render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 0 })} />);
+      const [firstSeat] = screen.getAllByTestId("empty-seat");
+      expect(firstSeat.tagName).toBe("BUTTON");
     });
   });
 
