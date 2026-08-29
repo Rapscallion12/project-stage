@@ -4,6 +4,77 @@ Newest entry first.
 
 ---
 
+## 2026-08-29 — Session 45: Fourth corrective pass — bounded simulator startup, Case A/B seat seeding, reactive round-invariant backstop, composer focus, ambient fade (issue #21)
+
+**Goal**: another real-device pass. Overall build working well (RTS
+withdrawal, deterministic selection, post-initial-pairing seat
+authorization, Continue/Replace voting, Vote UI all confirmed — do not
+redesign). Three things to fix: the simulator could start into an
+invalid state (both seats "Selecting next speaker…" while a shared round
+counted down — an explicit invariant violation, not just slow
+selection); toggling Request-to-Speak while typing dismissed the
+keyboard; ambient comments hard-clipped at the top edge.
+
+**Simulator startup invariant — traced, then closed structurally, not
+patched**: `startSimulation` used to flip `running` and schedule every
+natural-activity loop *before* seeding had even resolved, let alone
+succeeded — the exact gap that could let the reported state occur,
+whether from a seeding failure being silently ignored or a transient
+stale-client-state race. Rather than commit to one unproven historical
+trigger, built the explicit mechanism the instructions specified:
+`establishInitialPairing`/`establishSeat`, a bounded state machine that
+only reaches "running" after both seats are confirmed occupied by their
+own real result *and* a fresh read of `stage_rounds` confirms the round
+active — never trusting local `speakers`/`stageRound` props. A failure
+at any step reports why (new preview-only "Startup" panel: Simulation/
+Audience/Seat 1-2/Pairing/Shared round) and never half-starts. Found and
+fixed a genuine regression of my own mid-pass, via the test suite: Stop
+pressed while startup was still in flight was disabled (button gated on
+`running`, which now only flips at the very end) and, even if pressed,
+could be silently overridden once the in-flight startup finished — fixed
+with a `startupTokenRef` generation guard plus enabling Stop throughout
+the startup sequence, not just once fully running.
+
+**Case A/B seat seeding — closing a simulator-only authorization
+loophole**: a fresh, authoritative pre-check of `stage_rounds.round_number`
+decides whether seeding may still use the direct-join bypass (Case A: a
+genuinely new stage) or must go through the real Request-to-Speak →
+selection → authorized-claim pipeline (Case B: already established) —
+applied uniformly to Start's own seeding *and* the standalone "Seed 2
+Speakers" button, per explicit instruction not to create a loophole
+anywhere in the tool. Read migrations 24/27/28 end to end before writing
+any of this to confirm `round_number >= 1` really is a sound "ever
+established" signal (a purely-awaiting-pairing placeholder starts at 0,
+confirmed in the actual current SQL, not assumed).
+
+**Reactive round-invariant backstop**: new `reconcileStageRoundAction` +
+`useStageRoundReconciliation` hook (wired into `EventRoom` alongside the
+existing round-resolution hook) call the already-idempotent
+`ensure_stage_round` whenever any connected client's own occupancy view
+changes — closes the invariant gap generically, for any future path that
+changes occupancy without itself calling it, not just the simulator's
+own startup sequence.
+
+**Composer focus + ambient fade**: `onMouseDown` `preventDefault()` on
+the mic toggle button stops the browser's own default focus-shift before
+it happens, so the comment draft/keyboard/cursor are never disturbed —
+no compensating refocus (would still flicker). Ambient comment feed gets
+a single container-level `mask-image`/`-webkit-mask-image` fade at the
+top edge (Expanded Comments explicitly excluded — different surface,
+different scroll model).
+
+**Verification**: 3 new real-database integration tests
+(`stage-round-invariant.test.ts`) prove the invariant directly against
+the real linked project — zero/one occupied seats never show an active
+round, exactly one new round begins once both are authoritatively
+occupied, via both fresh Case-B re-seeding and the speaker-loss/
+replacement path; existing `seat-claim-authorization.test.ts` (12 tests)
+re-verified unmodified and still passing. Full suite, lint, tsc, build
+all clean — full suite 949/949 (72 files). Fresh preview
+deployed; stopping here for the user's review — not merged to main.
+
+---
+
 ## 2026-08-29 — Session 44: Third corrective pass — deterministic selection, seat-claim authorization after stage established, avatars, tap-away Vote (issue #21)
 
 **Goal**: real-device testing continued well, with five new observations:

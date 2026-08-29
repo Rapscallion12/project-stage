@@ -17,6 +17,7 @@ import { useSeatReconciliation } from "@/hooks/use-seat-reconciliation";
 import { useReleaseStuckLocalMedia } from "@/hooks/use-release-stuck-local-media";
 import { useStageRound } from "@/hooks/use-stage-round";
 import { useStageRoundResolution } from "@/hooks/use-stage-round-resolution";
+import { useStageRoundReconciliation } from "@/hooks/use-stage-round-reconciliation";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -447,6 +448,15 @@ export function EventRoom({
   // resolving even if neither seated speaker's own tab is around to do
   // it. See the hook's own doc comment.
   useStageRoundResolution(event.id, stageRound, speakers);
+
+  // Issue #21, fourth corrective pass: the reactive backstop for the
+  // same invariant — re-verifies the shared round against actual current
+  // occupancy whenever occupancy itself changes. See the hook's own doc
+  // comment for why this is needed in addition to the resolution effect
+  // above (that one resolves an *already-active* round at its deadline;
+  // this one catches the round ever being active without a genuinely
+  // established pairing in the first place).
+  useStageRoundReconciliation(event.id, speakers);
 
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own

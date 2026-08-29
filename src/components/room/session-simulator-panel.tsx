@@ -15,6 +15,7 @@ import {
   resetSimulatorSession,
   simulateAdvanceSelection,
 } from "@/app/events/[id]/room/simulator-actions";
+import { reconcileStageRoundAction } from "@/app/events/[id]/room/actions";
 import { createClient } from "@/lib/supabase/client";
 import {
   createSimulatedAudience,
@@ -99,7 +100,69 @@ function projectedOutcomeLabel(outcome: ReturnType<typeof resolveRoundOutcome>):
   }
 }
 
+/** Short, human-readable label for the compact Startup observability block (Section 8) — never invents a state the machine itself doesn't have. */
+function startupPhaseLabel(phase: StartupPhase): string {
+  switch (phase) {
+    case "idle":
+      return "Idle";
+    case "preparing":
+      return "Preparing";
+    case "seeding":
+      return "Seeding seats";
+    case "verifying-pairing":
+      return "Verifying pairing";
+    case "establishing-round":
+      return "Starting round";
+    case "running":
+      return "Running";
+    case "failed":
+      return "Failed";
+  }
+}
+
 const AUDIENCE_SIZE = 20;
+
+/**
+ * Issue #21, fourth corrective pass: a real-device pass found the
+ * simulator could enter an invalid state — both seats "Selecting next
+ * speaker…" while a shared round kept counting down. The invariant this
+ * pass exists to enforce: **a normal shared round may exist/count down
+ * only once the stage's two-speaker pairing is authoritatively
+ * established.** `startSimulation` used to flip `running` true and
+ * schedule every natural-activity loop *before* confirming seeding had
+ * actually succeeded — this bounded state machine closes that gap.
+ *
+ * Phases: `preparing` (audience/identity generation) → `seeding` (seat
+ * establishment, see `establishSeat`'s Case A/B split below) →
+ * `verifying-pairing` (both seats confirmed, tracked here for
+ * observability even though establishSeat's own return already gates
+ * progress) → `establishing-round` (confirms the shared round actually
+ * started, backstopped by `reconcileStageRoundAction` — see that
+ * action's own doc comment) → `running`, or `failed` at any bounded step
+ * that didn't succeed. Natural activity is only ever scheduled after
+ * `running` is reached — see `startSimulation`.
+ */
+type StartupPhase = "idle" | "preparing" | "seeding" | "verifying-pairing" | "establishing-round" | "running" | "failed";
+type SeatStartupStatus = "pending" | "claiming" | "authorized" | "occupied" | "failed";
+type StartupState = {
+  phase: StartupPhase;
+  seat1: SeatStartupStatus;
+  seat2: SeatStartupStatus;
+  pairing: "waiting" | "established";
+  sharedRound: "not-started" | "active";
+  error: string | null;
+};
+const IDLE_STARTUP_STATE: StartupState = {
+  phase: "idle",
+  seat1: "pending",
+  seat2: "pending",
+  pairing: "waiting",
+  sharedRound: "not-started",
+  error: null,
+};
+/** Bounded retry budget for a Case B (authorized Request-to-Speak) seat claim — see `establishSeat`. Never a blind sleep-and-hope: each attempt is a fresh, real `simulateAdvanceSelection` call against actual server state, not a timer alone. */
+const MAX_CLAIM_ATTEMPTS = 5;
+const CLAIM_RETRY_DELAY_MS = 150;
 
 /**
  * Issue #21, Part 5: preview/dev-only Session Simulator — tooling, not
@@ -186,6 +249,11 @@ export function SessionSimulatorPanel({
   onSimulatorReset?: () => void;
 }) {
   const [running, setRunning] = useState(false);
+  // Issue #21, fourth corrective pass: the bounded startup state machine
+  // — see this file's own doc comment on `StartupState` above. Separate
+  // from `running`, which now only flips true once this reaches
+  // "running" — never before.
+  const [startupState, setStartupState] = useState<StartupState>(IDLE_STARTUP_STATE);
   const [audience, setAudience] = useState<SimulatedIdentity[]>([]);
   const [log, setLog] = useState<string[]>([]);
   const [roundVoteTallies, setRoundVoteTallies] = useState<Record<string, { continue: number; replace: number }>>({});
@@ -214,6 +282,15 @@ export function SessionSimulatorPanel({
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   const runningRef = useRef(false);
+  // Issue #21, fourth corrective pass: `startSimulation` now does real
+  // awaited work (`establishInitialPairing`) before it's safe to flip
+  // `running` true — if Stop (or Reset) is pressed while that's still in
+  // flight, the async chain must not resurrect `running` once it finally
+  // resolves. Every Stop/Reset bumps this; `startSimulation` captures its
+  // own value at the start and only commits to "running" if nothing else
+  // has bumped it since — the same "was this superseded" guard a request
+  // sequence number gives you, without needing a full cancellation API.
+  const startupTokenRef = useRef(0);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const speakersRef = useRef(speakers);
   const pendingRequestsRef = useRef(pendingRequests);
@@ -455,7 +532,9 @@ export function SessionSimulatorPanel({
    * Open Seat), not as a required extra step.
    */
   async function startSimulation() {
+    const token = ++startupTokenRef.current;
     appendLog("Starting session…");
+    setStartupState({ ...IDLE_STARTUP_STATE, phase: "preparing" });
     const newAudience = createSimulatedAudience(AUDIENCE_SIZE);
     audienceRef.current = newAudience;
     setAudience(newAudience);
@@ -468,11 +547,28 @@ export function SessionSimulatorPanel({
     }
     setGuestDisplayNames({ ...guestDisplayNamesRef.current });
     onSimulatedIdentitiesCreated?.(allNewIdentities.map((identity) => identity.id));
-    runningRef.current = true;
-    setRunning(true);
     appendLog(`${AUDIENCE_SIZE} simulated audience identities generated`);
 
-    await seedTwoSpeakers();
+    // Issue #21, fourth corrective pass: the whole point of this bounded
+    // state machine — `running` (and therefore every natural-activity
+    // loop below) only ever flips on once the two-speaker pairing has
+    // actually been confirmed established, never before. A failure here
+    // leaves `running` false and reports why via `startupState`/the log
+    // — it does not silently half-start.
+    const established = await establishInitialPairing(seedSpeakers);
+    if (!established) {
+      appendLog("Startup did not complete — session not started. See the Startup status above for why.");
+      return;
+    }
+    // Stop/Reset pressed while the above was still in flight must win —
+    // this async chain resolving late must never resurrect `running`. See
+    // `startupTokenRef`'s own doc comment.
+    if (startupTokenRef.current !== token) return;
+
+    runningRef.current = true;
+    setRunning(true);
+    setStartupState((s) => ({ ...s, phase: "running" }));
+    appendLog("Simulation running");
 
     // Comments: every 3-8s.
     schedule(() => {
@@ -561,6 +657,10 @@ export function SessionSimulatorPanel({
   }
 
   function stopSimulation() {
+    // Invalidates any startup still in flight — see `startupTokenRef`'s
+    // own doc comment; without this, a startup that finishes seeding
+    // *after* Stop was pressed would silently flip `running` back on.
+    startupTokenRef.current++;
     runningRef.current = false;
     setRunning(false);
     stopAllTimers();
@@ -581,6 +681,7 @@ export function SessionSimulatorPanel({
    */
   async function confirmReset() {
     setResetConfirming(false);
+    startupTokenRef.current++; // see `startupTokenRef`'s own doc comment
     runningRef.current = false;
     setRunning(false);
     stopAllTimers();
@@ -595,6 +696,7 @@ export function SessionSimulatorPanel({
     audienceRef.current = [];
     seedSpeakersRef.current = null;
     setAudience([]);
+    setStartupState(IDLE_STARTUP_STATE);
     setRoundVoteTallies({});
     setPoolResetCount(0);
     prevPendingCountRef.current = 0;
@@ -703,68 +805,169 @@ export function SessionSimulatorPanel({
     appendLog(`Opened seat ${speaker.seat_number} (${speaker.display_name})`);
   }
 
+  function setSeatStartupStatus(seatNumber: 1 | 2, status: SeatStartupStatus) {
+    setStartupState((s) => (seatNumber === 1 ? { ...s, seat1: status } : { ...s, seat2: status }));
+  }
+
+  /** A fresh, authoritative read of the shared round row — never the possibly-stale `stageRound` prop. Used both to decide Case A vs. Case B (see `establishSeat`) and to verify the round actually started afterward. */
+  async function fetchStageRoundRow(): Promise<{ round_number: number; phase: string } | null> {
+    const supabase = createClient();
+    const { data } = await supabase.from("stage_rounds").select("round_number, phase").eq("event_id", eventId).maybeSingle();
+    return data ?? null;
+  }
+
   /**
    * Claims both seats for the run's two stable identities, one at a time
-   * — issue #21, second corrective pass, real-device finding. Previously
-   * claimed both seats *concurrently* (`Promise.allSettled` firing two
-   * simultaneous `claim_speaker_seat` calls), which raced a genuine
-   * database bug: on a brand-new event with no `stage_rounds` row yet,
-   * both concurrent calls' own `ensure_stage_round` step could try to
-   * insert that row at once, and the loser's uncaught unique-constraint
-   * violation rolled back its *entire* transaction — including the seat
-   * claim itself — silently leaving only one seat occupied. Fixed at the
-   * root, in the database (migration 00000000000028): the insert is now
-   * conflict-safe. Claiming sequentially here besides is what makes this
-   * mirror the realistic case the fix targets — two people (or a person
-   * and this panel) claiming seats moments apart, not at the exact same
-   * instant — and it's what makes each step's own success/failure
-   * individually reportable below, rather than an ambiguous combined
-   * result. Each step is still independently tolerant of that one seat
-   * already being occupied (a real user got there first, or this is a
-   * manual re-seed after only one seat opened) — a genuine per-step
-   * failure is logged with its real error message, never swallowed, per
-   * "either reach the valid two-speaker state or clearly report the
-   * actual failure."
+   * — issue #21, second corrective pass, real-device finding (see git
+   * history for the concurrent-claim race this sequential order fixed).
+   * Rebuilt in the fourth corrective pass around the invariant this pass
+   * exists to close: **a normal shared round may exist/count down only
+   * once the two-speaker pairing is authoritatively established.** Every
+   * step below verifies against fresh, authoritative state — never the
+   * possibly-stale `speakers`/`stageRound` props — and a genuine failure
+   * at any step stops here rather than silently proceeding.
+   *
+   * **Case A vs. Case B (Section 5)**: a single fresh read of
+   * `stage_rounds.round_number` decides which path every seat below
+   * uses — `>= 1` means the stage has *ever* achieved its initial
+   * pairing (the same permanent signal `isStageEstablished` reads
+   * server-side), so direct seat claims are no longer authorized; `0`
+   * means this is genuinely the stage's first pairing, where a direct
+   * join is still the legitimate initial-formation path. Both seats use
+   * the *same* decision — the stage doesn't become "established" partway
+   * through seeding its own initial pairing.
+   */
+  async function establishInitialPairing(seedSpeakers: [SimulatedIdentity, SimulatedIdentity]): Promise<boolean> {
+    const [a, b] = seedSpeakers;
+    setStartupState((s) => ({ ...s, phase: "seeding" }));
+
+    const before = await fetchStageRoundRow();
+    const established = (before?.round_number ?? 0) >= 1;
+    appendLog(
+      established
+        ? "Stage already established — seeding via authorized Request-to-Speak selection, not a direct join"
+        : "Stage not yet established — seeding via direct initial-formation join",
+    );
+
+    appendLog("Seeding Seat 1…");
+    const seat1Ok = await establishSeat(a, 1, established);
+    appendLog("Seeding Seat 2…");
+    const seat2Ok = await establishSeat(b, 2, established);
+
+    if (!seat1Ok && !seat2Ok) {
+      setStartupState((s) => ({ ...s, phase: "failed", error: "Could not seed either simulated speaker — see the log above for the real failure." }));
+      appendLog("Could not seed simulated speakers — startup failed; no shared round will be started");
+      return false;
+    }
+    if (!seat1Ok || !seat2Ok) {
+      setStartupState((s) => ({
+        ...s,
+        phase: "failed",
+        error: "Only one seat could be established — a shared round requires both, so none was started.",
+      }));
+      appendLog(`Seeded 1 simulated speaker (${seat1Ok ? a.displayName : b.displayName}) — the other seat could not be established; no shared round will be started`);
+      return false;
+    }
+
+    setStartupState((s) => ({ ...s, phase: "verifying-pairing", pairing: "established" }));
+
+    setStartupState((s) => ({ ...s, phase: "establishing-round" }));
+    appendLog("Verifying shared round…");
+    let round = await fetchStageRoundRow();
+    if (round?.phase !== "active") {
+      // The reactive backstop, called explicitly here too — see
+      // `reconcileStageRoundAction`'s own doc comment. Every production
+      // seat-claim RPC already triggers `ensure_stage_round` as a side
+      // effect, so this should be a no-op in the ordinary case; calling
+      // it directly (not a blind sleep-and-recheck) is what makes this a
+      // genuine self-heal rather than hoping the first read was just
+      // early.
+      await reconcileStageRoundAction(eventId);
+      round = await fetchStageRoundRow();
+    }
+    if (round?.phase !== "active") {
+      setStartupState((s) => ({
+        ...s,
+        phase: "failed",
+        error: `Both seats are occupied, but the shared round did not start (phase: ${round?.phase ?? "unknown"}) — this should be impossible; check server logs.`,
+      }));
+      appendLog(`Seeded 2 stable simulated speakers, but the shared round did not start (phase: ${round?.phase ?? "unknown"}) — this is unexpected; check server logs`);
+      return false;
+    }
+
+    setStartupState((s) => ({ ...s, sharedRound: "active" }));
+    appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2, Round ${round.round_number} active`);
+    return true;
+  }
+
+  /**
+   * One seat's establishment — branches on `established` (see
+   * `establishInitialPairing` above), never bypassing authorization once
+   * the stage has ever achieved its pairing. Case A reuses the existing
+   * direct-join adapter unchanged. Case B reuses the *exact* real
+   * Request-to-Speak → selection → authorized-claim pipeline
+   * (`simulateRequestToSpeak` + `simulateAdvanceSelection`) a real
+   * candidate's own browser tab would go through — no simulator-only
+   * loophole. Bounded retries on the claim step (never a blind sleep):
+   * each attempt is a fresh, real `simulateAdvanceSelection` call, which
+   * can legitimately need a couple of tries if selection hasn't frozen
+   * the just-submitted request yet.
+   */
+  async function establishSeat(identity: SimulatedIdentity, seatNumber: 1 | 2, established: boolean): Promise<boolean> {
+    setSeatStartupStatus(seatNumber, "claiming");
+
+    if (!established) {
+      try {
+        await simulateSeedSpeaker(eventId, identity.id, identity.displayName, seatNumber);
+        setSeatStartupStatus(seatNumber, "occupied");
+        return true;
+      } catch (err) {
+        appendLog(`Seat ${seatNumber} seed failed: ${err instanceof Error ? err.message : "unknown error"}`);
+        setSeatStartupStatus(seatNumber, "failed");
+        return false;
+      }
+    }
+
+    try {
+      await simulateRequestToSpeak(eventId, identity.id, identity.displayName, randomSpeakerRequestComment());
+    } catch (err) {
+      appendLog(`Seat ${seatNumber} request-to-speak failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      setSeatStartupStatus(seatNumber, "failed");
+      return false;
+    }
+    setSeatStartupStatus(seatNumber, "authorized");
+
+    for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
+      const result = await simulateAdvanceSelection(eventId, [identity.id], { [identity.id]: identity.displayName });
+      if (result.claimed) {
+        setSeatStartupStatus(seatNumber, "occupied");
+        return true;
+      }
+      if (attempt < MAX_CLAIM_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, CLAIM_RETRY_DELAY_MS));
+      }
+    }
+    appendLog(`Seat ${seatNumber}: ${identity.displayName}'s request did not result in an authorized claim within the expected window`);
+    setSeatStartupStatus(seatNumber, "failed");
+    return false;
+  }
+
+  /**
+   * The standalone "Seed 2 Speakers" button — deterministic manual
+   * re-seed using this run's same two stable identities, reusing the
+   * *exact* Case A/B logic above rather than a parallel bypass-only path
+   * (Section 5's "do not create a simulator-only loophole" applies here
+   * too, not just to Start). Once both seats are already occupied by
+   * these identities, this correctly reports nothing-to-do rather than
+   * pretending to re-seed them: an already-occupied seat can't
+   * legitimately be re-claimed for its own occupant through any real
+   * pathway either.
    */
   async function seedTwoSpeakers() {
     const pool = requireAudience();
     const seedSpeakers = seedSpeakersRef.current;
     if (!pool || !seedSpeakers) return;
-    const [a, b] = seedSpeakers;
-
-    appendLog("Seeding Seat 1…");
-    const seat1Ok = await claimSeedSeat(a, 1);
-
-    appendLog("Seeding Seat 2…");
-    const seat2Ok = await claimSeedSeat(b, 2);
-
-    if (seat1Ok && seat2Ok) {
-      appendLog("Starting Round 1…");
-      const supabase = createClient();
-      const { data: round } = await supabase.from("stage_rounds").select("round_number, phase").eq("event_id", eventId).maybeSingle();
-      if (round?.phase === "active") {
-        appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2, Round ${round.round_number} active`);
-      } else {
-        appendLog(
-          `Seeded 2 stable simulated speakers, but the shared round did not start (phase: ${round?.phase ?? "unknown"}) — this is unexpected; check server logs`,
-        );
-      }
-    } else if (seat1Ok || seat2Ok) {
-      appendLog(`Seeded 1 simulated speaker (${seat1Ok ? a.displayName : b.displayName}) — the other seat was already occupied`);
-    } else {
-      appendLog("Could not seed simulated speakers — both seats already occupied");
-    }
-  }
-
-  /** One seat-claim attempt for `seedTwoSpeakers` above — returns whether it succeeded, logging the real error (not a swallowed failure) when it didn't. */
-  async function claimSeedSeat(identity: SimulatedIdentity, seatNumber: 1 | 2): Promise<boolean> {
-    try {
-      await simulateSeedSpeaker(eventId, identity.id, identity.displayName, seatNumber);
-      return true;
-    } catch (err) {
-      appendLog(`Seat ${seatNumber} seed failed: ${err instanceof Error ? err.message : "unknown error"}`);
-      return false;
-    }
+    await establishInitialPairing(seedSpeakers);
   }
 
   const positionStyle = position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined;
@@ -799,6 +1002,14 @@ export function SessionSimulatorPanel({
     stageRound && stageRound.phase === "active" && now !== null
       ? Math.max(0, Math.ceil((new Date(stageRound.ends_at).getTime() - now) / 1000))
       : null;
+
+  // Issue #21, fourth corrective pass: Start is disabled for the whole
+  // bounded startup sequence, not just once `running` finally flips —
+  // otherwise a second tap mid-seeding could kick off a second,
+  // overlapping attempt. A `failed` phase deliberately leaves Start
+  // enabled again — pressing it is the retry (Section 7: "offer
+  // Start/Retry again"), it re-enters `preparing` from scratch.
+  const startingUp = startupState.phase !== "idle" && startupState.phase !== "running" && startupState.phase !== "failed";
 
   /**
    * Issue #21, third corrective pass: "was #1 legitimately not the pick,
@@ -862,7 +1073,7 @@ export function SessionSimulatorPanel({
           type="button"
           data-testid="sim-start"
           onClick={() => void startSimulation()}
-          disabled={running}
+          disabled={running || startingUp}
           className="rounded bg-emerald-600 px-2 py-1 font-medium disabled:opacity-40"
         >
           Start Simulated Session
@@ -871,7 +1082,15 @@ export function SessionSimulatorPanel({
           type="button"
           data-testid="sim-stop"
           onClick={stopSimulation}
-          disabled={!running}
+          // Issue #21, fourth corrective pass: Stop must be able to
+          // interrupt a startup that's still in flight, not only a
+          // fully-`running` session — otherwise there'd be no way to
+          // back out of a slow/stuck bounded startup short of waiting
+          // for it to fail on its own. `stopSimulation` bumps
+          // `startupTokenRef`, so an in-flight `startSimulation` that
+          // finishes seeding *after* this is pressed correctly discards
+          // its own result instead of resurrecting `running`.
+          disabled={!running && !startingUp}
           className="rounded bg-red-600 px-2 py-1 font-medium disabled:opacity-40"
         >
           Stop Simulation
@@ -912,6 +1131,35 @@ export function SessionSimulatorPanel({
           Resolve Round Now
         </button>
       </div>
+
+      {/*
+        Issue #21, fourth corrective pass, Section 8: compact, preview-only
+        startup observability — enough to distinguish seat-authorization
+        failure vs. selection failure vs. round-creation failure without a
+        new diagnostics system. Shown for the whole bounded startup
+        sequence (including a `failed` outcome, so it stays visible to
+        screenshot); collapses away once `running` is reached, back into
+        the existing observability below.
+      */}
+      {startupState.phase !== "idle" && startupState.phase !== "running" && (
+        <div data-testid="sim-startup" className="mb-3 flex flex-col gap-0.5 rounded-lg bg-white/5 p-2">
+          <p data-testid="sim-startup-phase" className="font-semibold text-white/90">
+            Simulation: {startupPhaseLabel(startupState.phase)}
+          </p>
+          <p>Audience: {startupState.phase === "preparing" ? "Preparing" : "Ready"}</p>
+          <p data-testid="sim-startup-seat-1">Seat 1: {startupState.seat1}</p>
+          <p data-testid="sim-startup-seat-2">Seat 2: {startupState.seat2}</p>
+          <p data-testid="sim-startup-pairing">Pairing: {startupState.pairing}</p>
+          <p data-testid="sim-startup-round">
+            Shared round: {startupState.sharedRound === "active" ? `Round ${stageRound?.round_number ?? "?"} active` : "not started"}
+          </p>
+          {startupState.error && (
+            <p data-testid="sim-startup-error" className="mt-0.5 text-red-400">
+              {startupState.error}
+            </p>
+          )}
+        </div>
+      )}
 
       <div data-testid="sim-observability" className="mb-3 flex flex-col gap-2 rounded-lg bg-white/5 p-2">
         <div data-testid="sim-shared-round" className="font-semibold text-white/90">

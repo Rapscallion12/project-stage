@@ -13,6 +13,16 @@ merged to `main`.
 
 ### Changed
 
+- **Session Simulator seat seeding now respects seat-claim authorization
+  once a stage is already established** (issue #21, fourth corrective
+  pass) — closes a simulator-only loophole: re-seeding an already-
+  established stage (Start's own automatic seeding, or the standalone
+  "Seed 2 Speakers" button) now goes through the real Request-to-Speak →
+  selection → authorized-claim pipeline instead of the direct-join
+  bypass, matching the authorization model the third corrective pass
+  introduced for every other seat claim. The direct-join bypass remains
+  available only for a genuinely new, never-established stage's initial
+  pairing. See DECISIONS.md.
 - **Next-speaker selection is now deterministic — highest votes wins**
   (issue #21, third corrective pass) — replaces the previous weighted-
   random draw among a frozen Top 3 (fixed rank weights, 50/33/17 odds)

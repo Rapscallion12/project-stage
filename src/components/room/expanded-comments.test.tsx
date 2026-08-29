@@ -113,6 +113,13 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     });
   });
 
+  it("never applies the ambient feed's top-edge fade — this is a deliberate reading surface, not the livestream-style ambient feed (issue #21, fourth corrective pass)", () => {
+    render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+    const scroll = screen.getByTestId("expanded-comments-scroll");
+    expect(scroll.style.maskImage).toBe("");
+    expect(scroll.style.webkitMaskImage).toBe("");
+  });
+
   describe("Recent Comments — newest to oldest, frozen snapshot", () => {
     const messages = [
       makeMessage({ id: "m1", body: "first", created_at: "2026-01-01T00:00:00.000Z" }),

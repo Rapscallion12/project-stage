@@ -114,6 +114,11 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
   reportSpeakerMediaActive: vi.fn(),
   reportSpeakerMediaInactive: vi.fn(),
   confirmOwnSeatExpiration: vi.fn(),
+  // Issue #21, fourth corrective pass: useStageRoundReconciliation (now
+  // wired into EventRoom) calls this whenever occupancy changes — a
+  // harmless no-op mock, same as every other action here this file's
+  // own composition tests don't otherwise care about.
+  reconcileStageRoundAction: vi.fn(),
 }));
 
 vi.mock("@/components/room/portrait-room", () => ({

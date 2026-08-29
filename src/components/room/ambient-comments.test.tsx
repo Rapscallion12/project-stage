@@ -45,6 +45,25 @@ describe("AmbientComments (issue #21) — live-stream-style feed, not a self-exp
     expect(bubble).toHaveTextContent("hi");
   });
 
+  it("fades comments out at the top edge via a container-level mask, instead of a hard clip (issue #21, fourth corrective pass)", () => {
+    render(<AmbientComments messages={[makeMessage()]} />);
+    const container = screen.getByTestId("ambient-comments");
+    expect(container.style.maskImage).toContain("linear-gradient");
+    expect(container.style.webkitMaskImage).toContain("linear-gradient");
+    // Still clips overflow to its own bounded height — the mask is a
+    // presentation refinement on top of the existing scroll container,
+    // not a replacement for it.
+    expect(container.className).toMatch(/\boverflow-y-auto\b/);
+    expect(container.className).toMatch(/\bmax-h-32\b/);
+  });
+
+  it("tapping a comment still opens the expected interaction with the fade applied", () => {
+    const onExpand = vi.fn();
+    render(<AmbientComments messages={[makeMessage({ id: "m1" })]} onExpand={onExpand} />);
+    fireEvent.click(screen.getByTestId("ambient-comment"));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
   it("shows an avatar placeholder for each bubble — the same canonical presentation Expanded Comments uses (issue #21, third corrective pass)", () => {
     render(<AmbientComments messages={[makeMessage({ author_display_name: "Jamie Rivera" })]} />);
     expect(screen.getByTestId("participant-avatar-initials")).toHaveTextContent("JA");

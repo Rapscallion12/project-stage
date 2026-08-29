@@ -36,7 +36,7 @@ import {
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
 import { decideClaimEligibility, findOpenSeat, type ClaimDecision } from "@/lib/speaker-queue";
-import { isStageEstablished } from "@/lib/repositories/stage-rounds";
+import { isStageEstablished, ensureStageRound } from "@/lib/repositories/stage-rounds";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
 export type GetLiveKitTokenResult = { token: string } | { error: string };
@@ -724,4 +724,25 @@ export async function resolveSeatClosingAction(eventSpeakersId: string): Promise
     await syncPublishPermission({ eventId: result.eventId, identity: result.identity, canPublish: false });
   }
   return result !== null;
+}
+
+/**
+ * Issue #21, fourth corrective pass: the client-side reactive backstop
+ * for the shared-round invariant — "a normal shared round may exist and
+ * count down only while the stage's two-speaker pairing is actually
+ * established" (`ensure_stage_round`, migration 00000000000024, is the
+ * authoritative enforcement; this just makes sure it actually gets
+ * called whenever it matters). Every production seat-claim/seat-vacate
+ * RPC already triggers `ensure_stage_round` as a side effect
+ * (`claimSpeakerSeat`, `leaveSpeakerSeat(AsGuest)`, eviction) — this
+ * exists for the gap a real-device pass found: any client whose own view
+ * of occupancy just changed re-verifies the invariant directly, rather
+ * than trusting that whichever server path changed it already reconciled
+ * the round. Idempotent and safe from every connected client
+ * simultaneously (`ensure_stage_round` itself is), same as
+ * `resolveStageRoundAction` above. See `useStageRoundReconciliation`
+ * (hooks/use-stage-round-reconciliation.ts) for the client-side trigger.
+ */
+export async function reconcileStageRoundAction(eventId: string): Promise<void> {
+  await ensureStageRound(eventId);
 }

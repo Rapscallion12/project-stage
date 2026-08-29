@@ -239,6 +239,24 @@ export function ChatPanel({
             <button
               type="button"
               data-testid="watch-composer-mic"
+              // Issue #21, fourth corrective pass, real-device finding:
+              // toggling Request-to-Speak while typing a comment was
+              // dismissing the keyboard and losing the draft's focus.
+              // Root cause: tapping *any* focusable element (this button
+              // included) is the browser's own default behavior for
+              // shifting focus away from whatever was previously focused
+              // (the input) — on iOS Safari that focus loss is what
+              // closes the virtual keyboard, before this button's own
+              // onClick ever runs. `preventDefault()` on `mousedown` (the
+              // event that actually triggers the focus shift, ahead of
+              // `click`) stops the browser from ever moving focus off the
+              // input in the first place — the input's value, cursor
+              // position, and scroll position are all untouched because
+              // nothing ever blurred it. No compensating refocus-after-
+              // blur logic is added deliberately (that would still be
+              // visible as a flicker); this prevents the blur instead of
+              // reacting to it.
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 if (hasPendingRequest && !micRequestMode) {
                   onCancelPendingRequest?.();
@@ -290,6 +308,10 @@ export function ChatPanel({
         <>
           <button
             type="button"
+            // See the compact mic button's own comment above — same fix,
+            // same reasoning, this is the non-compact render of the
+            // identical control.
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => onMicRequestModeChange(!micRequestMode)}
             disabled={pending}
             aria-pressed={micRequestMode}

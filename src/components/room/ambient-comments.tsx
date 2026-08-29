@@ -110,6 +110,27 @@ export function AmbientComments({
       onScroll={handleScroll}
       data-testid="ambient-comments"
       className="pointer-events-auto flex max-h-32 flex-col gap-1.5 overflow-y-auto"
+      // Issue #21, fourth corrective pass, real-device finding: comments
+      // scrolling past the top edge were hard-clipped by overflow-y-auto
+      // alone — a visibly abrupt cut, worst when a line sat right against
+      // the boundary. A mask-image fade on this *container* (not each
+      // individual bubble — a single treatment, not per-item animation,
+      // per explicit instruction) reads as a natural dissolve instead: the
+      // top ~28px (roughly the height of one bubble, out of this
+      // container's 128px max-height — "subtle," not swallowing a large
+      // portion of the feed) fades from transparent to opaque, the
+      // remainder stays fully solid. Both the standard and `-webkit-`
+      // prefixed properties are set explicitly — Tailwind can't safely
+      // auto-generate the vendor-prefixed one for an inline gradient, and
+      // the prefixed form is what iOS Safari (this project's actual
+      // target) requires. Purely visual: `overflow-y-auto`'s own
+      // scroll/follow behavior, and every bubble's tap target, are
+      // completely unaffected — a mask never blocks pointer events, only
+      // paints.
+      style={{
+        maskImage: "linear-gradient(to bottom, transparent, black 28px)",
+        WebkitMaskImage: "linear-gradient(to bottom, transparent, black 28px)",
+      }}
     >
       {messages.map((message) => (
         <button

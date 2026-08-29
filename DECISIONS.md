@@ -3,6 +3,152 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-29 — Fourth corrective pass: bounded simulator startup state machine, Case A/B seat seeding, reactive round-invariant backstop, composer focus preservation, ambient comment fade (issue #21)
+
+**Context**: real-device testing found the simulator could reach a
+genuinely invalid state — pressing Start Simulated Session produced both
+seats showing "Selecting next speaker…" while the shared round badge
+simultaneously read "Round 11 · 49s" and kept counting down. The
+instruction was explicit that the important issue was *not* merely slow
+selection: the invariant "a normal shared round may exist/count down
+only once the stage's two-speaker pairing is authoritatively
+established" was being violated, and the fix had to trace the actual
+state transition, not paper over it with delays, fake placeholders, or a
+simulator-only authorization bypass. Two smaller, independently-reported
+items rode along: Request-to-Speak toggling while typing dismissed the
+keyboard, and ambient comments hard-clipped at the feed's top edge.
+
+**Root cause, as far as it could be traced without live production
+logs**: `startSimulation` set `running = true` and unconditionally
+scheduled every natural-activity loop (including round-voting, which
+reads whatever the client's own `speakers` state happens to show)
+*before* `seedTwoSpeakers` had even resolved, let alone confirmed it
+succeeded. Two independent gaps could each explain the reported
+screenshot on their own: (1) if seeding partially or fully failed (e.g.
+because the target stage was already established and the seeding path's
+unconditional bypass claim was rejected), the session still proceeded to
+"running" as if nothing had gone wrong; (2) a client's own locally-
+cached `speakers`/`stageRound` state could be transiently stale relative
+to the database's actual occupancy at the exact moment Start was
+pressed. Rather than commit to one specific historical trigger without
+being able to reproduce it live, the decision was to build the robust,
+explicit mechanism the corrective-pass instructions themselves
+specified in detail — a bounded startup state machine plus a reactive,
+idempotent backstop — which structurally closes the invariant violation
+regardless of which exact path caused any given instance of it.
+
+**Decision — bounded startup state machine, not a longer loading
+animation**: `startSimulation` now calls a new `establishInitialPairing`
+or aggregate lifecycle before ever flipping `running`. Each seat's
+establishment (`establishSeat`) is verified by its own real result (a
+successful `simulateSeedSpeaker` call, or a `simulateAdvanceSelection`
+result reporting `claimed: true`) — never a fixed delay or a trusted
+local flag. Once both seats are confirmed, a fresh, authoritative read
+of `stage_rounds` is taken; if it isn't `active` yet, the new reactive
+backstop (`reconcileStageRoundAction`) is called explicitly and re-read
+once — genuine defense in depth, not a blind retry loop, since
+`ensure_stage_round` is a direct synchronous RPC, not eventually
+consistent. Only after all of this succeeds does `running` flip and the
+natural-activity loops (comments, likes, RTS, round-voting, replacement
+polling) get scheduled — a failure at any bounded step leaves `running`
+false, reports the specific failure via a new preview-only "Startup"
+observability panel, and lets the user press Start again as the retry.
+A small `startupTokenRef` generation-token guards against a slow/stuck
+in-flight startup completing *after* Stop or Reset was pressed and
+silently resurrecting `running` — a real regression found and fixed
+during this pass's own test-writing, not something manually spotted
+first.
+
+**Decision — Case A/B seat seeding, closing a simulator-only
+authorization loophole**: `establishSeat` now takes a fresh, authoritative
+pre-check read of `stage_rounds.round_number` (the same permanent "has
+this stage ever been established" signal the third corrective pass
+introduced) and branches: **Case A** (a genuinely new, never-established
+stage) reuses the existing `simulateSeedSpeaker` direct-join bypass
+unchanged — this is legitimate initial-stage formation, exactly as
+before. **Case B** (an already-established stage, even with both seats
+currently empty) now goes through the *real* production pipeline —
+`simulateRequestToSpeak` followed by bounded-retried
+`simulateAdvanceSelection` calls — the same eligibility, ranking,
+selection, and authorization machinery a real candidate's own browser
+tab would use, reusing `claim_speaker_seat`'s existing non-bypassed
+authorization check rather than adding a new one. This applies uniformly
+to *both* Start's own automatic seeding and the standalone "Seed 2
+Speakers" button, per the explicit instruction that a simulator-only
+loophole in the database authorization model must not exist anywhere in
+this tool, not just on the primary path. One consequence, confirmed
+correct rather than patched around: manually re-pressing "Seed 2
+Speakers" once a stage is already fully established and both seats
+occupied by its own seeded identities now correctly reports nothing to
+do (no open seat exists to authorize a claim for) rather than pretending
+to re-seed the same two people via a bypass — the previous behavior was
+a test-only fiction the mocked test suite never actually exercised
+against the real backend's own "seat already occupied" guard.
+
+**Decision — a reactive backstop, not just a startup-time fix**: the
+invariant this pass targets isn't specific to simulator startup — any
+client whose own view of seat occupancy changes could in principle be
+looking at a stale round. `ensure_stage_round` (migration
+00000000000028) is already fully idempotent, recomputing round phase
+from real current occupancy on every call — this pass's own review of
+that migration's SQL confirmed the `round_number >= 1` "established"
+signal is sound (a purely-awaiting-pairing placeholder starts at
+`round_number = 0`, per migration 00000000000027's own fix; only the
+`occupied_count = 2` branch ever advances it to 1+). New
+`reconcileStageRoundAction` (room/actions.ts) plus
+`useStageRoundReconciliation` (a new hook, wired into `EventRoom`
+alongside the existing `useStageRoundResolution`) call it whenever any
+connected client's own occupancy view changes — keyed on the sorted set
+of occupied seat ids, not the raw `speakers` array reference, so an
+unrelated field change (a vote, a mute toggle) never re-triggers it.
+Idempotent and safe from every connected client simultaneously, the same
+precedent `useStageRoundResolution` already established for the round's
+own deadline-resolution trigger.
+
+**Composer focus preservation**: root-caused to the browser's own
+default behavior of shifting focus to *any* tapped focusable element on
+`mousedown` — this happens before a button's `onClick` ever fires, and
+on iOS Safari that focus loss is what closes the virtual keyboard.
+`event.preventDefault()` on the mic button's `onMouseDown` stops the
+browser from ever initiating that focus shift, so the comment input is
+never blurred at all — deliberately not a compensating refocus-after-
+blur effect, which would still be visible as a flicker, per explicit
+instruction to fix the interaction so it never blurs in the first place.
+Confirmed via inspection that the input is the same DOM node regardless
+of `micRequestMode` (only its `placeholder` prop changes, no key change,
+no remount) — the focus fix alone is sufficient.
+
+**Ambient comment fade**: a single container-level CSS `mask-image` (and
+`-webkit-mask-image`, required for iOS Safari) linear gradient on the
+existing `overflow-y-auto` container, not per-bubble animation — a
+purely visual, `pointer-events`-unaffecting treatment, so scroll-follow
+behavior and every bubble's own tap target are untouched. Deliberately
+not applied to Expanded Comments, which is a reading surface with its
+own snapshot/scroll model, not the ambient livestream-style feed.
+
+**Reason**: every alternative the instructions explicitly ruled out
+(arbitrary delays, longer loading animations, fake speaker placeholders,
+hiding the timer, force-seating candidates without authorization,
+client-only checks, a blind sleep-and-hope retry, a simulator-only
+authorization loophole) would have hidden the symptom without closing
+the actual gap — a *shared* round genuinely counting down without a
+genuinely established pairing is a database-observable fact, not a
+rendering artifact, and the fix needed to be provable against the real
+database, which is why three new real-database integration tests
+(`stage-round-invariant.test.ts`) exist alongside the component-level
+ones.
+
+**Tradeoffs**: seat establishment via Case B (an already-established
+stage) can take a few hundred milliseconds longer than the old
+unconditional bypass, since it now waits on a real selection round to
+freeze and a real claim to be authorized — an intentional and correct
+cost of not bypassing production's own authorization model, not a
+regression to optimize away. The reactive backstop adds one additional
+`ensure_stage_round` RPC call per connected client whenever occupancy
+changes — cheap (a single indexed lookup plus, in the common case, a
+no-op branch) and already proven safe to call redundantly by every
+existing seat-claim/vacate path doing exactly that today.
+
 ## 2026-08-29 — Third corrective pass: deterministic selection replaces weighted-random, seat claims require selection authorization after initial stage formation, avatars, tap-away Vote (issue #21)
 
 **Context**: real-device testing continued to go well, but surfaced five

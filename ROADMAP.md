@@ -902,6 +902,43 @@ different dependencies. Current order:
       dismisses on outside-tap/Escape without erasing the viewer's
       selection. Full suite 935/935, lint/tsc/build clean. See
       DECISIONS.md and SESSION_LOG.md's Session 44.
+      **Fourth corrective pass (2026-08-29, same branch)**: real-device
+      testing caught a genuine invariant violation — both seats showing
+      "Selecting next speaker…" while a shared round kept counting down.
+      `startSimulation` used to flip `running` (and schedule every
+      natural-activity loop) before seeding had actually finished or even
+      succeeded; rebuilt around an explicit bounded startup state machine
+      (`establishInitialPairing`/`establishSeat`, new preview-only
+      `startupState`) that only reaches "running" after both seats are
+      confirmed occupied *and* the shared round is confirmed active — a
+      failure at any step reports why and never half-starts. Startup now
+      also respects the same seat-authorization model the third pass
+      introduced: seeding a genuinely new stage still uses the direct
+      initial-formation join (Case A), but re-seeding an *already-
+      established* stage — including the standalone "Seed 2 Speakers"
+      button — now goes through the real Request-to-Speak → selection →
+      authorized-claim pipeline (Case B), never a bypass, closing a
+      simulator-only authorization loophole the same principle the third
+      pass established for production. New client-side reactive backstop
+      (`reconcileStageRoundAction`/`useStageRoundReconciliation`) calls
+      the already-idempotent `ensure_stage_round` whenever any connected
+      client's own view of seat occupancy changes, independent of
+      whichever server path changed it. New compact "Startup" panel
+      section (Simulation/Audience/Seat 1-2/Pairing/Shared round) visible
+      only during startup or on failure. Also fixed: toggling Request-to-
+      Speak while typing a comment was dismissing the keyboard
+      (`onMouseDown` `preventDefault()` on the mic button — stops the
+      browser's own default focus-shift before it happens, no
+      compensating refocus); ambient comments now fade at the top edge
+      via a container-level CSS mask instead of a hard clip (Expanded
+      Comments deliberately unaffected — it's a reading surface, not the
+      livestream feed). Vote UI left untouched per explicit instruction.
+      3 new real-database integration tests
+      (`stage-round-invariant.test.ts`) prove the invariant directly:
+      zero/one occupied seats never show an active round, exactly one new
+      round begins once both are authoritatively occupied, both via fresh
+      seeding and via the speaker-loss/replacement path. See DECISIONS.md
+      and SESSION_LOG.md's Session 45.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
