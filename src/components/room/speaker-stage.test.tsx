@@ -120,6 +120,26 @@ describe("SpeakerStage", () => {
     expect(screen.getByTestId("speaker-divider").className).toMatch(/\bw-2\b/);
   });
 
+  // Issue #21, seventh corrective pass, Sections 1-5: the "landscape"
+  // tile orientation (DesktopRoom/MobileLandscapeRoom) additionally
+  // opts into a container-query-driven stacked mode once the stage's
+  // own available geometry gets too narrow for useful side-by-side
+  // video — see globals.css's own doc comment for the actual container
+  // query (jsdom doesn't implement container queries, so this only
+  // verifies the correct hook classes are present, not the resulting
+  // layout at any particular size — that's a real-browser/real-device
+  // concern). Portrait is untouched: mobile always stacks by deliberate
+  // product decision, independent of geometry.
+  it("marks the stage as a size query container, and only the landscape tile orientation opts its own tiles/divider into the geometry-driven stacking query", () => {
+    const { rerender } = render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
+    expect(screen.getByTestId("room-stage").className).toMatch(/\bstage-container\b/);
+    expect(screen.getByTestId("speaker-divider").className).not.toMatch(/\bstage-divider-landscape\b/);
+
+    rerender(<SpeakerStage speakers={[]} orientation="landscape" {...baseProps} />);
+    expect(screen.getByTestId("room-stage").className).toMatch(/\bstage-container\b/);
+    expect(screen.getByTestId("speaker-divider").className).toMatch(/\bstage-divider-landscape\b/);
+  });
+
   it("renders no self-preview at all when there's no local video track — hidden entirely for an ordinary audience member, not an empty placeholder (issue #22)", () => {
     render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
     expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();

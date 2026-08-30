@@ -77,6 +77,7 @@ const baseProps: RoomLayoutProps = {
   isPreviewBuild: false,
   simulatedGuestIds: new Set(),
   stageRound: null,
+  onOpenRoomInfo: () => {},
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -146,6 +147,18 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
 
       rerender(<PortraitRoom {...baseProps} connectionStatus="reconnecting" />);
       expect(screen.getByTestId("watch-status-pill")).toHaveTextContent("Reconnecting…");
+    });
+
+    // Issue #21, seventh corrective pass, Section 9: the status pill
+    // doubles as the room/navigation entry point now that the site-wide
+    // header is hidden for the whole time a room is mounted.
+    it("the status pill is itself the room/navigation trigger", () => {
+      const onOpenRoomInfo = vi.fn();
+      render(<PortraitRoom {...baseProps} onOpenRoomInfo={onOpenRoomInfo} />);
+      const pill = screen.getByTestId("watch-status-pill");
+      expect(pill.tagName).toBe("BUTTON");
+      fireEvent.click(pill);
+      expect(onOpenRoomInfo).toHaveBeenCalledTimes(1);
     });
 
     it("shows the guest identity chip for a guest, not for an account holder", () => {

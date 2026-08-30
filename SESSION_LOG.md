@@ -4,6 +4,78 @@ Newest entry first.
 
 ---
 
+## 2026-08-30 — Session 48: Seventh corrective pass — geometry-driven stage stacking, stage-first collapsed navigation, real Session Simulator Reset bug, SIM tactile feedback (issue #21)
+
+**Goal**: address four UX/simulator issues found testing the sixth
+pass's preview, before the user's next real-device pass. Explicit
+instruction: preserve the sixth pass's speaker-selection latency fix
+completely; surface (don't quietly decide) any consequential product
+ambiguity.
+
+**Responsive stage geometry (Sections 1-5)**: `SpeakerStage`'s root
+became a real CSS size query container; its side-by-side tile
+arrangement now switches to stacked via `@container stage (aspect-ratio
+< 1.5)` instead of always being side-by-side regardless of how narrow
+the stage got. **The first threshold (`< 2`) was wrong** — caught only
+by loading the app in a real browser (Playwright, local dev server) at
+real window sizes, since jsdom can't execute container queries at all:
+`DesktopRoom`'s fixed-width sidebar means the stage's own aspect ratio
+stays roughly constant across most desktop window sizes, so `< 2`
+stacked even at a full 1920×1080, contradicting "wide desktop still
+uses side-by-side." Recalibrated to `< 1.5` and reverified live across
+four window sizes. The existing centered round-timer badge needed no
+change — it was already positioned at the stage's geometric center,
+which is the tile seam in either orientation.
+
+**Stage-first collapsed navigation (Sections 8-15)**: the site-wide
+header now hides unconditionally for the whole time a room is mounted
+(previously only in one narrow short-landscape case — mobile portrait
+had never gotten this treatment at all). A new `RoomInfoOverlay`,
+rendered once by `EventRoom` as a sibling of the composition branch,
+provides Home/Events navigation, room info, and account actions as a
+dismissible overlay (mobile bottom sheet, desktop popover) — triggered
+by the *existing* room-identity status pill (no new floating control)
+and a new small button in `RoomHeader` on desktop. Verified live: the
+round timer and comments kept updating underneath the overlay while
+open, including a full round transition mid-overlay, and closing it
+returned to the exact same live stage.
+
+**The real Session Simulator Reset bug (Sections 16-19)**: traced
+before fixing anything. The reported "Round 1 · awaiting pairing"
+surviving Reset indefinitely was not a database problem (already
+covered by extensive real-database tests from an earlier pass) — it was
+`useStageRound`'s Realtime handler silently discarding every `DELETE`
+event, the one production path that ever deletes that row at all (every
+other transition only updates it), so the bug had likely never been
+exercised before. Fixed via a pure, directly-tested reducer
+(`applyStageRoundChange`). `EventRoom`'s `onSimulatorReset` also now
+triggers an explicit `refetchSpeakers()` as defense in depth.
+
+**One-tap Reset + real tactile feedback everywhere (Sections 20-26)**:
+the two-tap confirmation is gone (a preview-only tool never needed it,
+and may have been masking the actual bug — a user tapping once, seeing
+nothing visibly happen, and concluding Reset silently failed). New
+shared `SimButton` wraps all ~15 simulator buttons: real pointer-event-
+tracked pressed state (never `:hover`, never bare `:active` — unreliable
+on iOS Safari without a touch listener), and an automatic
+disabled/executing state only for genuinely async actions (never for
+quick deterministic generation actions, preserving intentional repeated
+tapping) — this is what actually prevents a duplicate concurrent Reset,
+not a second confirmation step.
+
+**Verification**: full suite, lint, tsc, build all clean — exact count
+in the commit. New tests: `use-stage-round.test.ts` (the reducer fix),
+`sim-button.test.tsx`, `room-info-overlay.test.tsx`, plus updates across
+every composition/header test file for the new trigger wiring and the
+Reset confirmation removal. Manual verification went beyond unit tests
+this pass — a local dev server plus a real Chromium browser (Playwright)
+confirmed the actual responsive geometry, timer placement, and overlay
+behavior no jsdom test can exercise; see DECISIONS.md for the specific
+window sizes checked. Fresh preview deployed; stopping here for the
+user's review — not merged to main.
+
+---
+
 ## 2026-08-30 — Session 47: Sixth corrective pass — next-speaker latency traced to a client-side polling gap, "Joining…" seat label, real per-seat SIM timing (issue #21)
 
 **Goal**: another real-device pass, diagnostic-first per explicit

@@ -29,6 +29,7 @@ import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
 import { useNow } from "@/hooks/use-now";
 import { useSeatPromotionTiming } from "@/hooks/use-seat-promotion-timing";
 import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
+import { SimButton } from "@/components/room/sim-button";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
@@ -294,10 +295,6 @@ export function SessionSimulatorPanel({
   // interrupting the simulated session underneath it.
   const [collapsed, setCollapsed] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
-  // Reset Session: a small inline "are you sure" step (never a native
-  // confirm() dialog — keeps the whole interaction inside this panel's
-  // own testable DOM) so a single stray tap can't destroy test state.
-  const [resetConfirming, setResetConfirming] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
 
@@ -698,9 +695,37 @@ export function SessionSimulatorPanel({
    * audience and no memory of the old one (including the shared round:
    * once both seeded seats are gone, `ensure_stage_round` marks the stage
    * `awaiting_pairing` again server-side, same as any other double-vacancy).
+   *
+   * **One tap, no confirmation** (issue #21, seventh corrective pass,
+   * Section 20 — explicit instruction): this is a preview-only tool, not
+   * a real-user-facing destructive action, so the previous "tap Reset →
+   * confirm row appears → tap Reset again" step is gone. `SimButton`
+   * (see that component's own doc comment) is what actually makes a
+   * single tap *feel* safe despite firing immediately — a genuine
+   * pressed state on tap, then a disabled/dimmed "executing" state for
+   * as long as this function's own promise is in flight, so a second tap
+   * on an already-running reset can't fire a second, overlapping one
+   * (Section 25) — the *duplicate-prevention* moved from a confirmation
+   * step into the button's own async-in-flight state, rather than being
+   * dropped outright.
+   *
+   * **Client reconciliation (Section 19)**: this function's own job ends
+   * once the database rows are gone and this component's own local state
+   * is cleared — `speakers`/`pendingRequests`/`messages`/`stageRound` are
+   * *props*, owned by `EventRoom`'s Realtime-subscribed hooks, not local
+   * state here. Those hooks each correctly clear a deleted row from
+   * their own client state via their own Realtime DELETE handlers
+   * (`useStageRound`'s own real bug — a `stage_rounds` DELETE being
+   * silently ignored, leaving a stale "Round 1 · awaiting pairing" on
+   * screen indefinitely — is fixed at its own source, not papered over
+   * here; see that hook's own doc comment). `onSimulatorReset` (below)
+   * additionally triggers an explicit `refetchSpeakers()` from
+   * `EventRoom` as defense in depth against a missed Realtime delta —
+   * the same "don't just trust the incremental delta arrived" discipline
+   * `useActiveSpeakers`' own SUBSCRIBED-triggers-full-refetch already
+   * uses elsewhere in this room.
    */
-  async function confirmReset() {
-    setResetConfirming(false);
+  async function handleReset() {
     startupTokenRef.current++; // see `startupTokenRef`'s own doc comment
     runningRef.current = false;
     setRunning(false);
@@ -1095,17 +1120,10 @@ export function SessionSimulatorPanel({
         style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
       >
       <div className="mb-3 flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          data-testid="sim-start"
-          onClick={() => void startSimulation()}
-          disabled={running || startingUp}
-          className="rounded bg-emerald-600 px-2 py-1 font-medium disabled:opacity-40"
-        >
+        <SimButton data-testid="sim-start" onClick={startSimulation} disabled={running || startingUp} className="rounded bg-emerald-600 px-2 py-1 font-medium">
           Start Simulated Session
-        </button>
-        <button
-          type="button"
+        </SimButton>
+        <SimButton
           data-testid="sim-stop"
           onClick={stopSimulation}
           // Issue #21, fourth corrective pass: Stop must be able to
@@ -1117,45 +1135,35 @@ export function SessionSimulatorPanel({
           // finishes seeding *after* this is pressed correctly discards
           // its own result instead of resurrecting `running`.
           disabled={!running && !startingUp}
-          className="rounded bg-red-600 px-2 py-1 font-medium disabled:opacity-40"
+          className="rounded bg-red-600 px-2 py-1 font-medium"
         >
           Stop Simulation
-        </button>
-        {resetConfirming ? (
-          <div data-testid="sim-reset-confirm-row" className="flex items-center gap-1.5 rounded bg-white/10 px-2 py-1">
-            <span className="font-medium">Reset simulated session?</span>
-            <button type="button" data-testid="sim-reset-cancel" onClick={() => setResetConfirming(false)} className="rounded bg-white/10 px-1.5 py-0.5">
-              Cancel
-            </button>
-            <button type="button" data-testid="sim-reset-confirm" onClick={() => void confirmReset()} className="rounded bg-red-600 px-1.5 py-0.5 font-medium">
-              Reset
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            data-testid="sim-reset"
-            onClick={() => setResetConfirming(true)}
-            className="rounded bg-orange-700 px-2 py-1 font-medium"
-          >
-            Reset Session
-          </button>
-        )}
-        <button type="button" data-testid="sim-seed-speakers" onClick={() => void seedTwoSpeakers()} className="rounded bg-white/10 px-2 py-1">
+        </SimButton>
+        {/*
+          Issue #21, seventh corrective pass, Section 20: one tap, no
+          confirmation step — see handleReset's own doc comment for why
+          this is safe (a preview-only tool, and SimButton's own
+          executing/disabled state already prevents a duplicate
+          concurrent reset).
+        */}
+        <SimButton data-testid="sim-reset" onClick={handleReset} className="rounded bg-orange-700 px-2 py-1 font-medium">
+          Reset Session
+        </SimButton>
+        <SimButton data-testid="sim-seed-speakers" onClick={seedTwoSpeakers} className="rounded bg-white/10 px-2 py-1">
           Seed 2 Speakers
-        </button>
-        <button type="button" data-testid="sim-generate-comments" onClick={() => generateComments()} className="rounded bg-white/10 px-2 py-1">
+        </SimButton>
+        <SimButton data-testid="sim-generate-comments" onClick={() => generateComments()} className="rounded bg-white/10 px-2 py-1">
           Generate Comments
-        </button>
-        <button type="button" data-testid="sim-generate-requests" onClick={() => generateSpeakerRequests()} className="rounded bg-white/10 px-2 py-1">
+        </SimButton>
+        <SimButton data-testid="sim-generate-requests" onClick={() => generateSpeakerRequests()} className="rounded bg-white/10 px-2 py-1">
           Generate Speaker Requests
-        </button>
-        <button type="button" data-testid="sim-shift-votes" onClick={() => shiftRequestVotes()} className="rounded bg-white/10 px-2 py-1">
+        </SimButton>
+        <SimButton data-testid="sim-shift-votes" onClick={() => shiftRequestVotes()} className="rounded bg-white/10 px-2 py-1">
           Shift Request Votes
-        </button>
-        <button type="button" data-testid="sim-resolve-round" onClick={() => void resolveRoundNow()} className="rounded bg-indigo-600 px-2 py-1 font-medium">
+        </SimButton>
+        <SimButton data-testid="sim-resolve-round" onClick={resolveRoundNow} className="rounded bg-indigo-600 px-2 py-1 font-medium">
           Resolve Round Now
-        </button>
+        </SimButton>
       </div>
 
       {/*
@@ -1231,44 +1239,24 @@ export function SessionSimulatorPanel({
               <div className="mt-1 flex flex-wrap gap-1">
                 {s.round_phase === "active" ? (
                   <>
-                    <button
-                      type="button"
-                      data-testid="sim-force-continue"
-                      onClick={() => castVotesForSeat(s, 3, 0, "Continue")}
-                      className="rounded bg-white/10 px-1.5 py-0.5"
-                    >
+                    <SimButton data-testid="sim-force-continue" onClick={() => castVotesForSeat(s, 3, 0, "Continue")} className="rounded bg-white/10 px-1.5 py-0.5">
                       Force Continue
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="sim-force-narrow-loss"
-                      onClick={() => castVotesForSeat(s, 2, 3, "Narrow Loss")}
-                      className="rounded bg-white/10 px-1.5 py-0.5"
-                    >
+                    </SimButton>
+                    <SimButton data-testid="sim-force-narrow-loss" onClick={() => castVotesForSeat(s, 2, 3, "Narrow Loss")} className="rounded bg-white/10 px-1.5 py-0.5">
                       Force Narrow Loss
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="sim-force-replace"
-                      onClick={() => castVotesForSeat(s, 0, 2, "Replace")}
-                      className="rounded bg-white/10 px-1.5 py-0.5"
-                    >
+                    </SimButton>
+                    <SimButton data-testid="sim-force-replace" onClick={() => castVotesForSeat(s, 0, 2, "Replace")} className="rounded bg-white/10 px-1.5 py-0.5">
                       Force Replace
-                    </button>
+                    </SimButton>
                   </>
                 ) : (
-                  <button
-                    type="button"
-                    data-testid="sim-force-replace-now"
-                    onClick={() => void forceClosingNow(s)}
-                    className="rounded bg-white/10 px-1.5 py-0.5"
-                  >
+                  <SimButton data-testid="sim-force-replace-now" onClick={() => forceClosingNow(s)} className="rounded bg-white/10 px-1.5 py-0.5">
                     Force Replace Now
-                  </button>
+                  </SimButton>
                 )}
-                <button type="button" data-testid="sim-open-seat" onClick={() => openSeat(s)} className="rounded bg-white/10 px-1.5 py-0.5">
+                <SimButton data-testid="sim-open-seat" onClick={() => openSeat(s)} className="rounded bg-white/10 px-1.5 py-0.5">
                   Open Seat
-                </button>
+                </SimButton>
               </div>
             </div>
           );

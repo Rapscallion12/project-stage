@@ -69,6 +69,7 @@ export function DesktopRoom({
   messages,
   reactions,
   pendingRequests,
+  onOpenRoomInfo,
 }: RoomLayoutProps) {
   return (
     <div className="flex h-full min-h-0 flex-row overflow-hidden">
@@ -79,6 +80,7 @@ export function DesktopRoom({
           countdownText={countdownText}
           participantCount={participantCount}
           connectionStatus={connectionStatus}
+          onOpenRoomInfo={onOpenRoomInfo}
         />
         <div className="min-h-0 flex-1">
           <SpeakerStage

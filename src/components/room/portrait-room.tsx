@@ -155,6 +155,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
     messages,
     reactions,
     pendingRequests,
+    onOpenRoomInfo,
   } = props;
 
   return (
@@ -187,9 +188,12 @@ export function PortraitRoom(props: RoomLayoutProps) {
 
       {/* Minimal top chrome — status pill (left) + guest identity chip (right), both floating over the video, neither reserving space from it. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 p-3">
-        <div
+        <button
+          type="button"
           data-testid="watch-status-pill"
-          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90"
+          onClick={onOpenRoomInfo}
+          aria-label={`Room info and navigation for ${event.title}`}
+          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
           <span className="max-w-[10rem] truncate font-medium">{event.title}</span>
@@ -201,7 +205,10 @@ export function PortraitRoom(props: RoomLayoutProps) {
               {connectionStatus === "unavailable" && "· Video unavailable"}
             </span>
           )}
-        </div>
+          <span aria-hidden="true" className="text-white/60">
+            ▾
+          </span>
+        </button>
         {identity.type === "guest" && (
           <div className="pointer-events-auto">
             <GuestNameEditor initialName={identity.displayName} variant="chip" />

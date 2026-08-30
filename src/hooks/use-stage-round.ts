@@ -13,6 +13,24 @@ async function fetchStageRound(supabase: ReturnType<typeof createClient>, eventI
 }
 
 /**
+ * Pure — what this hook's client state should become in response to one
+ * Realtime `postgres_changes` payload on `stage_rounds`. Extracted so the
+ * DELETE-handling fix (Sections 16-19) is directly unit-testable, the
+ * same "pure reducer, tested in isolation" shape `applySpeakerChange`/
+ * `removeSpeaker` (use-active-speakers.ts) already established for the
+ * identical class of Realtime-payload-to-state problem.
+ */
+export function applyStageRoundChange(
+  payload: { eventType: "INSERT" | "UPDATE" | "DELETE"; new: unknown },
+): StageRound | null {
+  // A DELETE means "no row for this event anymore," full stop — see this
+  // hook's own doc comment for the real bug this closes (a stale round
+  // display surviving Session Simulator's Reset indefinitely).
+  if (payload.eventType === "DELETE") return null;
+  return payload.new as StageRound;
+}
+
+/**
  * Issue #21 corrective pass: the shared round clock's live client
  * state — same "resync a full, fresh read on every SUBSCRIBED, not just
  * apply incremental deltas" discipline `useActiveSpeakers` already
@@ -36,10 +54,7 @@ export function useStageRound(eventId: string): StageRound | null {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "stage_rounds", filter: `event_id=eq.${eventId}` },
-        (payload) => {
-          if (payload.eventType === "DELETE") return;
-          setStageRound(payload.new as StageRound);
-        },
+        (payload) => setStageRound(applyStageRoundChange(payload)),
       )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {

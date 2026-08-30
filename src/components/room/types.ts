@@ -117,4 +117,6 @@ export type RoomLayoutProps = {
   simulatedGuestIds: ReadonlySet<string>;
   /** Issue #21 corrective pass: the shared round clock for the current stage pairing — see lib/repositories/stage-rounds.ts. Null before any seat has ever been claimed for the event. Rendered once, at the stage level (SpeakerStage), never per-tile — see that component's own doc comment. */
   stageRound: StageRound | null;
+  /** Issue #21, seventh corrective pass, Sections 8-15: opens the collapsed room/navigation overlay — see RoomInfoOverlay's own doc comment. Owned by EventRoom (the overlay itself renders once, there); every composition just wires its own trigger to this. */
+  onOpenRoomInfo: () => void;
 };

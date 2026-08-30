@@ -1017,6 +1017,35 @@ different dependencies. Current order:
       `WAITING AT: <reason>` line instead of a generic status whenever a
       seat is blocked — never an estimated number. See DECISIONS.md and
       SESSION_LOG.md's Session 47.
+
+      **Seventh corrective pass (2026-08-30, same branch)**: four UX/
+      simulator issues found testing the sixth pass's preview, none
+      touching speaker selection. `SpeakerStage`'s two-tile arrangement
+      now responds to a real CSS container query on the stage's own
+      geometry (`@container stage (aspect-ratio < 1.5)`) rather than
+      always being side-by-side — the initial threshold (`< 2`) was
+      wrong and only caught by loading the app in a real browser at real
+      window sizes (jsdom can't execute container queries), since a
+      fixed-width sidebar keeps the stage's own aspect ratio roughly
+      constant across ordinary desktop windows. The site-wide header now
+      hides unconditionally for the whole time a room is mounted
+      (previously only in one narrow short-landscape case), recovering
+      that space for the stage; a new `RoomInfoOverlay`, rendered once
+      by `EventRoom` as a sibling of the composition branch, provides
+      the navigation/room-info/account content that lived there, opened
+      via the existing status pill (no new floating control) or a new
+      small button in desktop's `RoomHeader`. Session Simulator's Reset
+      had a real bug, traced before fixing: `useStageRound`'s Realtime
+      handler silently discarded every `DELETE` event, so the shared
+      round row Reset deletes stayed stuck on screen indefinitely — the
+      one production path that ever deletes that row, so likely never
+      exercised before. Fixed via a directly-tested pure reducer. Reset
+      is now one tap (the confirmation step is gone), and a new shared
+      `SimButton` gives every simulator control real pointer-tracked
+      press feedback and an automatic executing/disabled state for async
+      actions only — what actually prevents a duplicate concurrent
+      Reset now, not a second confirmation. See DECISIONS.md and
+      SESSION_LOG.md's Session 48.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

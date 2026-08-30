@@ -109,6 +109,7 @@ export function PortraitSpeakerView({
   isPreviewBuild,
   simulatedGuestIds,
   stageRound,
+  onOpenRoomInfo,
   messages,
   reactions,
   pendingRequests,
@@ -144,7 +145,7 @@ export function PortraitSpeakerView({
         soloMode
       />
 
-      <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
+      <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} onOpenRoomInfo={onOpenRoomInfo} />
 
       <SpeakerMediaActivationPrompt
         needsMediaActivation={needsMediaActivation}

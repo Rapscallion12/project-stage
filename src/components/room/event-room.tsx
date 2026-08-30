@@ -26,6 +26,7 @@ import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
 import { RoomDiagnostics } from "@/components/room/room-diagnostics";
+import { RoomInfoOverlay } from "@/components/room/room-info-overlay";
 import { SessionSimulatorPanel } from "@/components/room/session-simulator-panel";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { getParticipantIdentity } from "@/lib/livekit/token";
@@ -144,6 +145,18 @@ export function EventRoom({
   function registerSimulatedGuestIds(ids: string[]) {
     setSimulatedGuestIds((prev) => new Set([...prev, ...ids]));
   }
+
+  // Issue #21, seventh corrective pass, Sections 8-15: the collapsed
+  // room/navigation control's open/closed state — plain local UI state,
+  // deliberately not threaded through anything that decides media/seat/
+  // LiveKit state (same "presentation only" discipline `commentsOpen`
+  // already follows in PortraitRoom/MobileLandscapeRoom). Lives here,
+  // not inside any one composition, because the trigger that opens it
+  // appears in all three; RoomInfoOverlay itself renders once, below,
+  // as a sibling of the composition branch — never a wrapper around it,
+  // so opening it can't remount the stage. See RoomInfoOverlay's own
+  // doc comment.
+  const [roomInfoOpen, setRoomInfoOpen] = useState(false);
 
   function handleTapEmptySeat() {
     // Issue #18, Speaker View real-device finding: `SpeakerStage`'s own
@@ -352,30 +365,13 @@ export function EventRoom({
     },
   });
 
-  // Issue #18/#21: mirrors the `room-active` class above, but tracks
-  // "the live-room mobile landscape composition is actually rendering"
-  // specifically (not just "a room is mounted") — see globals.css's own
-  // comment for what this actually does (hides the site header in short
-  // landscape viewports, reclaiming space for the full-bleed
-  // composition). Originally gated on `isSpeaker` alone; broadened to
-  // `phase !== "upcoming" && !isDesktopViewport && orientation ===
-  // "landscape"` once audience landscape moved onto the same "05" shell
-  // and needed the identical treatment — this condition is true exactly
-  // when `MobileLandscapeRoom` (either its audience or its speaker
-  // branch) is the composition `EventRoom` is about to render below, so
-  // it covers both without needing two separate classes/CSS rules. A
-  // separate effect, not folded into the `room-active` one above, since
-  // this one's dependency set is real and can change repeatedly across a
-  // single mount (rotating, getting promoted, resizing past the desktop
-  // threshold), unlike `room-active`'s mount-once/unmount-once
-  // lifecycle.
-  useEffect(() => {
-    const inMobileLandscapeLiveRoom = phase !== "upcoming" && !isDesktopViewport && orientation === "landscape";
-    document.body.classList.toggle("mobile-landscape-live-active", inMobileLandscapeLiveRoom);
-    return () => {
-      document.body.classList.remove("mobile-landscape-live-active");
-    };
-  }, [phase, isDesktopViewport, orientation]);
+  // Issue #21, seventh corrective pass: the narrower
+  // `mobile-landscape-live-active` body class (and its two
+  // short-landscape-only CSS rules) that used to hide the site header
+  // only for the mobile landscape composition is retired — `room-active`
+  // above now hides it unconditionally for every composition (see
+  // globals.css's own doc comment), so a second, narrower mechanism for
+  // the same outcome is no longer needed.
 
   // Issue #23: replaces the manual "Claim your seat" button. Called
   // unconditionally here (above the phase==="upcoming" early return
@@ -601,6 +597,7 @@ export function EventRoom({
     isPreviewBuild,
     simulatedGuestIds,
     stageRound,
+    onOpenRoomInfo: () => setRoomInfoOpen(true),
   };
 
   return (
@@ -637,6 +634,20 @@ export function EventRoom({
        * use — a real phone testing the deployed app never sees this; a
        * local dev server still can for real-device debugging.
        */}
+      {/*
+       * Issue #21, seventh corrective pass, Sections 8-15: rendered once,
+       * here — a sibling of the composition branch above, never a
+       * wrapper around it. See RoomInfoOverlay's own doc comment for why
+       * this placement is what guarantees opening/closing it can never
+       * remount the stage or reset any live room state.
+       */}
+      <RoomInfoOverlay
+        open={roomInfoOpen}
+        onClose={() => setRoomInfoOpen(false)}
+        event={event}
+        roomStatus={roomStatus}
+        identity={identity}
+      />
       {isDevToolsAvailable() && (
         <RoomDiagnostics
           identityType={identity.type}
@@ -668,7 +679,20 @@ export function EventRoom({
           stageRound={stageRound}
           realJoinInProgress={isJoiningSeat || promotionCountdown !== null}
           onSimulatedIdentitiesCreated={registerSimulatedGuestIds}
-          onSimulatorReset={() => setSimulatedGuestIds(new Set())}
+          // Issue #21, seventh corrective pass, Section 19: defense in
+          // depth alongside SessionSimulatorPanel's own database cleanup
+          // — an explicit fresh read of speaker occupancy, the same
+          // "don't just trust an incremental Realtime delta arrived"
+          // discipline useActiveSpeakers' own SUBSCRIBED-triggers-
+          // refetch already uses elsewhere. messages/pendingRequests/
+          // stageRound each already correctly clear a deleted row via
+          // their own Realtime DELETE handlers (see useStageRound's own
+          // doc comment for the real bug fixed there) — this covers the
+          // one remaining case a missed delta could leave stale.
+          onSimulatorReset={() => {
+            setSimulatedGuestIds(new Set());
+            void refetchSpeakers();
+          }}
         />
       )}
     </div>

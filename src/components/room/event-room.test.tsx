@@ -109,6 +109,12 @@ vi.mock("@/hooks/use-now", () => ({
 vi.mock("@/lib/dev-demo", () => ({
   isDevToolsAvailable: () => false,
 }));
+vi.mock("@/app/auth/actions", () => ({
+  // RoomInfoOverlay (rendered unconditionally by EventRoom, see below)
+  // imports this "use server" action for its Log out form — never
+  // actually submitted in these tests, so a bare mock is enough.
+  signOut: vi.fn(),
+}));
 vi.mock("@/app/events/[id]/room/actions", () => ({
   joinOpenSeat: mockJoinOpenSeat,
   reportSpeakerMediaActive: vi.fn(),
@@ -131,9 +137,15 @@ vi.mock("@/components/room/portrait-room", () => ({
   // branch, and every other existing test in this file ignores an
   // unclicked button, so this is safe to add unconditionally rather than
   // needing a second, parallel mock just for that describe block.
-  PortraitRoom: (props: { participantRole: string; onTapEmptySeat?: () => void; joinSeatMessage?: string | null }) => (
+  PortraitRoom: (props: {
+    participantRole: string;
+    onTapEmptySeat?: () => void;
+    joinSeatMessage?: string | null;
+    onOpenRoomInfo?: () => void;
+  }) => (
     <div data-testid="portrait-room" data-role={props.participantRole}>
       <button type="button" data-testid="tap-empty-seat" onClick={() => props.onTapEmptySeat?.()} />
+      <button type="button" data-testid="open-room-info" onClick={() => props.onOpenRoomInfo?.()} />
       {props.joinSeatMessage && <p>{props.joinSeatMessage}</p>}
     </div>
   ),
@@ -507,6 +519,55 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
       renderEventRoom([mySeat()]); // participantRole already "speaker" — no contradiction
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
       expect(mockRefetchSpeakers).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #21, seventh corrective pass, Sections 8-15, 41: the collapsed
+  // room/navigation overlay is rendered once, by EventRoom itself, as a
+  // sibling of the composition branch — opening/closing it must never
+  // remount the composition or touch any live room state. See
+  // RoomInfoOverlay's own doc comment.
+  describe("room/navigation overlay (Sections 8-15) — rendered once, never wrapping the composition", () => {
+    it("is closed by default, and opens when the composition's own trigger calls onOpenRoomInfo", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+
+      renderEventRoom([]);
+      expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("open-room-info"));
+      expect(screen.getByTestId("room-info-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("room-info-panel")).toHaveTextContent(event.title);
+    });
+
+    it("opening and closing the overlay never remounts the composition underneath it — the exact same DOM node throughout (Section 41: 'must not unnecessarily reconnect/reset state')", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+
+      renderEventRoom([]);
+      const compositionBeforeOpen = screen.getByTestId("portrait-room");
+
+      fireEvent.click(screen.getByTestId("open-room-info"));
+      expect(screen.getByTestId("portrait-room")).toBe(compositionBeforeOpen);
+
+      fireEvent.click(screen.getByTestId("room-info-close"));
+      expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("portrait-room")).toBe(compositionBeforeOpen);
+    });
+
+    it("closes on a backdrop click, restoring the stage exactly as before", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("open-room-info"));
+      expect(screen.getByTestId("room-info-panel")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("room-info-backdrop"));
+      expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
     });
   });
 });

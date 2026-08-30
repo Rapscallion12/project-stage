@@ -67,6 +67,7 @@ const baseProps: RoomLayoutProps = {
   isPreviewBuild: false,
   simulatedGuestIds: new Set(),
   stageRound: null,
+  onOpenRoomInfo: () => {},
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -104,5 +105,16 @@ describe("DesktopRoom (renamed from LandscapeRoom, real-device finding: desktop 
     const sidebar = container.querySelector(".border-l");
     expect(sidebar?.className).toMatch(/\bw-64\b/);
     expect(sidebar?.className).toMatch(/\bxl:w-80\b/);
+  });
+
+  // Issue #21, seventh corrective pass, Section 9: the desktop room/
+  // navigation trigger — RoomHeader's own "☰" button, the one remaining
+  // way to reach Home/Events/account actions now that the site-wide
+  // header is hidden for the whole time a room is mounted.
+  it("wires RoomHeader's own room/navigation trigger to onOpenRoomInfo", () => {
+    const onOpenRoomInfo = vi.fn();
+    render(<DesktopRoom {...baseProps} onOpenRoomInfo={onOpenRoomInfo} />);
+    fireEvent.click(screen.getByTestId("room-info-trigger"));
+    expect(onOpenRoomInfo).toHaveBeenCalledTimes(1);
   });
 });

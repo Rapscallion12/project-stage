@@ -181,7 +181,6 @@ describe.skipIf(!hasServiceCredentials)("two simultaneous open seats reserve dis
       // estimated ones — this is the one place they're actually
       // captured against the real linked database; see this pass's
       // handoff report for the values a representative run produced.
-      // eslint-disable-next-line no-console
       console.log(
         `[issue #21 sixth pass timing] reservation (both seats): ${reservationMs}ms · claim+authorize seat 1: ${auth1Ms}ms · claim+authorize seat 2: ${auth2Ms}ms`,
       );

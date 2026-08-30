@@ -58,63 +58,92 @@ body {
 }
 
 /*
- * Real-device finding (2026-08-22): on a phone in landscape, the
- * site-wide header (SiteHeader, root layout) was consuming a fixed,
- * generous share of an already-short viewport, on top of the room's own
- * chrome. `body.room-active` is toggled by EventRoom for exactly as
- * long as a live room is mounted (see its own doc comment) — combined
- * with a height-based media query (not `orientation` alone, and
- * deliberately not a width check either — see use-desktop-viewport.ts's
- * own comment on why width>height is the wrong signal for "desktop")
- * this targets short landscape viewports specifically. Real phones in
- * landscape sit well under 500px of CSS height even accounting for
- * browser chrome; real desktop windows are reliably taller than that
- * even when narrow, so this doesn't accidentally shrink the header on a
- * merely-narrow desktop browser. Padding only — the header's own
- * content/links are untouched, so nothing here removes navigation, it
- * just reserves less permanent space for it.
+ * Issue #21, seventh corrective pass, Sections 8-15 ("stage-first"):
+ * the site-wide header (SiteHeader, root layout — "VIRTUAL STAGE /
+ * Events / Log in / Sign up") is hidden outright for the *whole* time a
+ * room is mounted, in every viewport/orientation — not just the short-
+ * landscape case two earlier, narrower rules used to target. A
+ * real-device pass found mobile *portrait* had never gotten any
+ * header-shrinking treatment at all (both prior rules were
+ * `orientation: landscape`-gated), so the full-height site header sat
+ * permanently above the room's own already-minimal video-first chrome —
+ * exactly the wasted vertical space this pass was asked to recover.
+ * `body.room-active` is toggled by `EventRoom` for exactly as long as a
+ * live room is mounted (see its own doc comment) — that's the complete
+ * condition now; no media query needed, since every room composition
+ * (desktop included) provides its own equivalent navigation via the new
+ * `RoomInfoOverlay` (`RoomHeader`'s own "☰" trigger on desktop, the
+ * status-pill trigger everywhere else — see those components' own doc
+ * comments), so nothing is actually lost by hiding this unconditionally.
+ * `{ children }` is a flex sibling of this `header` in a `flex-col`
+ * body (see layout.tsx), so hiding it lets the room's own flex-1 area
+ * fill the recovered space automatically — no separate resize logic
+ * needed. Supersedes the two narrower, landscape-only rules this
+ * replaced (both fully subsumed by this one, unconditional rule — see
+ * git history for their own original reasoning if needed).
  */
-@media (orientation: landscape) and (max-height: 500px) {
-  body.room-active > header {
-    padding-top: 0.375rem;
-    padding-bottom: 0.375rem;
-  }
+body.room-active > header {
+  display: none;
 }
 
 /*
- * Real-device finding (issue #18, Speaker View corrective pass; issue
- * #21, broadened): the padding-only compaction above still left the
- * site-wide header consuming real height once the live room's mobile
- * landscape composition needs every pixel it can get — neither the
- * Speaker View nor the "05"-shell audience composition has a permanent
- * chat/controls sidebar competing for space, so the header is
- * proportionally the biggest remaining non-video element on screen
- * either way. `body.mobile-landscape-live-active` is toggled by
- * `EventRoom` for exactly as long as `MobileLandscapeRoom` (audience or
- * speaker branch) is the actual composition rendering (see its own doc
- * comment) — same height-gated media query as the rule above, so this
- * only ever applies to a real phone in landscape, never a narrow desktop
- * window. Removes the header outright rather than further shrinking it.
+ * Issue #21, seventh corrective pass, Sections 1-5: the two speaker
+ * tiles' own side-by-side/stacked arrangement responds to the STAGE's
+ * own actual available geometry (a container query on its real
+ * aspect-ratio), not a fixed viewport-width breakpoint or which room
+ * composition happens to be mounted. `DesktopRoom`'s fixed sidebar and
+ * `MobileLandscapeRoom`'s own chrome both already shrink the stage's own
+ * box *before* this container ever sees a size, so this naturally
+ * reflects "usable geometry" (Section 3's explicit requirement) without
+ * `SpeakerStage` needing to know anything about either caller's layout —
+ * one responsive model, not a second competing breakpoint system.
  *
- * **Originally speaker-only** (`speaker-view-active`), **broadened to
- * cover audience/candidate landscape too**: once audience landscape
- * moved onto the same "05" shell (issue #21), real-device testing found
- * it needed the identical header-hiding treatment for the identical
- * reason — leaving it padding-only-compacted for audience but
- * fully-hidden for speaker would have made rotating *while already
- * seated* feel like the header reappearing, when nothing about the
- * available space actually changed. One class, one rule, covering both;
- * still scoped precisely to the live room's landscape composition —
- * landscape *outside* the room (browsing `/events`, etc.) and portrait
- * (either role) are both untouched, since this class is only ever
- * toggled true while that specific composition is what's rendering.
- * Pure CSS: the header returns immediately on leaving the room, rotating
- * to portrait, or resizing past the desktop threshold — no component
- * state involved.
+ * **Threshold derivation** (Section 3: "not an arbitrary breakpoint,"
+ * measured against real geometry, not guessed): two side-by-side tiles
+ * each get roughly half the container's own width, at its own full
+ * height — `tileAspect = containerAspect / 2`. A fixed-width sidebar
+ * (DesktopRoom's own chat column) means the stage's own aspect ratio
+ * stays roughly constant across most real desktop window sizes at a
+ * given monitor aspect ratio (widening the window grows the stage's
+ * width and height together, since the sidebar's own width is a small,
+ * *constant* deduction) — an *unconditional* `aspect-ratio < 2` was
+ * measured, in a real browser at common sizes (1400×900, 1920×1080,
+ * 1600×900), to switch to stacking almost everywhere, even on an
+ * ordinary wide 16:9 monitor the user's own "wide desktop = side-by-side
+ * still works" expectation clearly means to cover. Recalibrated against
+ * the actual failure being fixed — not "tiles must stay landscape-ish,"
+ * but "never the *extremely* tall, narrow column" — targeting a
+ * side-by-side tile aspect ratio around 0.75 (a common, still-legible
+ * portrait-leaning camera crop, not the ~0.5-or-worse the original
+ * real-device report actually showed) as the switch point:
+ * `containerAspect < 1.5` triggers stacking. Verified in a real browser
+ * (not just this comment's arithmetic) across the sizes above — see
+ * DECISIONS.md for the actual measured aspect ratios at each. Only ever
+ * applies to the "landscape" tile-orientation case
+ * (`DesktopRoom`/`MobileLandscapeRoom`) — mobile `orientation="portrait"`
+ * already always stacks, by deliberate product decision, and is
+ * untouched by this container query.
+ *
+ * `container-type: size` (not the more common `inline-size`) is
+ * required for an `aspect-ratio` container query at all — it needs both
+ * axes, not width alone. `SpeakerStage`'s own root already has a
+ * definite height (it fills a `min-h-0 flex-1` ancestor chain bounded by
+ * the viewport, the same chain every other full-bleed piece of this
+ * room already depends on), so this doesn't introduce a new sizing
+ * requirement, just names the existing one as a query container.
  */
-@media (orientation: landscape) and (max-height: 500px) {
-  body.mobile-landscape-live-active > header {
-    display: none;
+.stage-container {
+  container-type: size;
+  container-name: stage;
+}
+
+@container stage (aspect-ratio < 1.5) {
+  .stage-tiles-landscape {
+    flex-direction: column;
+  }
+  .stage-divider-landscape {
+    width: 100%;
+    height: 0.5rem;
   }
 }
 

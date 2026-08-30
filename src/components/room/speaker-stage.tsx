@@ -305,8 +305,13 @@ export function SpeakerStage({
   const renderSolo = soloMode && mySeatNumber !== null;
 
   return (
-    <div data-testid="room-stage" className="relative z-0 h-full w-full overflow-hidden bg-black">
-      <div className={orientation === "landscape" ? "flex h-full w-full flex-row" : "flex h-full w-full flex-col"}>
+    <div data-testid="room-stage" className="stage-container relative z-0 h-full w-full overflow-hidden bg-black">
+      <div
+        className={cn(
+          "flex h-full w-full",
+          orientation === "landscape" ? "flex-row stage-tiles-landscape" : "flex-col",
+        )}
+      >
         {renderSolo ? (
           renderTile(mySeatNumber === 1 ? 2 : 1)
         ) : (
@@ -315,7 +320,10 @@ export function SpeakerStage({
             <div
               data-testid="speaker-divider"
               aria-hidden="true"
-              className={orientation === "landscape" ? "w-2 shrink-0 bg-border" : "h-2 shrink-0 bg-border"}
+              className={cn(
+                "shrink-0 bg-border",
+                orientation === "landscape" ? "w-2 stage-divider-landscape" : "h-2",
+              )}
             />
             {renderTile(2)}
           </>

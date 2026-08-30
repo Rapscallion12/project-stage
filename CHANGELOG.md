@@ -13,6 +13,35 @@ merged to `main`.
 
 ### Changed
 
+- **Desktop/landscape speaker tiles now stack vertically instead of
+  side-by-side once the stage's own available area gets too narrow for
+  useful landscape video** (issue #21, seventh corrective pass) — driven
+  by a real CSS container query on the stage's own geometry, not a
+  device-class or viewport-width breakpoint, so it adapts correctly to
+  a fixed-width chat sidebar and works the same whether the window is
+  merely narrow or genuinely small. The shared round timer needed no
+  change — it was already centered on the stage's own geometric center,
+  which is the tile seam in either layout. See DECISIONS.md.
+- **The site-wide header now hides for the entire time a room is
+  mounted, in every viewport** (issue #21, seventh corrective pass) —
+  previously only in one narrow mobile-landscape case, leaving mobile
+  portrait's full header permanently visible above the room's own
+  already-minimal video-first chrome. A new room/navigation overlay
+  (opened from the existing room-identity status pill, or a new small
+  button in desktop's header — no new floating control) provides
+  Home/Events navigation, room info, and account actions as a
+  dismissible overlay instead, without resizing or remounting the
+  stage underneath it. See DECISIONS.md.
+- **Session Simulator's Reset Session is now one tap, with real
+  pressed/executing feedback on every simulator button** (issue #21,
+  seventh corrective pass) — the previous two-tap confirmation step is
+  gone; a shared button control now gives immediate, pointer-event-
+  tracked visual feedback on every simulator control (working
+  reliably on touchscreens, unlike CSS `:hover`/bare `:active`) and
+  automatically prevents a duplicate concurrent Reset while one is
+  already running. Also fixes a real bug where a stale round status
+  could survive Reset indefinitely (a Realtime deletion event was being
+  silently discarded client-side). See DECISIONS.md.
 - **Next-speaker promotion starts as soon as a candidate's own client
   sees they've been reserved, instead of waiting up to 4 seconds for
   the next background poll** (issue #21, sixth corrective pass) — a

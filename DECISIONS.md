@@ -3,6 +3,138 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-30 — Seventh corrective pass: geometry-driven stage stacking, stage-first collapsed navigation, a real Session Simulator Reset bug, consistent SIM tactile feedback (issue #21)
+
+**Context**: real-device/browser testing of the sixth pass's preview found
+four separate UX problems, none touching the speaker-selection state
+machine: (1) `DesktopRoom` always laid its two speaker tiles out
+side-by-side, which turned pathologically tall-and-narrow once the
+window narrowed while still counting as "desktop" (≥1024px); (2) the
+site-wide header (`SiteHeader`) stayed fully visible the entire time a
+room was mounted except in one narrow short-landscape case, eating
+space a video-first room should own; (3) Session Simulator's "Reset
+Session" left visible stale artifacts ("Round 1 · awaiting pairing"
+survived indefinitely) despite the underlying delete apparently
+succeeding, and required a two-tap confirm; (4) no simulator button gave
+any tactile acknowledgment of a tap, worst on touchscreens.
+
+**Decision — stage geometry responds to a real container query, not a
+device-class breakpoint (Sections 1-5)**: `SpeakerStage`'s own root
+became a CSS size query container (`container-type: size`); its
+"landscape" tile-orientation case (used by both `DesktopRoom` and
+`MobileLandscapeRoom`) now switches to stacked tiles once the
+container's own `aspect-ratio` drops below a threshold, via
+`@container stage (aspect-ratio < 1.5)` in globals.css — never a
+viewport-width breakpoint, and never specific to which composition
+happens to be mounted. **The first threshold picked (`< 2`) was wrong,
+caught only by testing in a real browser at real window sizes** (1400×900,
+1920×1080, 1600×900): because `DesktopRoom`'s chat sidebar is a
+*fixed*-width deduction, the stage's own aspect ratio stays roughly
+constant across ordinary desktop window sizes at a given monitor aspect
+ratio (~1.3-1.8 for common 16:9 windows) — `< 2` stacked almost
+everywhere, including a full 1920×1080 monitor, contradicting the
+explicit "wide desktop still uses side-by-side" requirement. Recalibrated
+to `< 1.5` (targeting a side-by-side tile aspect ratio around 0.75, a
+legible portrait-leaning crop — not the ~0.5-or-worse the original report
+actually showed) and reverified live: 1920×1080 and 1600×900 correctly
+stay side-by-side; 1400×900 and a narrowed 1150×800 window correctly
+stack. The existing centered `StageRoundBadge` needed **no** change at
+all — it was already positioned at the stage's own geometric center,
+which is the tile seam in *either* orientation, so it automatically
+tracks whichever layout is active. **This is why Section 41's "verify
+actual behavior, not just that the boxes rearranged" instruction
+mattered**: jsdom cannot execute a CSS container query at all, so this
+whole recalibration was only catchable by actually loading the app in a
+real browser (Playwright, against a local dev server) and reading real
+`getBoundingClientRect()` numbers — a purely code-level review would
+have shipped the wrong threshold with passing unit tests throughout.
+
+**Decision — the site header collapses into a per-room overlay, not a
+second persistent header (Sections 8-15)**: `body.room-active > header`
+(globals.css) now hides `SiteHeader` unconditionally for the entire time
+a room is mounted, in every viewport — superseding the two
+narrower, landscape-only rules a prior pass added (both fully subsumed).
+A new `RoomInfoOverlay` (rendered once by `EventRoom`, a sibling of the
+composition branch — never a wrapper around it, so opening it can never
+remount the stage) provides the navigation/room-info/account content
+that lived in the now-hidden header, as a `fixed`-positioned overlay
+(mobile: bottom sheet; `lg`+: top-right popover, the same 1024px
+threshold `useIsDesktopViewport` already uses) dismissible via backdrop
+tap, ✕, or Escape. **No new floating control** (per explicit
+instruction not to add a second competing circle if the screen is
+already busy): the existing room-identity status pill (already present
+in Portrait/MobileLandscape/both Speaker Views via the shared
+`SpeakerViewTopChrome`) *becomes* the trigger, and `RoomHeader`
+(desktop-only) gains one small "☰" button alongside its own title —
+reusing what already existed at that exact spot rather than adding a
+new element. Verified live (not just unit-tested, since opening/closing
+an overlay's effect on underlying live state — the shared round timer,
+Realtime comments — needs a real running app, not a mock): the round
+timer kept ticking and comments kept arriving underneath the overlay
+while open, and a full round transition happened correctly *while the
+overlay was open*, then closing it returned to the live stage exactly
+as it was.
+
+**Decision — Session Simulator Reset's real bug was a silently-dropped
+Realtime DELETE, not a database problem (Sections 16-19)**: traced
+before writing any fix, per this project's own standing discipline.
+`resetSimulatorSession`'s own database deletes were already correct and
+already covered by extensive real-database tests from an earlier pass
+(comments/likes/speakers+round-votes/requests+request-votes all cascade
+correctly, real-vs-simulated data segregation proven directly). The
+actual bug was client-side: `useStageRound`'s Realtime subscription
+handler explicitly discarded every `DELETE` event
+(`if (payload.eventType === "DELETE") return;`) — the *one* production
+path that ever deletes the `stage_rounds` row at all is this same Reset
+(every other transition only ever `UPDATE`s it), so this bug had likely
+never been exercised by earlier passes' testing. Fixed by extracting a
+pure `applyStageRoundChange` reducer (matching the existing
+`applySpeakerChange`/`removeSpeaker` shape from `use-active-speakers.ts`)
+that correctly returns `null` on DELETE, unit-tested directly. As
+defense in depth (Section 19's "reconcile the client, don't just trust
+deletion happened"), `EventRoom`'s own `onSimulatorReset` callback now
+also triggers an explicit `refetchSpeakers()`, mirroring the
+"don't just trust an incremental Realtime delta arrived" discipline
+`useActiveSpeakers`' own SUBSCRIBED-triggers-refetch already uses
+elsewhere.
+
+**Decision — Reset becomes one tap (Section 20), and every simulator
+button gets real tactile feedback via one shared control (Sections
+21-26)**: the two-tap "are you sure" confirmation row is gone entirely —
+a preview-only tool never needed it, and it may have been masking
+the actual reset bug above (a user who tapped once, saw nothing change
+because the confirm row wasn't noticed, and concluded reset silently
+failed). New `SimButton`, wrapping every one of the panel's ~15 buttons:
+tracks a genuine `pressed` state via `onPointerDown`/`onPointerUp`/
+`onPointerLeave`/`onPointerCancel` (never `:hover`, and never bare
+`:active` — a known unreliable-on-iOS-Safari-without-a-touch-listener
+quirk, not fixable by a CSS tweak alone) for immediate visual
+acknowledgment on every platform including touch; enters a disabled
+"executing" state automatically, but *only* when `onClick` returns a
+`Promise` — a synchronous, deterministic action (Generate Comments,
+Shift Request Votes) never enters this state at all, so repeated
+intentional tapping stays exactly as responsive as before. This is what
+actually prevents a duplicate concurrent Reset (Section 25) without a
+second confirmation step: the button's own `disabled` attribute during
+the async call, not an "are you sure."
+
+**Reason**: every piece of this pass follows the same underlying
+discipline the project has held since the third/fourth passes — trace
+the actual mechanism before fixing it (the stage_rounds bug, the
+threshold recalibration), verify in the environment that can actually
+exercise the thing being fixed (a real browser for CSS container
+queries, a real database for deletion cascades), and prefer extending
+an existing, working pattern (the shared status pill, the pure-reducer
+Realtime-payload shape, `useActiveSpeakers`' resync-on-SUBSCRIBED
+discipline) over inventing a parallel one.
+
+**Tradeoffs**: none identified against any previously-established
+invariant — every change here is presentation/tooling-only (responsive
+layout, navigation chrome, a preview-only panel's own reset/feedback
+behavior) and does not touch selection, reservation, authorization, or
+round mechanics, all confirmed unchanged by the full existing test
+suite passing throughout.
+
 ## 2026-08-30 — Sixth corrective pass: next-speaker promotion latency traced to a client-side polling gap, not selection/reservation (issue #21)
 
 **Context**: real-device testing still found next-speaker selection

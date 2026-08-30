@@ -106,6 +106,7 @@ const audienceProps: RoomLayoutProps = {
   isPreviewBuild: false,
   simulatedGuestIds: new Set(),
   stageRound: null,
+  onOpenRoomInfo: () => {},
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),

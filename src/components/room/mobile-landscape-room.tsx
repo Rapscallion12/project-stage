@@ -113,6 +113,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
     isPreviewBuild,
     simulatedGuestIds,
     stageRound,
+    onOpenRoomInfo,
     messages,
     reactions,
     pendingRequests,
@@ -146,7 +147,7 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
       />
 
-      <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} />
+      <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} onOpenRoomInfo={onOpenRoomInfo} />
 
       {promotionCountdown !== null ? (
         // Issue #18 UX finding: same center-stage countdown treatment as

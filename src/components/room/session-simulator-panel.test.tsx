@@ -1064,29 +1064,35 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
   });
 
   describe("Reset Session (destroys simulator-created state, distinct from Stop)", () => {
-    it("clicking Reset Session shows a confirmation instead of resetting immediately", () => {
+    // Issue #21, seventh corrective pass, Section 20: explicit instruction
+    // to remove the confirmation step entirely — a preview-only tool, one
+    // tap, reset begins immediately. Replaces the old "shows a
+    // confirmation"/"Cancel dismisses it" tests below.
+    it("a single tap begins the reset immediately — no confirmation step of any kind", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-reset"));
-      expect(resetSimulatorSession).not.toHaveBeenCalled();
-      expect(screen.getByTestId("sim-reset-confirm-row")).toHaveTextContent("Reset simulated session?");
-    });
-
-    it("Cancel dismisses the confirmation without resetting anything", () => {
-      render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-cancel"));
-      expect(resetSimulatorSession).not.toHaveBeenCalled();
       expect(screen.queryByTestId("sim-reset-confirm-row")).not.toBeInTheDocument();
-      expect(screen.getByTestId("sim-reset")).toBeInTheDocument();
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
     });
 
-    it("confirming Reset stops the simulation and calls resetSimulatorSession with every generated guest id", async () => {
+    it("shows an immediate pressed/executing acknowledgment and rejects a second tap while the first reset is still in flight (Sections 21, 25)", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const resetButton = screen.getByTestId("sim-reset");
+
+      fireEvent.click(resetButton);
+      expect(resetButton).toBeDisabled();
+      fireEvent.click(resetButton); // a real disabled button wouldn't even deliver this — belt and suspenders
+
+      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(resetButton).not.toBeDisabled());
+    });
+
+    it("clicking Reset stops the simulation and calls resetSimulatorSession with every generated guest id", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
 
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
       const [calledEventId, guestIds] = resetSimulatorSession.mock.calls[0] as [string, string[]];
@@ -1118,7 +1124,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
 
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
       const [, guestIds] = resetSimulatorSession.mock.calls[0] as [string, string[]];
@@ -1134,7 +1139,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByTestId("sim-log")).toHaveTextContent("Generated 5 comments");
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
 
       const log = screen.getByTestId("sim-log");
@@ -1149,7 +1153,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
 
       expect(screen.getByTestId("sim-pool-reset-count")).toHaveTextContent("pool resets observed: 0");
@@ -1160,7 +1163,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
 
       const callsAtReset = simulateComment.mock.calls.length + simulateLike.mock.calls.length;
@@ -1173,7 +1175,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
 
       simulateComment.mockClear();
@@ -1186,14 +1187,12 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
       const firstRunIds = resetSimulatorSession.mock.calls[0][1] as string[];
 
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
       const secondRunIds = resetSimulatorSession.mock.calls[1][1] as string[];
 
@@ -1207,7 +1206,6 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
 
       simulateSeedSpeaker.mockClear();
@@ -1224,14 +1222,12 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(onSimulatorReset).toHaveBeenCalledTimes(1));
     });
 
     it("reset with nothing ever started is a harmless no-op (no crash, resetSimulatorSession still called with an empty list)", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-reset"));
-      fireEvent.click(screen.getByTestId("sim-reset-confirm"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledWith("e1", []));
     });
   });

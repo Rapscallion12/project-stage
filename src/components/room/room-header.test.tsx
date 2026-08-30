@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { RoomHeader } from "./room-header";
 
 describe("RoomHeader", () => {
@@ -81,6 +81,34 @@ describe("RoomHeader", () => {
     it("defaults to the full (non-compact) size when the prop is omitted", () => {
       render(<RoomHeader eventTitle="E" roomStatus="live" participantCount={0} connectionStatus="connected" />);
       expect(screen.getByRole("heading", { name: "E" }).className).toMatch(/\btext-base\b/);
+    });
+  });
+
+  // Issue #21, seventh corrective pass, Section 9: the desktop room/
+  // navigation entry point — the site-wide header is now hidden for the
+  // whole time a room is mounted (see globals.css), so this is the one
+  // remaining place Home/Events/account actions are reachable on desktop.
+  describe("room/navigation trigger (Sections 8-15)", () => {
+    it("does not render a trigger at all when onOpenRoomInfo is omitted — every existing caller/test is unaffected", () => {
+      render(<RoomHeader eventTitle="E" roomStatus="live" participantCount={0} connectionStatus="connected" />);
+      expect(screen.queryByTestId("room-info-trigger")).not.toBeInTheDocument();
+    });
+
+    it("renders an accessibly-labeled trigger that calls onOpenRoomInfo when provided", () => {
+      const onOpenRoomInfo = vi.fn();
+      render(
+        <RoomHeader
+          eventTitle="Late Night Debate"
+          roomStatus="live"
+          participantCount={0}
+          connectionStatus="connected"
+          onOpenRoomInfo={onOpenRoomInfo}
+        />,
+      );
+      const trigger = screen.getByTestId("room-info-trigger");
+      expect(trigger).toHaveAccessibleName(/room info and navigation/i);
+      fireEvent.click(trigger);
+      expect(onOpenRoomInfo).toHaveBeenCalledTimes(1);
     });
   });
 });
