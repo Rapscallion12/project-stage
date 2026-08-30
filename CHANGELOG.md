@@ -13,6 +13,32 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed a genuine server-side bug that could permanently hide a
+  Request-to-Speak candidate from next-speaker selection** (issue #21,
+  eighth corrective pass) — found via live inspection of the real
+  database while investigating a real-device latency report, not
+  simulator-specific: withdrawing a request that had been ranked for a
+  selection round but never actually reserved for a seat could leave
+  that round stuck open forever, and because candidate selection
+  deliberately reuses an already-open round rather than creating a
+  second one, every later-arriving Request-to-Speak became invisible to
+  selection until that round was manually cleared. Fixed at the
+  database level; no authorization or selection-ranking behavior
+  changed. See DECISIONS.md.
+- **Next-speaker promotion for Session Simulator's own simulated
+  candidates is now reactive**, matching the real-candidate path fixed
+  in the sixth corrective pass (issue #21, eighth corrective pass) — a
+  simulated candidate previously depended entirely on the simulator's
+  own 4-6 second background check to notice it had been reserved, even
+  though the reservation itself is already fast; now noticed
+  immediately, with the background check remaining as a bounded
+  backstop. See DECISIONS.md.
+- **Shared round and speaker-request state now resyncs when a browser
+  tab becomes visible again**, not only when its live connection first
+  connects (issue #21, eighth corrective pass) — closes a real gap
+  where a tab whose live connection had quietly gone stale could keep
+  showing outdated round/request information indefinitely until the
+  page was reloaded. See DECISIONS.md.
 - **Desktop/landscape speaker tiles now stack vertically instead of
   side-by-side once the stage's own available area gets too narrow for
   useful landscape video** (issue #21, seventh corrective pass) — driven

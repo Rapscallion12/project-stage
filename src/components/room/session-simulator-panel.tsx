@@ -177,8 +177,25 @@ const IDLE_STARTUP_STATE: StartupState = {
   error: null,
 };
 /** Bounded retry budget for a Case B (authorized Request-to-Speak) seat claim — see `establishSeat`. Never a blind sleep-and-hope: each attempt is a fresh, real `simulateAdvanceSelection` call against actual server state, not a timer alone. */
-const MAX_CLAIM_ATTEMPTS = 5;
-const CLAIM_RETRY_DELAY_MS = 150;
+// Issue #21, eighth corrective pass: reproduced live against a real dev
+// server — the previous budget (5 attempts × 150ms = 750ms total) was
+// measured to be far too tight. A real reconciliation/reservation round
+// trip in this environment routinely takes 150-330ms on its own (see
+// this pass's own real-device report and DECISIONS.md for the measured
+// numbers); 750ms gave the *whole* freeze→reserve→claim chain less time
+// than a single ordinary round trip sometimes takes on its own, so
+// startup seeding could — and, live-reproduced, did — give up and mark
+// the seat "failed" while the underlying reservation was still
+// genuinely in progress. Once startup gives up, `running` never becomes
+// true, so *no* natural-activity loop (including the reactive
+// candidate-promotion effect below) ever starts — the exact "selected
+// but never claimed" stall this pass exists to fix, except triggered by
+// this retry budget itself, not the reactive-promotion gap it was
+// otherwise masking. Raised generously (6s total ceiling, not
+// unbounded) — still a real, bounded retry against real server state
+// each time, never a blind sleep-and-hope.
+const MAX_CLAIM_ATTEMPTS = 20;
+const CLAIM_RETRY_DELAY_MS = 300;
 
 /**
  * Issue #21, Part 5: preview/dev-only Session Simulator — tooling, not
@@ -297,6 +314,18 @@ export function SessionSimulatorPanel({
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  // Issue #21, eighth corrective pass, Section 29: a short, preview-only
+  // identifier for *this browser tab's own SIM panel instance* — never
+  // a real identity/security-sensitive value, just enough to tell two
+  // simultaneously-open tabs' own log lines apart when diagnosing a
+  // multi-tab scenario ("Client A triggered reservation, Client B
+  // observed it," per the explicit request). Generated once, in an
+  // effect (react-hooks/purity forbids `crypto.randomUUID()` during
+  // render), and included in every `appendLog` line below.
+  const tabIdRef = useRef<string>("…");
+  useEffect(() => {
+    tabIdRef.current = crypto.randomUUID().slice(0, 6);
+  }, []);
 
   const runningRef = useRef(false);
   // Issue #21, fourth corrective pass: `startSimulation` now does real
@@ -392,7 +421,7 @@ export function SessionSimulatorPanel({
   }, [speakers, pendingRequests, messages, realJoinInProgress]);
 
   function appendLog(line: string) {
-    setLog((prev) => [`${new Date().toLocaleTimeString()} — ${line}`, ...prev].slice(0, 30));
+    setLog((prev) => [`${new Date().toLocaleTimeString()} [tab ${tabIdRef.current}] — ${line}`, ...prev].slice(0, 30));
   }
 
   // Part 14 observability: a crude, honest proxy for "pool generation/
@@ -408,6 +437,98 @@ export function SessionSimulatorPanel({
     }
     prevPendingCountRef.current = pendingRequests.length;
   }, [pendingRequests.length]);
+
+  /**
+   * Issue #21, eighth corrective pass, Sections 8, 33: a real-device
+   * report found "Selecting next speaker…" persisting for several
+   * seconds specifically when the eligible candidate was
+   * simulator-generated (no real browser tab). Traced to a real gap:
+   * `useAutomaticPromotion`'s sixth-pass reactive fast path only helps a
+   * *real* candidate's own tab — a simulated identity has no such tab,
+   * so its entire claim step depended solely on the natural-activity
+   * loop's own 4-6s poll (`schedule(...)` below) noticing the
+   * reservation, even though the reservation itself
+   * (`useSpeakerSelectionReconciliation`, already mounted in this same
+   * tab via `EventRoom`) typically completes in well under a second.
+   * Worst case: up to a full poll interval of pure additional wait, on
+   * top of the (already-fast) reservation — exactly the "clearly not
+   * momentary" delay the real-device report described.
+   *
+   * This effect is the same reactive-first/poll-as-backstop shape
+   * `useAutomaticPromotion`'s own sixth-pass fix already established:
+   * reacts immediately to `pendingRequests` (already a live prop) as
+   * soon as it shows one of *this run's own* simulated identities
+   * reserved for an open seat, instead of waiting for the next
+   * scheduled tick. The poll below is unchanged and remains as a
+   * bounded backstop.
+   *
+   * **Sequential drain, not one call per reservation** (Section 15,
+   * real-device-reproduced bug in this pass's own first two cuts): with
+   * two seats open and two distinct simulated candidates each reserved
+   * (the atomic dual-seat reservation already handles this correctly
+   * server-side — see `reserve_speaker_candidates_for_seats`),
+   * `simulateAdvanceSelection` itself only ever targets *one* winner per
+   * call — whichever reserved simulated candidate its own internal
+   * `candidates.find(...)` reaches first, by rank, regardless of which
+   * seat that candidate is reserved for. A first attempt at this
+   * effect fired one call *per* reservation, in parallel, and a second
+   * attempt deduplicated by "have I already attempted this exact
+   * reservation" — both proven live, against a real dev server, to
+   * leave the *second* seat's reservation permanently unclaimed: every
+   * parallel/deduplicated call kept independently re-discovering and
+   * targeting the *same* first-ranked winner, and once that one
+   * candidate's own reservation had already been "attempted" once (by
+   * either version's own bookkeeping), nothing ever tried again for it
+   * even though that specific call never actually touched it. The fix
+   * is to stop tracking *which* reservation was attempted at all — call
+   * `simulateAdvanceSelection` once, `await` its result, and if it
+   * *claimed* something, call it again immediately (its own next
+   * internal `.find()` naturally advances to whichever winner is left,
+   * since the one just claimed is no longer `pending`) — sequentially
+   * draining every currently-reserved simulated candidate, one real
+   * authoritative call at a time, until nothing is left to claim.
+   * `promotionDrainingRef` prevents an unrelated `pendingRequests`
+   * change (e.g. a vote count ticking) from starting a second,
+   * overlapping drain while one is already running; the bounded
+   * iteration cap is a safety valve, never expected to bind in practice
+   * (at most two seats can ever be open at once).
+   */
+  const promotionDrainingRef = useRef(false);
+  useEffect(() => {
+    if (!runningRef.current || realJoinInProgressRef.current) return;
+    if (promotionDrainingRef.current) return;
+    const hasSimulatedWinner = pendingRequests.some(
+      (r) => r.is_current_candidate && r.reserved_seat_number !== null && r.guest_id && allSimulatedGuestIdsRef.current.has(r.guest_id),
+    );
+    if (!hasSimulatedWinner) return;
+
+    promotionDrainingRef.current = true;
+    void (async () => {
+      // Issue #21, eighth corrective pass: reproduced live — an
+      // unhandled rejection from *any* iteration (a transient DB error,
+      // a genuine race with another concurrent caller) used to escape
+      // this loop entirely, skipping the reset below and leaving
+      // `promotionDrainingRef` stuck `true` forever — silently
+      // disabling every future reactive promotion for the rest of the
+      // run, including for an entirely unrelated later vacancy. The
+      // `try/finally` is what actually makes this a *bounded* retry
+      // rather than a single unlucky call permanently wedging the whole
+      // mechanism; a failed iteration is logged, not swallowed.
+      try {
+        for (let i = 0; i < 10; i++) {
+          if (!runningRef.current || realJoinInProgressRef.current) break;
+          const result = await simulateAdvanceSelection(eventId, Array.from(allSimulatedGuestIdsRef.current), guestDisplayNamesRef.current);
+          if (!result.claimed) break;
+          const name = guestDisplayNamesRef.current[result.guestId] ?? "a simulated candidate";
+          appendLog(`Seat ${result.seatNumber} → ${name} promoted (reactive, real weighted selection)`);
+        }
+      } catch (err) {
+        appendLog(`Reactive candidate promotion failed: ${err instanceof Error ? err.message : "unknown error"} — the bounded backstop poll will retry`);
+      } finally {
+        promotionDrainingRef.current = false;
+      }
+    })();
+  }, [pendingRequests, eventId]);
 
   // Live round-vote tallies for the observability panel — speaker_round_votes
   // is publicly selectable (same RLS tier as speaker_requests), so this
@@ -659,6 +780,13 @@ export function SessionSimulatorPanel({
     // and the safety check that keeps this from ever acting on a real
     // user's behalf. Paused entirely while `realJoinInProgress` is true —
     // a real join/promotion always gets first refusal, never a race.
+    // Issue #21, eighth corrective pass: the *primary* trigger for this
+    // is now the reactive effect above (fires the instant this tab's own
+    // live `pendingRequests` shows a simulated candidate reserved) — this
+    // poll is unchanged and remains only as the bounded backstop for a
+    // missed Realtime delta, the same relationship the sixth pass
+    // established between `useAutomaticPromotion`'s own poll and its
+    // reactive fast path.
     schedule(() => {
       if (realJoinInProgressRef.current) return;
       if (speakersRef.current.length >= 2) return;
@@ -1300,6 +1428,44 @@ export function SessionSimulatorPanel({
           </>
         )}
         {/*
+          Issue #21, eighth corrective pass, Section 9: one row per
+          currently-*pending* request (the full live pool — not just
+          `frozenCandidates` above, which only shows candidates already
+          part of a frozen selection round's own snapshot, and would
+          silently omit a request that arrived after that snapshot but
+          before a new one encompasses it). "Authorized" is deliberately
+          not a separate column from "Reserved" — in this architecture
+          they're the same signal (`is_current_candidate` +
+          `reserved_seat_number`, exactly what `claim_speaker_seat`
+          itself checks server-side); showing two columns for one fact
+          would invent a distinction this system doesn't actually have.
+          "Going Live" is likewise not shown per-candidate here — for a
+          *real* candidate, whether they're currently counting down is
+          local state inside their own browser tab, genuinely invisible
+          from any other client (see the WAITING AT reason below, which
+          says this honestly rather than guessing).
+        */}
+        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Candidates (Section 9)</div>
+        {pendingRequests.length === 0 ? (
+          <p className="text-white/40">No pending requests</p>
+        ) : (
+          pendingRequests.map((r) => {
+            const occupied = speakers.some(
+              (s) => (r.profile_id !== null && s.profile_id === r.profile_id) || (r.guest_id !== null && s.guest_id === r.guest_id),
+            );
+            return (
+              <p key={r.id} data-testid="sim-candidate-row" className="text-white/70">
+                {candidateName(r)} — requested ✓ · eligible {r.selection_failed ? "✗" : "✓"} · rank{" "}
+                {r.frozen_rank ?? "—"} ·{" "}
+                {r.is_current_candidate && r.reserved_seat_number !== null
+                  ? `reserved (Seat ${r.reserved_seat_number})`
+                  : "not reserved"}{" "}
+                · occupied {occupied ? "✓" : "✗"}
+              </p>
+            );
+          })
+        )}
+        {/*
           Issue #21, fifth corrective pass, Section 16: per-seat
           candidate/authorization/occupancy — up to two reservations can
           be in flight simultaneously (two seats opened at once), never
@@ -1351,20 +1517,36 @@ export function SessionSimulatorPanel({
           }
 
           const rows: { label: string; value: string }[] = [{ label: "Vacant", value: "+0ms" }];
-          if (t.candidatesFoundAt !== null) rows.push({ label: "Candidates found", value: formatDelta(t.candidatesFoundAt - t.vacantAt) });
-          if (t.reservedAt !== null) rows.push({ label: "Reserved", value: formatDelta(t.reservedAt - t.vacantAt) });
+          if (t.candidatesFoundAt !== null) rows.push({ label: "Candidates observed", value: formatDelta(t.candidatesFoundAt - t.vacantAt) });
+          if (t.reservedAt !== null) rows.push({ label: "Reservation observed locally", value: formatDelta(t.reservedAt - t.vacantAt) });
           if (t.occupiedAt !== null) rows.push({ label: "Occupied", value: formatDelta(t.occupiedAt - t.vacantAt) });
 
+          // Issue #21, eighth corrective pass, Section 9: more granular
+          // WAITING AT reasons — the sixth pass's single "Going Live
+          // countdown or claim pending" bucket couldn't distinguish
+          // "still within the intentional 3s window" from "reserved a
+          // while ago and still not occupied," which is exactly the
+          // distinction needed to tell a genuine stall apart from normal
+          // Going Live. `reservedForMs` is real, observed elapsed time
+          // (now - the real reservedAt timestamp) — never an estimate.
+          // `PROMOTION_COUNTDOWN_SECONDS` is the one real intentional
+          // delay in this path; the extra buffer accounts for claim
+          // round-trip time, not a second guess at another intentional
+          // wait.
+          const reservedForMs = t.reservedAt !== null && now !== null ? now - t.reservedAt : null;
+          const CLAIM_GRACE_MS = 4000;
           const waitingReason =
             t.occupiedAt !== null
               ? null
               : reservedForThisSeat
-                ? `Going Live countdown (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional) or claim pending`
+                ? reservedForMs !== null && reservedForMs > PROMOTION_COUNTDOWN_SECONDS * 1000 + CLAIM_GRACE_MS
+                  ? `authoritative seat claim — reserved ${formatDelta(reservedForMs)} ago, past the intentional ${PROMOTION_COUNTDOWN_SECONDS}s countdown, not yet occupied`
+                  : `Going Live (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional) or candidate client acknowledgement — cannot be distinguished from this vantage point (see doc comment)`
                 : hasEligibleRequests
-                  ? "selection triggered — reservation pending"
+                  ? "reservation RPC pending, or reservation not yet propagated to this client — cannot be distinguished from this vantage point"
                   : fallbackOpen
                     ? "fallback open — tap to join"
-                    : "no eligible requests";
+                    : "eligible candidate detection — no eligible request observed yet";
 
           return (
             <div key={seatNumber} data-testid={`sim-seat-timing-${seatNumber}`}>

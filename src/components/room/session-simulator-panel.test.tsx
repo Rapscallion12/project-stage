@@ -422,7 +422,11 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       // seat 2's request only fires after seat 1's own bounded claim-retry
       // budget is exhausted (sequential establishment) — a longer timeout
       // than the default is needed here, not a sign of anything wrong.
-      await waitFor(() => expect(simulateRequestToSpeak).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      // Issue #21, eighth corrective pass: the budget itself grew (a
+      // real-device pass found the previous one too tight — see
+      // MAX_CLAIM_ATTEMPTS' own doc comment), so this real-time wait
+      // grew with it.
+      await waitFor(() => expect(simulateRequestToSpeak).toHaveBeenCalledTimes(2), { timeout: 13_000 });
       const namesRequested = simulateRequestToSpeak.mock.calls.map((call) => call[1]);
       // Same two stable identities Start generated — never re-randomized.
       expect(namesRequested.sort()).toEqual(fromStart.sort());
@@ -434,9 +438,9 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       // test.
       await waitFor(
         () => expect(screen.getByTestId("sim-log")).toHaveTextContent("did not result in an authorized claim"),
-        { timeout: 3000 },
+        { timeout: 13_000 },
       );
-    });
+    }, 30_000);
 
     it("assigns seat 1 and seat 2 explicitly", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -622,11 +626,15 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         render(<SessionSimulatorPanel {...baseProps} />);
         fireEvent.click(screen.getByTestId("sim-start"));
 
-        await waitFor(() => expect(screen.getByTestId("sim-startup-phase")).toHaveTextContent("Failed"), { timeout: 6000 });
+        // Issue #21, eighth corrective pass: both seats now exhaust the
+        // (widened) bounded retry budget sequentially before startup
+        // gives up — see MAX_CLAIM_ATTEMPTS' own doc comment for why it
+        // grew.
+        await waitFor(() => expect(screen.getByTestId("sim-startup-phase")).toHaveTextContent("Failed"), { timeout: 13_000 });
         expect(screen.getByTestId("sim-log")).toHaveTextContent("did not result in an authorized claim");
         expect(simulateSeedSpeaker).not.toHaveBeenCalled();
         expect(screen.getByTestId("sim-stop")).toBeDisabled();
-      });
+      }, 20_000);
     });
   });
 
@@ -656,6 +664,94 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(calledEventId).toBe("e1");
       expect(guestIds.length).toBeGreaterThan(0); // the generated audience + seed speakers
       expect(Object.keys(displayNames).length).toBeGreaterThan(0);
+    });
+
+    // Issue #21, eighth corrective pass, Sections 8, 33: a real-device
+    // report found "Selecting next speaker…" persisting for several
+    // seconds specifically for a simulator-generated candidate — traced
+    // to the claim step depending solely on this 4-6s poll, even though
+    // the reservation itself is fast. This proves the reactive fast
+    // path: simulateAdvanceSelection fires the instant pendingRequests
+    // shows one of this run's own identities reserved, with real timers
+    // and *no* timer advance at all — never waiting for the poll tick.
+    it("reacts immediately once pendingRequests shows one of this run's own identities reserved — no poll tick required (Sections 8, 33)", async () => {
+      const onSimulatedIdentitiesCreated = vi.fn();
+      const { rerender } = render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "seat-1", seat_number: 1 })]}
+          onSimulatedIdentitiesCreated={onSimulatedIdentitiesCreated}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(onSimulatedIdentitiesCreated).toHaveBeenCalled());
+      const ownGuestId: string = onSimulatedIdentitiesCreated.mock.calls[0][0][0];
+
+      rerender(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "seat-1", seat_number: 1 })]}
+          pendingRequests={[
+            request({ id: "r1", guest_id: ownGuestId, is_current_candidate: true, reserved_seat_number: 2 }),
+          ]}
+          onSimulatedIdentitiesCreated={onSimulatedIdentitiesCreated}
+        />,
+      );
+
+      await waitFor(() => expect(simulateAdvanceSelection).toHaveBeenCalled());
+    });
+
+    // Issue #21, eighth corrective pass, Section 15: two earlier cuts of
+    // this reactive path (one calling `simulateAdvanceSelection` once
+    // per reservation in parallel, one deduplicating by "have I already
+    // attempted this exact reservation") were both proven live, against
+    // a real dev server, to leave a *second* simultaneously-reserved
+    // seat permanently unclaimed — `simulateAdvanceSelection` itself
+    // only ever targets whichever reserved simulated candidate its own
+    // internal lookup reaches first, regardless of which seat, so
+    // per-reservation bookkeeping silently "used up" an attempt that
+    // never actually touched that reservation. The fix drains
+    // sequentially instead: call, await, and if it claimed something,
+    // call again immediately — never tracking *which* reservation was
+    // attempted at all. This test proves the two-seat case those
+    // earlier cuts got wrong.
+    it("drains sequentially until every currently-reserved simulated candidate is claimed — never stopping after just the first (Section 15)", async () => {
+      const onSimulatedIdentitiesCreated = vi.fn();
+      const { rerender } = render(<SessionSimulatorPanel {...baseProps} speakers={[]} onSimulatedIdentitiesCreated={onSimulatedIdentitiesCreated} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(onSimulatedIdentitiesCreated).toHaveBeenCalled());
+      const ids: string[] = onSimulatedIdentitiesCreated.mock.calls[0][0];
+      const [guestA, guestB] = ids;
+
+      // Two seats, two distinct simulated candidates each reserved —
+      // exactly the atomic dual-seat reservation's own real output.
+      // simulateAdvanceSelection's mock claims whichever guest id its
+      // own call list starts with, mirroring the real function's "first
+      // matching reserved candidate" behavior — the *first* call claims
+      // seat 1, the *second* (only reachable via a real sequential
+      // drain) claims seat 2.
+      simulateAdvanceSelection.mockImplementation(async (...args: unknown[]) => {
+        const [, guestIds] = args as [string, string[]];
+        if (guestIds.includes(guestA)) return { claimed: true, guestId: guestA, seatNumber: 1 as const };
+        return { claimed: false };
+      });
+
+      rerender(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[]}
+          pendingRequests={[
+            request({ id: "r1", guest_id: guestA, is_current_candidate: true, reserved_seat_number: 1 }),
+            request({ id: "r2", guest_id: guestB, is_current_candidate: true, reserved_seat_number: 2 }),
+          ]}
+          onSimulatedIdentitiesCreated={onSimulatedIdentitiesCreated}
+        />,
+      );
+
+      // At least two calls: draining doesn't stop after the first
+      // success — it keeps going until a call reports nothing left to
+      // claim.
+      await waitFor(() => expect(simulateAdvanceSelection.mock.calls.length).toBeGreaterThanOrEqual(2));
     });
 
     it("does not poll simulateAdvanceSelection once both seats are occupied", async () => {
@@ -969,10 +1065,10 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
   // reason shown (Section 21), never a generic "Selecting…", and that a
   // completed cycle reports a real Total once the seat is occupied.
   describe("Selection Timing diagnostic display (issue #21, sixth corrective pass, Sections 1-3, 20-21)", () => {
-    it("reports 'no eligible requests' — never a generic reason — for a vacant seat with nothing pending", async () => {
+    it("reports 'no eligible request observed yet' — never a generic reason — for a vacant seat with nothing pending", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
-      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("no eligible requests"));
-      expect(screen.getByTestId("sim-waiting-2")).toHaveTextContent("no eligible requests");
+      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("no eligible request observed yet"));
+      expect(screen.getByTestId("sim-waiting-2")).toHaveTextContent("no eligible request observed yet");
     });
 
     it("reports 'fallback open — tap to join' once the stage is established, both seats are empty, and there are no requests", async () => {
@@ -980,9 +1076,9 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("fallback open — tap to join"));
     });
 
-    it("reports 'selection triggered — reservation pending' once an eligible request exists but nothing is reserved for this seat yet", async () => {
+    it("reports that reservation is pending/not yet propagated once an eligible request exists but nothing is reserved for this seat yet", async () => {
       render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1" })]} />);
-      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("selection triggered — reservation pending"));
+      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("reservation RPC pending, or reservation not yet propagated"));
     });
 
     it("reports the intentional Going Live countdown, by name and duration, once a candidate is actually reserved for this seat — never the generic reservation-pending reason", async () => {
@@ -993,9 +1089,35 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         />,
       );
       await waitFor(() =>
-        expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent(`Going Live countdown (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional)`),
+        expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent(`Going Live (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional)`),
       );
-      expect(screen.getByTestId("sim-waiting-1")).not.toHaveTextContent("reservation pending");
+      expect(screen.getByTestId("sim-waiting-1")).not.toHaveTextContent("reservation RPC pending");
+    });
+
+    // Issue #21, eighth corrective pass, Section 9: the new, more
+    // granular reason once a seat has been reserved noticeably longer
+    // than the intentional countdown could explain — distinguishes a
+    // genuine stall from normal Going Live, using a real measured
+    // elapsed time (never an estimate).
+    it("reports 'authoritative seat claim' — not the Going Live reason — once a seat has been reserved well past the intentional countdown and still isn't occupied", async () => {
+      vi.useFakeTimers();
+      try {
+        const { rerender } = render(<SessionSimulatorPanel {...baseProps} />);
+        // Establish a real vacantAt timestamp before reserving, so a
+        // real elapsed duration can be measured from it.
+        rerender(
+          <SessionSimulatorPanel
+            {...baseProps}
+            pendingRequests={[request({ id: "r1", guest_id: "g1", is_current_candidate: true, reserved_seat_number: 1 })]}
+          />,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10_000); // well past the 3s countdown + claim grace
+        expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("authoritative seat claim");
+        expect(screen.getByTestId("sim-waiting-1")).not.toHaveTextContent("Going Live");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("shows no vacancy-cycle timing for a seat that's already occupied when this panel first mounts", async () => {
@@ -1017,6 +1139,53 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(screen.getByTestId("sim-seat-timing-total-1")).toBeInTheDocument());
       expect(screen.getByTestId("sim-seat-timing-total-1")).toHaveTextContent(/^Total: \+\d/);
       expect(screen.queryByTestId("sim-waiting-1")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #21, eighth corrective pass, Section 9: one row per currently-
+  // pending request (the full live pool, not just frozen/ranked ones),
+  // so a request that arrived after the last frozen snapshot is never
+  // silently missing from diagnostics.
+  describe("Candidates diagnostic table (issue #21, eighth corrective pass, Section 9)", () => {
+    it("shows requested/eligible/rank/reserved/occupied for every pending request, including one not yet part of any frozen round", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", frozen_rank: 1, is_current_candidate: true, reserved_seat_number: 1, selection_failed: false }),
+            request({ id: "r2", guest_id: "g2", frozen_rank: null }), // not yet part of any frozen round
+          ]}
+        />,
+      );
+      const rows = screen.getAllByTestId("sim-candidate-row");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveTextContent("requested ✓");
+      expect(rows[0]).toHaveTextContent("eligible ✓");
+      expect(rows[0]).toHaveTextContent("rank 1");
+      expect(rows[0]).toHaveTextContent("reserved (Seat 1)");
+      expect(rows[1]).toHaveTextContent("rank —");
+      expect(rows[1]).toHaveTextContent("not reserved");
+    });
+
+    it("shows a candidate as ineligible once selection_failed is set", () => {
+      render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1", selection_failed: true })]} />);
+      expect(screen.getByTestId("sim-candidate-row")).toHaveTextContent("eligible ✗");
+    });
+
+    it("shows occupied ✓ once the request's own identity is actually seated", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "s1", seat_number: 1, guest_id: "g1", profile_id: null })]}
+          pendingRequests={[request({ id: "r1", guest_id: "g1" })]}
+        />,
+      );
+      expect(screen.getByTestId("sim-candidate-row")).toHaveTextContent("occupied ✓");
+    });
+
+    it("shows nothing but an explicit empty state when there are no pending requests at all", () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      expect(screen.queryByTestId("sim-candidate-row")).not.toBeInTheDocument();
     });
   });
 

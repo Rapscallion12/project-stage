@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { applyStageRoundChange } from "./use-stage-round";
+import { renderHook, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { applyStageRoundChange, useStageRound } from "./use-stage-round";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
 
 function stageRound(overrides: Partial<StageRound> = {}): StageRound {
@@ -41,5 +42,83 @@ describe("applyStageRoundChange", () => {
     // `new` is genuinely empty on a real DELETE payload — the fix must
     // not depend on it carrying anything.
     expect(applyStageRoundChange({ eventType: "DELETE", new: {} })).toBeNull();
+  });
+});
+
+/**
+ * Issue #21, eighth corrective pass, Sections 12-13: reproduced live
+ * against a real dev server, not just theorized — a tab whose Realtime
+ * connection went stale kept showing a round from *before* the stage was
+ * established ("Round 0 · awaiting pairing") indefinitely, long after
+ * the authoritative round had actually advanced and gone active; a fresh
+ * page load immediately showed the correct state. Same fake-Supabase
+ * pattern `use-active-speakers-resync.test.ts` established.
+ */
+function makeFakeSupabase(row: StageRound | null) {
+  let subscribeCallback: ((status: string) => void) | null = null;
+  const channel = {
+    on: vi.fn(() => channel),
+    subscribe: vi.fn((callback: (status: string) => void) => {
+      subscribeCallback = callback;
+      return channel;
+    }),
+  };
+  const client = {
+    channel: vi.fn(() => channel),
+    removeChannel: vi.fn(),
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          maybeSingle: vi.fn(async () => ({ data: row })),
+        })),
+      })),
+    })),
+  };
+  return {
+    client,
+    triggerSubscribed: () => subscribeCallback?.("SUBSCRIBED"),
+  };
+}
+
+const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }));
+vi.mock("@/lib/supabase/client", () => ({ createClient }));
+
+describe("useStageRound — visibility/focus resync (issue #21, eighth corrective pass)", () => {
+  it("resyncs to the authoritative row when the tab becomes visible again — not just on the initial SUBSCRIBED callback", async () => {
+    const fresh = stageRound({ round_number: 2, phase: "active" });
+    const fake = makeFakeSupabase(fresh);
+    createClient.mockReturnValue(fake.client);
+
+    const { result } = renderHook(() => useStageRound("e1"));
+    expect(result.current).toBeNull();
+
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => expect(result.current?.round_number).toBe(2));
+    expect(result.current?.phase).toBe("active");
+  });
+
+  it("resyncs to the authoritative row when the window regains focus", async () => {
+    const fresh = stageRound({ round_number: 3, phase: "active" });
+    const fake = makeFakeSupabase(fresh);
+    createClient.mockReturnValue(fake.client);
+
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    const { result } = renderHook(() => useStageRound("e1"));
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(result.current?.round_number).toBe(3));
+  });
+
+  it("still resyncs on the initial SUBSCRIBED callback (unchanged behavior)", async () => {
+    const fresh = stageRound({ round_number: 1, phase: "awaiting_pairing" });
+    const fake = makeFakeSupabase(fresh);
+    createClient.mockReturnValue(fake.client);
+
+    const { result } = renderHook(() => useStageRound("e1"));
+    fake.triggerSubscribed();
+
+    await waitFor(() => expect(result.current?.round_number).toBe(1));
   });
 });

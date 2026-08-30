@@ -149,6 +149,11 @@ export function useActiveSpeakerRequests(
   useEffect(() => {
     const supabase = createClient();
 
+    function resync() {
+      void fetchPendingSpeakerRequests(supabase, eventId).then((fresh) => setRequestsById(toById(fresh)));
+      void fetchSpeakerRequestVotes(supabase, eventId).then((fresh) => setVotesById(toById(fresh)));
+    }
+
     const channel = supabase
       .channel(`event-speaker-requests:${eventId}`)
       .on(
@@ -179,14 +184,31 @@ export function useActiveSpeakerRequests(
         (payload) => setVotesById((prev) => applyVoteDelete(prev, (payload.old as { id: string }).id)),
       )
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          void fetchPendingSpeakerRequests(supabase, eventId).then((fresh) => setRequestsById(toById(fresh)));
-          void fetchSpeakerRequestVotes(supabase, eventId).then((fresh) => setVotesById(toById(fresh)));
-        }
+        if (status === "SUBSCRIBED") resync();
       });
+
+    // Issue #21, eighth corrective pass, Sections 12-13: a real-device
+    // report found "Selecting next speaker…" persisting on a phone for
+    // an extended period despite an eligible candidate visibly present —
+    // on-SUBSCRIBED resync alone assumes the Realtime client always
+    // reports a fresh SUBSCRIBED promptly after a mobile tab is
+    // backgrounded/foregrounded or hands off between wifi/cellular,
+    // which isn't guaranteed on a real network. Same established pattern
+    // `useSeatReconciliation` already uses for the identical class of
+    // problem (a backgrounded tab is exactly where a Realtime socket can
+    // silently degrade without the app being told) — an explicit,
+    // event-driven resync the moment the tab is actually looked at
+    // again, never a polling interval.
+    function handleVisibilityRestored() {
+      if (document.visibilityState === "visible") resync();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityRestored);
+    window.addEventListener("focus", handleVisibilityRestored);
 
     return () => {
       supabase.removeChannel(channel);
+      document.removeEventListener("visibilitychange", handleVisibilityRestored);
+      window.removeEventListener("focus", handleVisibilityRestored);
     };
   }, [eventId]);
 

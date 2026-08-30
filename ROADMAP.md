@@ -1046,6 +1046,39 @@ different dependencies. Current order:
       actions only — what actually prevents a duplicate concurrent
       Reset now, not a second confirmation. See DECISIONS.md and
       SESSION_LOG.md's Session 48.
+
+      **Eighth corrective pass (2026-08-30, same branch)**: a real
+      iPhone still showed "Selecting next speaker…" for an extended
+      period with a visibly eligible candidate — the sixth pass's
+      reactive fix only helps a *real* candidate's own browser tab.
+      Diagnostic-first again, this time finding and fixing four
+      independent, real bugs rather than one: (1) `useStageRound`/
+      `useActiveSpeakerRequests` were missing the visibility/focus
+      resync `useSeatReconciliation` already had for seat occupancy —
+      live-reproduced as a tab stuck showing a round from before the
+      stage was even established, long after the real round had
+      advanced; (2) simulated candidates had no reactive promotion path
+      at all (only production's own poll), fixed with a sequential
+      drain after two earlier attempts were each proven wrong live
+      (both left a second simultaneously-open seat's own reservation
+      permanently unclaimed), plus a `try/finally` closing a related bug
+      where an unhandled rejection silently disabled the whole mechanism
+      for the rest of a run; (3) the simulator's own startup retry
+      budget (750ms total) was measured too tight for this environment's
+      real reconciliation round-trip time, live-reproduced to fail
+      startup outright and silently disable every subsequent promotion
+      mechanism — widened to a 6s ceiling; (4) a genuine server-side bug,
+      not simulator-specific — `withdraw_speaker_request(_as_guest)`'s
+      "mark this round exhausted" check only ran when the withdrawing
+      request was itself the round's reserved candidate, so a
+      frozen-but-never-reserved straggler withdrawing could leave a
+      round stuck `active` forever, making every later-arriving request
+      permanently invisible to selection (migration 00000000000038 —
+      applied to the linked project). A related, deeper finding
+      (`reset_speaker_candidate_pool`'s own reservation check being
+      event-wide rather than round-scoped) was surfaced rather than
+      fixed, as a genuine design decision rather than an obvious bug.
+      See DECISIONS.md and SESSION_LOG.md's Session 49.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

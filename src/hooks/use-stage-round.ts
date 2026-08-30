@@ -62,8 +62,31 @@ export function useStageRound(eventId: string): StageRound | null {
         }
       });
 
+    // Issue #21, eighth corrective pass, Sections 12-13: reproduced live
+    // (not just theorized) — a tab whose Realtime connection genuinely
+    // went stale kept showing a round from *before* the stage was even
+    // established ("Round 0 · awaiting pairing") indefinitely, long
+    // after the authoritative round had actually advanced to round 2
+    // and gone active; a fresh page load immediately showed the correct
+    // state, proving this was stale client state, not a server bug.
+    // `on-SUBSCRIBED` resync alone assumes the Realtime client always
+    // promptly reports a fresh SUBSCRIBED after a dropped connection,
+    // which isn't guaranteed. Same established pattern
+    // `useSeatReconciliation` already uses for the identical class of
+    // problem — an explicit, event-driven resync the moment the tab is
+    // actually looked at again, never a polling interval.
+    function handleVisibilityRestored() {
+      if (document.visibilityState === "visible") {
+        void fetchStageRound(supabase, eventId).then(setStageRound);
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityRestored);
+    window.addEventListener("focus", handleVisibilityRestored);
+
     return () => {
       supabase.removeChannel(channel);
+      document.removeEventListener("visibilitychange", handleVisibilityRestored);
+      window.removeEventListener("focus", handleVisibilityRestored);
     };
   }, [eventId]);
 

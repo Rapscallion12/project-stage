@@ -180,6 +180,61 @@ describe("useActiveSpeakerRequests", () => {
     expect(result.current.pendingRequests[0].isMyVote).toBe(false);
   });
 
+  // Issue #21, eighth corrective pass, Sections 12-13: a real-device
+  // report found "Selecting next speaker…" persisting on a phone despite
+  // an eligible candidate visibly present — on-SUBSCRIBED resync alone
+  // assumes Realtime always reports a fresh SUBSCRIBED promptly after a
+  // mobile tab backgrounds/foregrounds, which isn't guaranteed on a real
+  // network. Same pattern useSeatReconciliation already established for
+  // the identical class of problem.
+  it("resyncs both requests and votes when the tab becomes visible again — not just on the initial SUBSCRIBED callback", async () => {
+    const fresh = [request({ id: "fresh" })];
+    const fake = makeFakeSupabase(fresh, [vote({ id: "v1", request_id: "fresh" })]);
+    createClient.mockReturnValue(fake.client);
+
+    const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, []));
+    expect(result.current.pendingRequests).toHaveLength(0);
+
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() => expect(result.current.pendingRequests).toHaveLength(1));
+    expect(result.current.pendingRequests[0]?.id).toBe("fresh");
+    expect(result.current.pendingRequests[0]?.voteCount).toBe(1);
+  });
+
+  it("does not resync when the visibilitychange fires while the tab is still hidden", async () => {
+    const fake = makeFakeSupabase([request({ id: "fresh" })]);
+    createClient.mockReturnValue(fake.client);
+
+    const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, []));
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+      // Nothing to await — asserting the *absence* of an update; a short
+      // microtask flush is enough to prove a resync was never scheduled.
+      await Promise.resolve();
+      expect(result.current.pendingRequests).toHaveLength(0);
+    } finally {
+      // jsdom's `document` is shared across every test in this file —
+      // restore the default so later tests aren't left believing the
+      // tab is still hidden.
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    }
+  });
+
+  it("resyncs both requests and votes when the window regains focus", async () => {
+    const fresh = [request({ id: "fresh" })];
+    const fake = makeFakeSupabase(fresh, [vote({ id: "v1", request_id: "fresh" })]);
+    createClient.mockReturnValue(fake.client);
+
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, []));
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(result.current.pendingRequests).toHaveLength(1));
+  });
+
   it("resyncs requests and votes on the initial SUBSCRIBED callback — the same missed-delta protection useActiveSpeakers has", async () => {
     const fresh = [request({ id: "fresh" })];
     const fake = makeFakeSupabase(fresh, [vote({ id: "v1", request_id: "fresh" })]);

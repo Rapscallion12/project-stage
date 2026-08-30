@@ -3,6 +3,137 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-30 — Eighth corrective pass: next-speaker latency traced to four independent, real bugs — stale client Realtime state, a simulator-only promotion gap, an under-budgeted retry, and a stuck server-side round (issue #21)
+
+**Context**: a real iPhone still showed "Selecting next speaker…" for an
+extended period with a visibly eligible, currently-requesting candidate
+in the ambient comments — proof the sixth pass's reactive-promotion fix
+(which targets a *real candidate's own browser tab*) hadn't fully closed
+the latency gap. Explicit instruction: diagnostic-first again, this time
+with specific attention to multi-tab/shared-identity behavior, and to
+distinguish simulator-only causes from causes that would affect a real
+user identically.
+
+**Multi-tab findings**: audited what multiple same-browser tabs actually
+share (the guest cookie, hence identity) and what happens when several
+independently-mounted `EventRoom` instances each run their own
+`useAutomaticPromotion`/`useSpeakerSelectionReconciliation`. Concluded,
+from reading the actual code (not guessing): multiple tabs racing to
+claim the same reservation is *safe* (the atomic RPC and
+`claimSpeakerSeat`'s own authorization check make a second claim fail
+harmlessly, the same "someone else just took it" tolerance every other
+race in this app already has) and does not itself explain added latency
+— if anything, more tabs racing to claim resolves *faster*. Multiple
+tabs' own reconciliation calls serializing behind
+`reserve_speaker_candidates_for_seats`' row lock is a real, audited
+behavior (Section 5's own question) but resolves in a small multiple of
+a single fast transaction, not multi-second, for any realistic tab
+count. Multi-tab was not the primary cause — four other, real, concrete
+bugs were.
+
+**Bug 1 — stale Realtime state, reproduced live**: `useStageRound` and
+`useActiveSpeakerRequests` each had an on-SUBSCRIBED resync (the
+established "don't just trust a delta arrived" discipline) but no
+visibility/focus-triggered resync — the exact gap `useSeatReconciliation`
+already closed for seat occupancy specifically, issue #18. Reproduced
+live, against a real dev server: after an environment disruption, a tab
+kept showing "Round 0 · awaiting pairing" — a round from *before the
+stage was even established* — long after the authoritative round had
+advanced to round 2 and gone active; a fresh page load immediately
+showed the correct state. Fixed by adding the same `visibilitychange`/
+`focus` resync to both hooks.
+
+**Bug 2 — simulated candidates had no reactive promotion path at all**:
+`useAutomaticPromotion`'s sixth-pass reactive fast path only helps a
+*real* candidate's own browser tab. A simulated identity has none — its
+entire claim step depended solely on the Session Simulator's own 4-6s
+natural-activity poll, even though reservation itself (already reactive,
+server-side, since the fifth pass) typically completes in well under a
+second. Fixed with a new reactive effect in the simulator panel,
+mirroring `pendingRequests` the same way production does. **Two
+iterations of this fix were each proven wrong live before the third
+one held**: the first fired one `simulateAdvanceSelection` call per
+reservation in parallel; the second deduplicated by "have I already
+attempted this exact reservation" — both left a *second*
+simultaneously-open seat's own reservation permanently unclaimed,
+because `simulateAdvanceSelection` itself only ever targets whichever
+reserved simulated candidate its own internal lookup reaches first,
+regardless of which seat — per-reservation bookkeeping "used up" an
+attempt that never actually touched that reservation. The fix that held:
+a sequential *drain* — call, await, and if it claimed something, call
+again immediately, never tracking *which* reservation was attempted.
+A related, more dangerous bug found in the same investigation: an
+unhandled rejection from any iteration escaped the drain entirely,
+skipping the reset and leaving the whole mechanism silently disabled
+for the rest of the run — closed with `try/finally`.
+
+**Bug 3 — the simulator's own startup retry budget was measured too
+tight for this environment**: `establishSeat`'s bounded claim-retry loop
+(5 attempts × 150ms = 750ms total) was less time than a single ordinary
+reconciliation round trip sometimes takes in this environment (measured:
+150-330ms each, and the full freeze→reserve→claim chain is several such
+round trips). Live-reproduced: this caused `Start Simulated Session`
+itself to fail startup and never reach `running = true` — silently
+disabling *every* subsequent promotion mechanism, including the fix
+above, for the rest of that run. Widened generously (20 × 300ms = 6s
+ceiling) — still a real, bounded retry against real server state each
+time, never unbounded.
+
+**Bug 4 — a genuine server-side bug, not simulator-specific**: live
+inspection of the real database found a `speaker_selection_rounds` row
+stuck `status = 'active'` with no live reservation left in it and a
+withdrawn straggler that had never been reserved for any seat.
+`withdraw_speaker_request(_as_guest)`'s own "mark this round exhausted"
+check lived entirely inside the `if v_row.is_current_candidate` branch —
+it only ran when the *withdrawing* request was itself the round's
+currently-reserved candidate. A frozen-but-never-reserved straggler (an
+ordinary case: a round freezes more candidates than there are open
+seats to reserve them for) withdrawing skipped the check entirely.
+Because `freeze_speaker_candidates` is deliberately idempotent ("an
+active round already exists — reuse it," migration 20), a round stuck
+this way makes every later-arriving Request-to-Speak permanently
+invisible to selection for that seat — this affects a real,
+authenticated caller identically to a simulated one. Fixed in migration
+00000000000038: the exhaustion check now runs whenever the withdrawing
+request belonged to a round at all, checking the round's actual current
+health (no live reservation *and* no remaining viable candidate)
+directly, rather than assuming "the withdrawer wasn't reserved" means
+nothing needs checking. The pre-existing runner-up-advancement logic is
+completely unchanged; no authorization check is weakened — this only
+changes when a round is marked `exhausted`, never who may claim a seat.
+
+**A related, deeper finding — not fixed this pass, surfaced instead**:
+`reset_speaker_candidate_pool`'s own "should I bulk-expire the rest of
+the pool" check (`v_other_reservation_exists`) queries
+`is_current_candidate` **event-wide**, not scoped to the current round —
+and a claimed winner's own row keeps `is_current_candidate = true`
+forever (the function deliberately never touches the winning request).
+In a long-running event with several resolved rounds, this means the
+bulk-expire step could keep finding an *old, already-resolved* round's
+own winner and conclude "another reservation exists," skipping cleanup
+indefinitely. Whether this is a real product problem (versus harmless
+accumulation — occupied seats never re-check `is_current_candidate` at
+all) and what the correct fix is (scope the check to the round,
+explicitly clear a winner's flag once claimed, or something else) is a
+genuine design decision, not a bug fix with one obvious right answer —
+see QUESTIONS/DECISIONS in this pass's own handoff.
+
+**Reason**: every bug here was found by reading real code and
+reproducing real behavior — against a real dev server, and (for Bug 4)
+the real linked database — never by guessing and patching a timer, per
+this pass's own explicit diagnostic-first mandate. Three of the four are
+genuinely new gaps this pass introduced context for finding (the
+sixth pass's own reactive fix made the *real*-candidate path fast enough
+that these previously-masked gaps became the visible bottleneck); Bug 4
+predates this pass entirely (present since migration 32) and would have
+affected real users the same way, simulator or not.
+
+**Tradeoffs**: none against any previously-established invariant —
+deterministic selection, the atomic dual-seat reservation, seat-claim
+authorization, the 3-second Going Live countdown, and every other
+already-verified piece of the pipeline are unchanged; the full existing
+test suite (real-database tests included) still passes.
+
 ## 2026-08-30 — Seventh corrective pass: geometry-driven stage stacking, stage-first collapsed navigation, a real Session Simulator Reset bug, consistent SIM tactile feedback (issue #21)
 
 **Context**: real-device/browser testing of the sixth pass's preview found

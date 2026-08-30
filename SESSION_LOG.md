@@ -4,6 +4,90 @@ Newest entry first.
 
 ---
 
+## 2026-08-30 — Session 49: Eighth corrective pass — four real latency bugs found and fixed (stale Realtime state, simulator promotion gap, retry budget, stuck server-side round) (issue #21)
+
+**Goal**: a real iPhone still showed "Selecting next speaker…" for an
+extended period despite a visibly eligible candidate — the sixth pass's
+reactive-promotion fix hadn't fully closed the gap. Explicit
+instruction: diagnostic-first again, with specific attention to
+multi-tab behavior; distinguish simulator-only causes from causes that
+would affect a real user identically; do not patch another timer blind.
+
+**Multi-tab audit (Sections 4-7)**: traced what multiple same-browser
+tabs actually share (the guest cookie/identity) and what happens when
+several `EventRoom` instances each run their own reconciliation/
+promotion hooks. Multiple tabs racing to claim is safe (the existing
+atomic RPC + authorization check make a losing claim fail harmlessly);
+multiple tabs' reconciliation calls serializing behind the reservation
+RPC's own row lock is real but resolves in a small multiple of a fast
+transaction, not multi-second. Multi-tab was not the primary cause.
+
+**Four real bugs found and fixed, each traced (not guessed) before
+fixing**:
+
+1. **Stale Realtime client state** — `useStageRound`/
+   `useActiveSpeakerRequests` had on-SUBSCRIBED resync but no visibility/
+   focus-triggered resync (the exact gap `useSeatReconciliation` already
+   closed for seat occupancy). Reproduced live: a tab kept showing
+   "Round 0 · awaiting pairing" long after the real round had advanced
+   to round 2 and gone active; a fresh load immediately showed the
+   correct state. Fixed by adding the same resync both hooks were
+   missing.
+2. **Simulated candidates had no reactive promotion path** —
+   `useAutomaticPromotion`'s reactive fix only helps a real candidate's
+   own browser tab; a simulated identity has none, so its claim
+   depended solely on the simulator's own 4-6s poll. Two attempted
+   fixes were each proven wrong live (one fired one call per
+   reservation in parallel, one deduplicated by "already attempted" —
+   both left a second simultaneously-open seat's reservation
+   permanently unclaimed, since the underlying claim function always
+   targets whichever reserved candidate it finds first, regardless of
+   seat). The fix that held: a sequential drain — call, await, if
+   claimed call again immediately, never tracking *which* reservation
+   was attempted. A related bug in the same code: an unhandled
+   rejection from any iteration silently disabled the whole mechanism
+   for the rest of the run — closed with `try/finally`.
+3. **Simulator startup retry budget too tight for this environment** —
+   5 attempts × 150ms (750ms total) was less than a single ordinary
+   reconciliation round trip sometimes takes (measured: 150-330ms
+   each). Live-reproduced: this failed `Start Simulated Session`
+   startup outright, silently disabling every subsequent promotion
+   mechanism for that run. Widened to 20 × 300ms (6s ceiling).
+4. **A genuine server-side bug, not simulator-specific** — live
+   database inspection found a selection round stuck `active` forever
+   with no live reservation and a withdrawn straggler that had never
+   been reserved for any seat.
+   `withdraw_speaker_request(_as_guest)`'s own "mark exhausted" check
+   only ran when the *withdrawing* request was itself the reserved
+   candidate — a frozen-but-never-reserved straggler withdrawing
+   skipped it entirely, and because `freeze_speaker_candidates` is
+   deliberately idempotent, a round stuck this way makes every
+   later-arriving request permanently invisible to selection — for a
+   real user identically to a simulated one. Fixed in migration
+   00000000000038, applied to the linked project; no authorization
+   check weakened.
+
+**A related, deeper finding surfaced rather than fixed**:
+`reset_speaker_candidate_pool`'s own "is there another reservation"
+check is event-wide, not scoped to the current round, and a claimed
+winner's own row never gets its `is_current_candidate` flag cleared —
+in a long-running event this could make the bulk-expire cleanup step
+keep finding an old, already-resolved round's own winner and skip
+cleanup. Whether this is a real product problem and what the correct
+fix is is a genuine design decision, not an obvious bug fix — see this
+pass's own QUESTIONS/DECISIONS.
+
+**Verification**: full suite, lint, tsc, build all clean. New tests:
+visibility-resync coverage for both hooks, a sequential-drain
+regression test for the simulator promotion fix, and a real-database
+test proving migration 38 against the actual linked project. Manual
+verification went well beyond the UI this pass — direct SQL/RPC calls
+against the real database were what actually found and confirmed Bug 4.
+Fresh preview deployed; stopping here for the user's review — not
+merged to main.
+
+---
+
 ## 2026-08-30 — Session 48: Seventh corrective pass — geometry-driven stage stacking, stage-first collapsed navigation, real Session Simulator Reset bug, SIM tactile feedback (issue #21)
 
 **Goal**: address four UX/simulator issues found testing the sixth
