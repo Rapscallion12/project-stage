@@ -27,6 +27,8 @@ import {
 import { jitteredDelayMs, randomOrdinaryComment, randomSpeakerRequestComment } from "@/lib/simulator/content";
 import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
 import { useNow } from "@/hooks/use-now";
+import { useSeatPromotionTiming } from "@/hooks/use-seat-promotion-timing";
+import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
@@ -98,6 +100,19 @@ function projectedOutcomeLabel(outcome: ReturnType<typeof resolveRoundOutcome>):
     case "decisive-replace":
       return "Replace";
   }
+}
+
+/**
+ * Issue #21, sixth corrective pass, Sections 2-3, 20-21: formats a
+ * millisecond delta from a seat's own `vacantAt` for the diagnostic
+ * timeline below — every input is a real `Date.now()` difference
+ * (`useSeatPromotionTiming`), never an estimate. Milliseconds under a
+ * second stay as milliseconds (the resolution that actually matters for
+ * "was this instant or not"); a second or more switches to one decimal
+ * of seconds, matching the user's own example format.
+ */
+function formatDelta(ms: number): string {
+  return ms < 1000 ? `+${ms}ms` : `+${(ms / 1000).toFixed(1)}s`;
 }
 
 /** Short, human-readable label for the compact Startup observability block (Section 8) — never invents a state the machine itself doesn't have. */
@@ -265,6 +280,11 @@ export function SessionSimulatorPanel({
   // hook (see its own doc comment), same fix speaker-vote-panel.tsx already
   // uses for the identical class of issue.
   const now = useNow();
+  // Issue #21, sixth corrective pass, Sections 1-3, 20-21: real, observed
+  // per-seat promotion timing — see this hook's own doc comment for
+  // exactly what it records and why. Purely additive diagnostic data;
+  // never read by anything that decides selection/authorization.
+  const seatTiming = useSeatPromotionTiming(speakers, pendingRequests);
 
   // Presentation-only state (real-device follow-up, same issue #21): whether
   // the panel is collapsed to a small "SIM" pill, and its dragged screen
@@ -1312,6 +1332,73 @@ export function SessionSimulatorPanel({
             </p>
           );
         })}
+        {/*
+          Issue #21, sixth corrective pass, Sections 1-3, 20-21: real,
+          observed per-seat promotion timing — a real-device report found
+          "Selecting next speaker…" giving no way to tell *where* time
+          was actually going. Every value below is an actual `Date.now()`
+          this client observed (`useSeatPromotionTiming`'s own doc
+          comment explains exactly what it can and can't measure) — never
+          an estimated/fabricated number. Once a seat is still waiting,
+          shows the *specific* reason (Section 21) instead of a generic
+          "Selecting…", distinguishing the intentional Going Live
+          countdown from everything before it (Section 11) rather than
+          lumping all latency into one number.
+        */}
+        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Selection Timing (real, observed)</div>
+        {([1, 2] as const).map((seatNumber) => {
+          const t = seatTiming[seatNumber];
+          const hasEligibleRequests = pendingRequests.length > 0;
+          const establishedForFallback = stageRound !== null && stageRound.round_number >= 1;
+          const bothEmpty = speakers.length === 0;
+          const fallbackOpen = establishedForFallback && bothEmpty && !hasEligibleRequests;
+          const reservedForThisSeat = pendingRequests.some((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
+
+          if (t.vacantAt === null) {
+            return (
+              <p key={seatNumber} data-testid={`sim-seat-timing-${seatNumber}`} className="text-white/40">
+                Seat {seatNumber}: occupied — no vacancy cycle in progress
+              </p>
+            );
+          }
+
+          const rows: { label: string; value: string }[] = [{ label: "Vacant", value: "+0ms" }];
+          if (t.candidatesFoundAt !== null) rows.push({ label: "Candidates found", value: formatDelta(t.candidatesFoundAt - t.vacantAt) });
+          if (t.reservedAt !== null) rows.push({ label: "Reserved", value: formatDelta(t.reservedAt - t.vacantAt) });
+          if (t.occupiedAt !== null) rows.push({ label: "Occupied", value: formatDelta(t.occupiedAt - t.vacantAt) });
+
+          const waitingReason =
+            t.occupiedAt !== null
+              ? null
+              : reservedForThisSeat
+                ? `Going Live countdown (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional) or claim pending`
+                : hasEligibleRequests
+                  ? "selection triggered — reservation pending"
+                  : fallbackOpen
+                    ? "fallback open — tap to join"
+                    : "no eligible requests";
+
+          return (
+            <div key={seatNumber} data-testid={`sim-seat-timing-${seatNumber}`}>
+              <p className="font-medium text-white/80">Seat {seatNumber}</p>
+              {rows.map((r) => (
+                <p key={r.label} className="pl-2 text-white/70">
+                  {r.label} {r.value}
+                </p>
+              ))}
+              {t.occupiedAt !== null ? (
+                <p data-testid={`sim-seat-timing-total-${seatNumber}`} className="pl-2 font-semibold text-emerald-400">
+                  Total: {formatDelta(t.occupiedAt - t.vacantAt)}
+                </p>
+              ) : (
+                <p data-testid={`sim-waiting-${seatNumber}`} className="pl-2 font-semibold text-amber-400">
+                  WAITING AT: {waitingReason}
+                </p>
+              )}
+            </div>
+          );
+        })}
+
         {/*
           Issue #21, fifth corrective pass, Section 16: "if blocked, show
           why" — the small-room fallback's own current state, read from

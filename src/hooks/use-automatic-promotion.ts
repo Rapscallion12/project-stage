@@ -28,14 +28,29 @@ const MEDIA_ACTIVATION_GRACE_MS = 30_000;
  * just silently resets to waiting, never surfaced as an alarming error,
  * since losing a race that was never guaranteed isn't a real failure.
  *
- * **Detection is polling, not purely Realtime-reactive**, on purpose:
- * eligibility depends on rank, which can change from reactions on a
- * *different* candidate's request message without any `event_speakers`
- * row changing at all — a purely Realtime-on-event_speakers approach
- * would miss that. Only candidates with a pending request poll (a small,
- * bounded set — nothing like #25's audience-wide-polling concern this
- * project already ruled out elsewhere), and only while genuinely waiting
- * (not once seated, not once counting down).
+ * **Issue #21, sixth corrective pass: reactive first, polling as a
+ * backstop — not the other way around.** This used to poll
+ * `checkPromotionEligibility` exclusively, on a fixed interval, with no
+ * way to notice a reservation any sooner than the next tick — a
+ * real-device pass found this adding several seconds of pure waiting on
+ * top of the intentional countdown below, even though the reservation
+ * itself (the seat-aware, atomic RPC — see `ensureActiveSelectionRound`,
+ * room/actions.ts) typically completes in well under a second.
+ * `isCurrentlyReservedCandidate` is derived by the caller from the
+ * *same* `pendingRequests` state already flowing into `EventRoom` via
+ * Realtime (`is_current_candidate`/`reserved_seat_number`, set by that
+ * same RPC) — when it flips true, the effect below starts the countdown
+ * immediately, no round trip needed. The poll remains, unchanged in
+ * cadence, purely as a backstop for the case a Realtime delta was
+ * missed (rank can also change from reactions on a *different*
+ * candidate's request message without any `event_speakers` row
+ * changing, which a purely occupancy-Realtime approach would miss) —
+ * only candidates with a pending request poll at all (a small, bounded
+ * set), and only while genuinely waiting (not once seated, not once
+ * counting down). The countdown itself is still never trusted as
+ * eligibility: the claim at the end independently re-validates
+ * server-side regardless of which path (reactive or polled) triggered
+ * it.
  *
  * **Grace-period self-eviction**: issue #23's own approved design calls
  * for a promoted candidate who cancels, disconnects, or never becomes
@@ -54,6 +69,8 @@ const MEDIA_ACTIVATION_GRACE_MS = 30_000;
 export function useAutomaticPromotion(params: {
   eventId: string;
   hasPendingRequest: boolean;
+  /** Issue #21, sixth corrective pass: the reactive fast-path signal — see this hook's own doc comment. Derived by the caller from already-live `pendingRequests` state, not fetched here. */
+  isCurrentlyReservedCandidate: boolean;
   isSpeaker: boolean;
   phase: EventPhase;
   needsMediaActivation: boolean;
@@ -65,6 +82,7 @@ export function useAutomaticPromotion(params: {
   const {
     eventId,
     hasPendingRequest,
+    isCurrentlyReservedCandidate,
     isSpeaker,
     phase,
     needsMediaActivation,
@@ -84,6 +102,25 @@ export function useAutomaticPromotion(params: {
 
     let cancelled = false;
     async function poll() {
+      // `await` first so every `setCountdown` call below — including the
+      // reactive fast path — runs in a callback continuation rather than
+      // synchronously within the effect body itself (this codebase's
+      // `react-hooks/set-state-in-effect` lint rule flags the latter; see
+      // this hook's own doc comment). The yield is a single microtask —
+      // not a meaningful delay — so it doesn't reintroduce the "stale by
+      // a whole cycle" latency this fast path exists to eliminate.
+      await Promise.resolve();
+      if (cancelled) return;
+
+      // Issue #21, sixth corrective pass: the reactive fast path — see
+      // this hook's own doc comment. Already-live Realtime state says
+      // this identity is the reserved candidate; start immediately, no
+      // `checkPromotionEligibility` round trip needed.
+      if (isCurrentlyReservedCandidate) {
+        setCountdown(PROMOTION_COUNTDOWN_SECONDS);
+        return;
+      }
+
       const result = await checkPromotionEligibility(eventId);
       if (!cancelled && result.eligible) {
         setCountdown(PROMOTION_COUNTDOWN_SECONDS);
@@ -106,7 +143,7 @@ export function useAutomaticPromotion(params: {
     // landed server-side yet), that poll would call `setCountdown` again,
     // resurrecting the just-canceled promotion. `isCancelling` suppresses
     // polling for exactly the window where that race is possible.
-  }, [isSpeaker, hasPendingRequest, phase, countdown, eventId, isCancelling]);
+  }, [isSpeaker, hasPendingRequest, phase, countdown, eventId, isCancelling, isCurrentlyReservedCandidate]);
 
   useEffect(() => {
     if (countdown === null) return;

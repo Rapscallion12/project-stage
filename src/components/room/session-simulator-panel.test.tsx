@@ -6,6 +6,7 @@ import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
 import type { ResetSimulatorSessionResult } from "@/app/events/[id]/room/simulator-actions";
+import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
 
 /**
  * Issue #21, fourth corrective pass: `stageRoundRow` now has two distinct
@@ -958,6 +959,64 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     it("shows 'no candidate reserved' for an open seat with nobody currently selected for it", () => {
       render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
       expect(screen.getByTestId("sim-selection-status-2")).toHaveTextContent("no candidate reserved");
+    });
+  });
+
+  // Issue #21, sixth corrective pass, Sections 1-3, 20-21: the real-observed
+  // per-seat diagnostic timeline this pass adds — a real-device report found
+  // "Selecting next speaker…" alone gave no way to tell *where* time was
+  // actually going. Every assertion below checks the *specific* WAITING AT
+  // reason shown (Section 21), never a generic "Selecting…", and that a
+  // completed cycle reports a real Total once the seat is occupied.
+  describe("Selection Timing diagnostic display (issue #21, sixth corrective pass, Sections 1-3, 20-21)", () => {
+    it("reports 'no eligible requests' — never a generic reason — for a vacant seat with nothing pending", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("no eligible requests"));
+      expect(screen.getByTestId("sim-waiting-2")).toHaveTextContent("no eligible requests");
+    });
+
+    it("reports 'fallback open — tap to join' once the stage is established, both seats are empty, and there are no requests", async () => {
+      render(<SessionSimulatorPanel {...baseProps} stageRound={stageRoundFixture({ round_number: 1 })} />);
+      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("fallback open — tap to join"));
+    });
+
+    it("reports 'selection triggered — reservation pending' once an eligible request exists but nothing is reserved for this seat yet", async () => {
+      render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1" })]} />);
+      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent("selection triggered — reservation pending"));
+    });
+
+    it("reports the intentional Going Live countdown, by name and duration, once a candidate is actually reserved for this seat — never the generic reservation-pending reason", async () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", is_current_candidate: true, reserved_seat_number: 1 })]}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("sim-waiting-1")).toHaveTextContent(`Going Live countdown (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional)`),
+      );
+      expect(screen.getByTestId("sim-waiting-1")).not.toHaveTextContent("reservation pending");
+    });
+
+    it("shows no vacancy-cycle timing for a seat that's already occupied when this panel first mounts", async () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
+      await waitFor(() => expect(screen.getByTestId("sim-seat-timing-1")).toHaveTextContent("occupied — no vacancy cycle in progress"));
+      expect(screen.queryByTestId("sim-waiting-1")).not.toBeInTheDocument();
+    });
+
+    it("shows a real measured Total, not a fabricated one, once a vacant seat becomes occupied", async () => {
+      const { rerender } = render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", is_current_candidate: true, reserved_seat_number: 1 })]}
+        />,
+      );
+      await waitFor(() => expect(screen.getByTestId("sim-waiting-1")).toBeInTheDocument());
+
+      rerender(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
+      await waitFor(() => expect(screen.getByTestId("sim-seat-timing-total-1")).toBeInTheDocument());
+      expect(screen.getByTestId("sim-seat-timing-total-1")).toHaveTextContent(/^Total: \+\d/);
+      expect(screen.queryByTestId("sim-waiting-1")).not.toBeInTheDocument();
     });
   });
 

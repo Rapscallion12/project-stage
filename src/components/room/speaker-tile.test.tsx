@@ -80,7 +80,15 @@ describe("SpeakerTile", () => {
     });
   });
 
-  describe("established-stage empty seat states (issue #21, third/fifth corrective passes — no bypassing Request-to-Speak)", () => {
+  describe("established-stage empty seat states (issue #21, third/fifth/sixth corrective passes — no bypassing Request-to-Speak)", () => {
+    it("shows 'Joining…' — not 'Selecting next speaker…' — once a candidate is reserved for this seat (issue #21, sixth corrective pass, Section 14)", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="joining" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("DIV");
+      expect(tile).toHaveTextContent("Joining…");
+      expect(tile).not.toHaveTextContent("Selecting next speaker…");
+    });
+
     it("shows 'Selecting next speaker…' instead of the tappable CTA when an eligible candidate exists", () => {
       render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="selecting" />);
       const tile = screen.getByTestId("empty-seat");

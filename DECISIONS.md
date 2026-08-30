@@ -3,6 +3,113 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-30 — Sixth corrective pass: next-speaker promotion latency traced to a client-side polling gap, not selection/reservation (issue #21)
+
+**Context**: real-device testing still found next-speaker selection
+"taking far too long" after the fifth pass's seat-aware/atomic
+reservation fix — an established stage with an empty seat (sometimes
+both), eligible already-voted-for Request-to-Speak candidates visible,
+"Selecting next speaker…" showing, and an unreasonable wait before a
+candidate actually landed on stage. Explicit instruction: diagnose
+first, no retries/timer cuts/rule changes before the actual bottleneck
+was identified.
+
+**Traced, not guessed**: read the real current source of every stage in
+the pipeline before touching anything. Two things were already correct
+from the fifth pass and confirmed, not re-built: (1)
+`useSpeakerSelectionReconciliation` re-triggers
+`reconcileSpeakerSelectionAction` → `ensureActiveSelectionRound`
+reactively, keyed on the live `speakers`/`pendingRequests` Realtime
+state, from *any* connected client — not a timer, and not dependent on
+one specific candidate's tab being open; (2)
+`reserveSpeakerCandidatesForSeats` reserves distinct candidates for
+*both* open seats in one atomic, row-locked call — there is no
+serialization between seat 1's and seat 2's reservation. A new
+real-database timing test (`two-seat-selection-fallback.test.ts`,
+Section 23) measured a representative run directly against the linked
+Supabase project: reservation for both seats **440ms**, seat 1
+claim+authorize **432ms**, seat 2 claim+authorize **448ms** — nowhere
+near the multi-second delay reported.
+
+**The actual bottleneck**: `useAutomaticPromotion` — the hook that
+starts a *candidate's own* 3-second Going Live countdown once they're
+eligible — determined its own eligibility via a blind
+`setInterval(checkPromotionEligibility, 4000)` poll, with no way to
+notice a reservation any sooner than the next tick. This poll was
+entirely disconnected from `pendingRequests`, the same
+Realtime-synced state (`is_current_candidate`/`reserved_seat_number`)
+`EventRoom` already held live and wasn't even passing into the hook.
+Worst case: up to ~4s of pure poll-wait, stacked *on top of* the
+intentional 3s countdown, on top of claim/Realtime overhead — the
+"several seconds of unreasonable wait" the real-device report
+described, even though the server-side work behind it was sub-second.
+
+**Decision — reactive first, polling as a bounded backstop**:
+`EventRoom` now derives `isCurrentlyReservedCandidate` directly from its
+own live `pendingRequests` (checking the caller's own identity against
+`is_current_candidate`/`reserved_seat_number`) and passes it into
+`useAutomaticPromotion`. The hook's polling effect checks this signal
+first — if already true, it starts the countdown immediately, no round
+trip. The original 4-second poll is unchanged in cadence and stays as a
+backstop for the one gap a pure Realtime-occupancy signal can't cover
+(a candidate's rank shifting from a vote on a *different* request,
+which doesn't touch `event_speakers` at all) — not replaced, since
+removing it outright would trade one latency bug for an occasional
+"nobody notices at all" bug. The claim itself
+(`claimOpenSeat`/`resolveClaimDecision`) is completely untouched and
+still independently re-validates eligibility server-side regardless of
+which path (reactive or polled) started the countdown — this fix cannot
+reintroduce the seat-claim race the second corrective pass closed,
+because nothing about *how* the countdown started ever fed into that
+revalidation.
+
+**A companion truthfulness fix (Section 14)**: even with faster
+promotion, "Selecting next speaker…" was staying visible through a
+candidate's *entire* Going Live countdown, well after selection had
+actually succeeded — misleading regardless of how fast the underlying
+mechanism became. `SpeakerStage`'s empty-seat state gained a "Joining…"
+state, checked before "Selecting…", triggered by the same
+`is_current_candidate`/`reserved_seat_number` fields already flowing
+through `pendingRequests` — the label now only ever means "still
+actually selecting," never "candidate already picked, still counting
+down."
+
+**New preview-only diagnostics (Sections 2-3, 20-21) — real
+measurements, never estimates**: `useSeatPromotionTiming` records actual
+`Date.now()` timestamps per seat for the transitions this client can
+directly observe (vacant → candidates found → reserved → occupied),
+reset each time a seat is next seen vacant. The Session Simulator panel
+renders this as a compact per-seat timeline with real millisecond/second
+deltas and a `WAITING AT: <specific reason>` line (Going Live countdown
+vs. reservation-pending vs. no eligible requests vs. fallback open)
+whenever a seat isn't yet occupied, replacing the generic "Selecting…"
+a screenshot used to show. This is client-observed timing only — it
+cannot distinguish "the server was slow" from "this tab's own Realtime
+subscription was slow to deliver the update"; the real-database test
+above is what actually isolates the server-side portion.
+
+**A lint-driven implementation detail worth recording**: this
+codebase's `react-hooks/set-state-in-effect` rule rejects a `setState`
+call reached synchronously from an effect body, including the reactive
+fast path above and the new timing hook's own recording effect —
+both were restructured to reach their `setState` call only after a
+genuine `await` (a single microtask, immaterial to the timing this pass
+cares about), matching the same shape the pre-existing poll callback
+already used and the rule already accepted.
+
+**Reason**: matches this pass's own diagnostic mandate — the fix
+targets the actual measured bottleneck (a client-side trigger gap) with
+the narrowest possible change, and leaves every already-correct piece
+from the fifth pass (atomic dual-seat reservation, reactive
+server-side re-triggering, seat-claim authorization) untouched rather
+than layering a new mechanism on top of working ones.
+
+**Tradeoffs**: none identified against the fifth pass's invariants —
+the diagnostic timeline is additive/preview-only and never read by
+anything that decides selection or authorization; the reactive fast
+path is a strict latency improvement with the same eligibility
+guarantees the poll always had, not a new one.
+
 ## 2026-08-29 — Fifth corrective pass: seat-aware selection reservation, atomic reservation RPC, small-room direct-join fallback, ambient comment redesign, Hide/Show live comments (issue #21)
 
 **Context**: real-device testing found the stage could get genuinely

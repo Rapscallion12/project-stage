@@ -143,14 +143,23 @@ export function SpeakerTile({
    */
   isSimulated?: boolean;
   /**
-   * Issue #21, fifth corrective pass: which of three established-stage
-   * empty-seat states this tile is in — only meaningful when `speaker`
-   * is null and the stage has ever achieved its initial pairing (see
-   * `SpeakerStage`'s own `established` doc comment). Undefined for a
-   * never-established stage's ordinary "Seat open"/tap-to-join tile.
+   * Issue #21, fifth/sixth corrective passes: which of four established-
+   * stage empty-seat states this tile is in — only meaningful when
+   * `speaker` is null and the stage has ever achieved its initial
+   * pairing (see `SpeakerStage`'s own `established` doc comment).
+   * Undefined for a never-established stage's ordinary "Seat open"/
+   * tap-to-join tile.
+   * - `"joining"`: a candidate has already been reserved for *this*
+   *   seat (selection is done — only their own Going Live countdown/
+   *   seat claim remains) — issue #21, sixth corrective pass, Section
+   *   14: real-device testing found "Selecting next speaker…" staying
+   *   on screen through the entire intentional countdown even after
+   *   selection had already succeeded, reading as stuck. Non-
+   *   interactive.
    * - `"selecting"`: at least one eligible Request-to-Speak candidate
-   *   exists — an active, short-lived transition, not a passive wait.
-   *   Non-interactive; `onTapEmptySeat` is never wired for this case.
+   *   exists, but none is reserved for *this* seat yet — an active,
+   *   short-lived transition, not a passive wait. Non-interactive;
+   *   `onTapEmptySeat` is never wired for this case.
    * - `"waiting"`: established, empty, but nobody is currently eligible
    *   to select (and the small-room fallback below doesn't apply to
    *   *this* viewer right now) — accurately communicates there's
@@ -163,7 +172,7 @@ export function SpeakerTile({
    *   the never-established case already uses (the server-side handler
    *   itself now covers both cases — see `joinOpenSeat`).
    */
-  emptySeatState?: "selecting" | "waiting" | "fallback-open";
+  emptySeatState?: "joining" | "selecting" | "waiting" | "fallback-open";
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -268,7 +277,13 @@ export function SpeakerTile({
         className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted"
       >
         <p className="text-sm font-medium">
-          {emptySeatState === "selecting" ? "Selecting next speaker…" : emptySeatState === "waiting" ? "Waiting for speaker requests…" : "Seat open"}
+          {emptySeatState === "joining"
+            ? "Joining…"
+            : emptySeatState === "selecting"
+              ? "Selecting next speaker…"
+              : emptySeatState === "waiting"
+                ? "Waiting for speaker requests…"
+                : "Seat open"}
         </p>
       </div>
     );

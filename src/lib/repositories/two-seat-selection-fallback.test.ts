@@ -138,6 +138,70 @@ describe.skipIf(!hasServiceCredentials)("two simultaneous open seats reserve dis
     20_000,
   );
 
+  it(
+    "issue #21, sixth corrective pass, Section 23: measures real reservation/authorization timing directly against the linked database — the DB portion of the pipeline is not what a real-device report found slow",
+    async () => {
+      const seed1 = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Seed Timing A", true);
+      const seed2 = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Seed Timing B", true);
+      await endSpeakerSeat(eventId, { type: "guest", id: seed1.guest_id! }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: seed2.guest_id! }, "moderator_removed");
+
+      const candidate1 = crypto.randomUUID();
+      const { messageId: message1Id, requestId: request1Id } = await requestToSpeakAsGuest(eventId, candidate1, "Timing Candidate One", "pick me");
+      const candidate2 = crypto.randomUUID();
+      const { messageId: message2Id, requestId: request2Id } = await requestToSpeakAsGuest(eventId, candidate2, "Timing Candidate Two", "pick me too");
+      await castSpeakerRequestVoteAsGuest(eventId, message1Id, crypto.randomUUID());
+      await castSpeakerRequestVoteAsGuest(eventId, message1Id, crypto.randomUUID());
+      await castSpeakerRequestVoteAsGuest(eventId, message2Id, crypto.randomUUID());
+
+      // The one atomic call that reserves *both* open seats' candidates
+      // — see `ensureActiveSelectionRound`'s own doc comment (Section 4)
+      // for why this is one server-side call, not a per-seat loop.
+      const reservationStart = Date.now();
+      await ensureActiveSelectionRound(eventId, await activeSeats());
+      const reservationMs = Date.now() - reservationStart;
+
+      const { data: reservations } = await service
+        .from("speaker_requests")
+        .select("guest_id, reserved_seat_number")
+        .eq("event_id", eventId)
+        .eq("status", "pending")
+        .eq("is_current_candidate", true)
+        .order("reserved_seat_number");
+      expect(reservations).toHaveLength(2);
+
+      const auth1Start = Date.now();
+      await claimAsAuthorizedCandidate(candidate1, 1, "Timing Candidate One", request1Id);
+      const auth1Ms = Date.now() - auth1Start;
+      const auth2Start = Date.now();
+      await claimAsAuthorizedCandidate(candidate2, 2, "Timing Candidate Two", request2Id);
+      const auth2Ms = Date.now() - auth2Start;
+
+      // Section 23 explicitly asks for the real measured numbers, not
+      // estimated ones — this is the one place they're actually
+      // captured against the real linked database; see this pass's
+      // handoff report for the values a representative run produced.
+      // eslint-disable-next-line no-console
+      console.log(
+        `[issue #21 sixth pass timing] reservation (both seats): ${reservationMs}ms · claim+authorize seat 1: ${auth1Ms}ms · claim+authorize seat 2: ${auth2Ms}ms`,
+      );
+
+      // Section 23: "the database portion should not take multiple
+      // seconds under normal conditions" — a generous regression guard,
+      // not a tight perf budget, but still an order of magnitude under
+      // the multi-second client-observed delay the real-device report
+      // described (which this pass traced to the *client's own* polling
+      // gap, not this server-side reservation/authorization work).
+      expect(reservationMs).toBeLessThan(2000);
+      expect(auth1Ms).toBeLessThan(2000);
+      expect(auth2Ms).toBeLessThan(2000);
+
+      await endSpeakerSeat(eventId, { type: "guest", id: candidate1 }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: candidate2 }, "moderator_removed");
+    },
+    20_000,
+  );
+
   it("an unauthorized direct claim for either seat is still rejected while both candidates are mid-selection — the seat-aware fix never weakens authorization", async () => {
     const seed1 = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Seed C", true);
     const seed2 = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Seed D", true);

@@ -19,6 +19,10 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
 const baseParams = {
   eventId: "e1",
   hasPendingRequest: true,
+  // Issue #21, sixth corrective pass: defaults to false so every
+  // existing test below keeps exercising the polled path unchanged —
+  // the reactive fast-path tests set this explicitly.
+  isCurrentlyReservedCandidate: false,
   isSpeaker: false,
   phase: "ready" as const,
   needsMediaActivation: false,
@@ -66,6 +70,46 @@ describe("useAutomaticPromotion", () => {
     });
     expect(result.current.countdown).toBe(PROMOTION_COUNTDOWN_SECONDS - 1);
     expect(claimOpenSeat).not.toHaveBeenCalled();
+  });
+
+  describe("issue #21, sixth corrective pass: the reactive fast path — no poll round trip needed to notice an already-live reservation", () => {
+    it("starts the countdown immediately when isCurrentlyReservedCandidate is already true, without ever calling checkPromotionEligibility", async () => {
+      const { result } = renderHook(() =>
+        useAutomaticPromotion({ ...baseParams, isCurrentlyReservedCandidate: true }),
+      );
+
+      await waitFor(() => expect(result.current.countdown).toBe(PROMOTION_COUNTDOWN_SECONDS));
+      // The whole point of the fix: this identity's own reservation was
+      // already visible in the caller's live state — no server round
+      // trip was needed to discover it.
+      expect(checkPromotionEligibility).not.toHaveBeenCalled();
+    });
+
+    it("starts the countdown the instant isCurrentlyReservedCandidate flips true on a later render — not on the next poll tick", async () => {
+      // The poll's own mock stays "not eligible" throughout — if the
+      // countdown starts anyway, it can only be from the reactive path,
+      // never the poll happening to catch up.
+      checkPromotionEligibility.mockResolvedValue({ eligible: false });
+      const { result, rerender } = renderHook(
+        (props: { isCurrentlyReservedCandidate: boolean }) =>
+          useAutomaticPromotion({ ...baseParams, isCurrentlyReservedCandidate: props.isCurrentlyReservedCandidate }),
+        { initialProps: { isCurrentlyReservedCandidate: false } },
+      );
+
+      // Give the initial (false) poll a chance to run and confirm it
+      // reports not-yet-eligible, same as any ordinary waiting candidate.
+      await waitFor(() => expect(checkPromotionEligibility).toHaveBeenCalled());
+      expect(result.current.countdown).toBeNull();
+
+      rerender({ isCurrentlyReservedCandidate: true });
+
+      await waitFor(() => expect(result.current.countdown).toBe(PROMOTION_COUNTDOWN_SECONDS));
+    });
+
+    it("does not start the countdown from the reactive signal once already speaking or once counting down — same guards as the polled path", () => {
+      renderHook(() => useAutomaticPromotion({ ...baseParams, isSpeaker: true, isCurrentlyReservedCandidate: true }));
+      expect(checkPromotionEligibility).not.toHaveBeenCalled();
+    });
   });
 
   // The full countdown-reaches-zero-then-claims chain (each tick's timer

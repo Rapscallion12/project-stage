@@ -13,6 +13,38 @@ merged to `main`.
 
 ### Changed
 
+- **Next-speaker promotion starts as soon as a candidate's own client
+  sees they've been reserved, instead of waiting up to 4 seconds for
+  the next background poll** (issue #21, sixth corrective pass) — a
+  real-device pass found selection still "taking far too long" even
+  after the fifth pass's atomic reservation fix; tracing (not
+  guessing) found the server-side reservation itself was already fast
+  (measured directly against the linked database: ~440ms to reserve
+  both seats, ~430-450ms per seat to claim+authorize) and already
+  reactive (triggered by any connected client's own occupancy/pending
+  changes, not a timer) — the actual delay was a *candidate's own*
+  client polling its eligibility on a blind 4-second interval,
+  completely disconnected from the Realtime state the app already had
+  live. Now checks that live state first and starts the intentional
+  3-second Going Live countdown immediately when it already shows a
+  reservation; the poll remains, unchanged, as a backstop for a missed
+  Realtime delta. The claim itself still independently re-validates
+  eligibility server-side regardless of which path started the
+  countdown, so this doesn't reopen the seat-claim race. See
+  DECISIONS.md.
+- **"Selecting next speaker…" no longer stays visible through a
+  candidate's entire Going Live countdown** (issue #21, sixth
+  corrective pass) — once a candidate is actually reserved for a seat,
+  it now reads "Joining…" instead, so the label only ever means
+  selection is still genuinely in progress. See DECISIONS.md.
+- **New preview-only Session Simulator diagnostics**: a real, observed
+  per-seat promotion timeline (issue #21, sixth corrective pass) —
+  actual timestamps (never estimated) for vacant → candidates found →
+  reserved → occupied, with a specific `WAITING AT: <reason>` line
+  (Going Live countdown / reservation pending / no eligible requests /
+  fallback open) whenever a seat isn't yet occupied. Preview-only;
+  never read by anything that decides selection or authorization. See
+  DECISIONS.md.
 - **Next-speaker selection now reserves a distinct candidate for every
   currently-open seat, not just one per event** (issue #21, fifth
   corrective pass) — with both stage seats empty at once, the highest-

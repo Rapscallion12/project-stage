@@ -383,9 +383,32 @@ export function EventRoom({
   // component — must survive rotation, and RoomControls (which renders
   // the countdown UI) is a presentation-only descendant, not where this
   // can live.
+  // Issue #21, sixth corrective pass: real-device testing found
+  // next-speaker promotion taking several seconds longer than it should
+  // — traced to `useAutomaticPromotion`'s eligibility detection being a
+  // *pure poll* (`checkPromotionEligibility`, every
+  // `POLL_INTERVAL_MS`), entirely blind to the `pendingRequests` state
+  // this component already has live, Realtime-pushed, right here —
+  // including each request's own `is_current_candidate`/
+  // `reserved_seat_number`, set by the exact same reservation RPC the
+  // poll would eventually re-discover on its own next tick. A candidate
+  // could be reserved for a seat and have that fact sitting in this
+  // component's own state for up to a full poll interval before the
+  // hook's *separate* server round-trip happened to notice. This is the
+  // reactive fast path: derived directly from already-live data, passed
+  // in as an additional, immediate trigger — the poll remains as a
+  // bounded backstop (for a missed Realtime delta), no longer the only
+  // path. See `useAutomaticPromotion`'s own doc comment for how it's
+  // used, and DECISIONS.md for the full diagnosis.
+  const myIdentityColumn = identity.type === "profile" ? "profile_id" : "guest_id";
+  const isCurrentlyReservedCandidate = pendingRequests.some(
+    (r) => r.is_current_candidate && r.reserved_seat_number !== null && r[myIdentityColumn] === identity.id,
+  );
+
   const { countdown: promotionCountdown, cancel: cancelPromotion } = useAutomaticPromotion({
     eventId: event.id,
     hasPendingRequest,
+    isCurrentlyReservedCandidate,
     isSpeaker,
     phase,
     needsMediaActivation: connection.needsMediaActivation,

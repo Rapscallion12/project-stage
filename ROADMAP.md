@@ -986,6 +986,37 @@ different dependencies. Current order:
       reservation, all seven fallback cases, and an explicit true-
       concurrency race test proving the atomic RPC. See DECISIONS.md and
       SESSION_LOG.md's Session 46.
+
+      **Sixth corrective pass (2026-08-30, same branch)**: real-device
+      testing still found next-speaker promotion "taking far too long" —
+      up to two eligible, already-voted-for candidates visible while
+      both seats stayed on "Selecting next speaker…". A diagnostic-first
+      pass (no fix attempted before tracing) found the *server-side*
+      reservation from the fifth pass was never the problem — a new
+      real-database timing test measured a representative reservation +
+      both seats' authorization at 440ms/432ms/448ms, and
+      `useSpeakerSelectionReconciliation` already re-triggers selection
+      reactively from any connected client's own occupancy/pending-pool
+      changes, not a timer. The actual bottleneck was entirely
+      client-side: `useAutomaticPromotion`'s own eligibility check — the
+      thing that starts a *candidate's* 3-second Going Live countdown —
+      was a blind 4-second `setInterval` poll, completely disconnected
+      from the `pendingRequests` Realtime state `EventRoom` already held
+      live. Fixed by deriving `isCurrentlyReservedCandidate` from that
+      already-live state and checking it first, before falling back to
+      the unchanged 4s poll as a bounded backstop for a missed Realtime
+      delta — the poll's own claim-time server revalidation is untouched,
+      so this closes no existing race-safety guarantee. A companion fix:
+      "Selecting next speaker…" was staying visible through a candidate's
+      *entire* Going Live countdown even after they'd been reserved —
+      `SpeakerStage`/`SpeakerTile` gained a "Joining…" state, checked
+      before "Selecting…", so the label only ever means "still executing
+      selection." New preview-only SIM diagnostic timeline
+      (`useSeatPromotionTiming`) shows real, observed per-seat timestamps
+      (vacant → candidates found → reserved → occupied) with a specific
+      `WAITING AT: <reason>` line instead of a generic status whenever a
+      seat is blocked — never an estimated number. See DECISIONS.md and
+      SESSION_LOG.md's Session 47.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

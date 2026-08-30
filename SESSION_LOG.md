@@ -4,6 +4,93 @@ Newest entry first.
 
 ---
 
+## 2026-08-30 — Session 47: Sixth corrective pass — next-speaker latency traced to a client-side polling gap, "Joining…" seat label, real per-seat SIM timing (issue #21)
+
+**Goal**: another real-device pass, diagnostic-first per explicit
+instruction. Found: next-speaker promotion still "taking far too long"
+after the fifth pass's seat-aware/atomic reservation fix — an
+established stage, an empty seat (sometimes both), eligible
+already-voted-for Request-to-Speak candidates visible, and an
+unreasonable wait before a candidate actually landed. Instructed: trace
+the whole pipeline first, instrument real timing, do not touch
+selection rules/Vote UI/Continue-Replace thresholds, no merge to main.
+
+**Traced before writing any fix**: read the real current source of
+every pipeline stage rather than guessing. Two things from the fifth
+pass were already correct and left untouched: `useSpeakerSelectionReconciliation`
+already re-triggers selection reactively from any connected client's
+own occupancy/pending-pool changes (not a timer, not dependent on one
+candidate's own tab); `reserveSpeakerCandidatesForSeats` already
+reserves both open seats' candidates in one atomic call, no
+serialization between them. A new real-database timing test
+(`two-seat-selection-fallback.test.ts`, Section 23) measured this
+directly against the linked Supabase project: reservation for both
+seats 440ms, seat 1 claim+authorize 432ms, seat 2 claim+authorize
+448ms — confirming the server side was never the bottleneck.
+
+**The actual bottleneck, found by reading `useAutomaticPromotion`**: the
+hook that starts a *candidate's own* 3-second Going Live countdown
+determined its own eligibility via a blind `setInterval(checkPromotionEligibility,
+4000)` poll — completely disconnected from `pendingRequests`, the
+Realtime-synced state (`is_current_candidate`/`reserved_seat_number`)
+`EventRoom` already held live and wasn't even passing into the hook.
+Worst case: up to ~4s of pure poll-wait stacked on top of the
+intentional 3s countdown — the multi-second delay the real-device
+report described, despite sub-second server-side work behind it.
+
+**Fix — reactive first, poll as bounded backstop**: `EventRoom` derives
+`isCurrentlyReservedCandidate` from its own live `pendingRequests` and
+passes it in; the hook's polling effect checks this first and starts
+the countdown immediately when true, no round trip. The 4s poll is
+unchanged and stays as a backstop for the one gap a pure
+occupancy-Realtime signal can't cover (a candidate's rank shifting from
+a vote on a *different* request). `claimOpenSeat` is completely
+untouched and still independently re-validates eligibility
+server-side regardless of which path started the countdown — this
+cannot reintroduce the seat-claim race the second corrective pass
+closed.
+
+**Companion truthfulness fix (Section 14)**: "Selecting next
+speaker…" was staying visible through a candidate's entire Going Live
+countdown even after selection had actually succeeded. `SpeakerStage`
+gained a "Joining…" empty-seat state, checked before "Selecting…",
+driven by the same `is_current_candidate`/`reserved_seat_number`
+fields already in `pendingRequests` — the label now only ever means
+selection is still genuinely in progress.
+
+**New preview-only SIM diagnostics (Sections 2-3, 20-21)**:
+`useSeatPromotionTiming` records real `Date.now()` timestamps per seat
+(vacant → candidates found → reserved → occupied), reset each new
+vacancy cycle — never an estimated value. The simulator panel renders
+this as a compact per-seat timeline with real millisecond/second
+deltas and a specific `WAITING AT: <reason>` line (Going Live countdown
+/ reservation pending / no eligible requests / fallback open) whenever
+a seat isn't yet occupied, replacing the old generic "Selecting…" a
+screenshot used to show. Documented as client-observed only — can't
+distinguish server-slow from this-tab's-own-Realtime-slow; the
+real-database test is what isolates the server side.
+
+**A lint-driven implementation note**: this codebase's
+`react-hooks/set-state-in-effect` rule rejects a `setState` reached
+synchronously from an effect body. Both the reactive fast path and the
+new timing hook's recording effect were restructured to reach their
+`setState` call only after a genuine microtask `await`, matching the
+shape the pre-existing poll callback already used and the rule already
+accepted — a real, previously-unencountered constraint in this
+codebase's stricter React Compiler-oriented lint config, not a
+suppression.
+
+**Verification**: new tests for the reactive fast path
+(`use-automatic-promotion.test.ts`), the timing hook itself
+(`use-seat-promotion-timing.test.ts`, new file), the "Joining…" label
+(`speaker-stage.test.tsx`/`speaker-tile.test.tsx`), the SIM timeline
+display (`session-simulator-panel.test.tsx`), and the real-database
+timing measurement above. Full suite, lint, tsc, build all clean —
+exact count in the commit. Fresh preview deployed; stopping here for
+the user's review — not merged to main.
+
+---
+
 ## 2026-08-29 — Session 46: Fifth corrective pass — seat-aware selection, small-room fallback, atomic reservation, ambient comment redesign, Hide/Show comments (issue #21)
 
 **Goal**: another real-device pass. Build "getting much closer" overall.

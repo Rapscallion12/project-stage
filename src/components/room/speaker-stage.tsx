@@ -238,8 +238,21 @@ export function SpeakerStage({
   const canFallbackJoin = fallbackOpen && !amIExcludedFromFallback;
   const promoteOpenSeat = !isSpeaker && !established && (seat1 === null) !== (seat2 === null);
 
-  function emptySeatState(seat: EventSpeaker | null): "selecting" | "waiting" | "fallback-open" | undefined {
+  function emptySeatState(seat: EventSpeaker | null, seatNumber: 1 | 2): "joining" | "selecting" | "waiting" | "fallback-open" | undefined {
     if (seat !== null || !established) return undefined;
+    // Issue #21, sixth corrective pass, Section 14: "once selection has
+    // succeeded, advance the UI state" — a real-device pass found
+    // "Selecting next speaker…" staying on screen for the *entire*
+    // intentional Going Live countdown even after a candidate was
+    // already reserved, reading as stuck when it wasn't. A candidate
+    // reserved for *this specific seat* (`reserved_seat_number`, set by
+    // the same atomic reservation RPC — see `ensureActiveSelectionRound`)
+    // means selection is done; only their own Going Live countdown/seat
+    // claim remains, which is a different, already-in-progress state.
+    const reservedForThisSeat = pendingRequests.some(
+      (r) => r.is_current_candidate && r.reserved_seat_number === seatNumber,
+    );
+    if (reservedForThisSeat) return "joining";
     if (hasEligibleRequests) return "selecting";
     if (canFallbackJoin) return "fallback-open";
     return "waiting";
@@ -255,7 +268,7 @@ export function SpeakerStage({
           seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
         )
       : null;
-    const seatState = emptySeatState(seat);
+    const seatState = emptySeatState(seat, seatNumber);
     return (
       <div
         key={seat?.id ?? `empty-${seatNumber}`}

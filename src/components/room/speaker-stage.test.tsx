@@ -230,6 +230,46 @@ describe("SpeakerStage", () => {
       expect(onTapEmptySeat).not.toHaveBeenCalled();
     });
 
+    it("advances to 'Joining…' — never stays on 'Selecting next speaker…' — once a candidate is actually reserved for this seat (issue #21, sixth corrective pass, Section 14)", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1 })]}
+          orientation="portrait"
+          {...baseProps}
+          onTapEmptySeat={onTapEmptySeat}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          pendingRequests={[pendingRequest({ is_current_candidate: true, reserved_seat_number: 2 })]}
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.tagName).toBe("DIV");
+      expect(emptySeat).toHaveTextContent("Joining…");
+      expect(emptySeat).not.toHaveTextContent("Selecting next speaker…");
+      fireEvent.click(emptySeat);
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+    });
+
+    it("still reads 'Selecting next speaker…' for a seat with no reservation of its own, even while the *other* seat already has a reserved candidate", () => {
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          pendingRequests={[
+            pendingRequest({ id: "r1", is_current_candidate: true, reserved_seat_number: 1 }),
+          ]}
+        />,
+      );
+      const seats = screen.getAllByTestId("empty-seat");
+      // Seat 1 has its own reservation; seat 2 doesn't yet — each seat's
+      // own label reflects its own reservation state, never the other
+      // seat's.
+      expect(seats.some((s) => s.textContent?.includes("Joining…"))).toBe(true);
+      expect(seats.some((s) => s.textContent?.includes("Selecting next speaker…"))).toBe(true);
+    });
+
     it("shows 'Waiting for speaker requests…' — never 'Selecting…' — when the stage is established, one seat is empty, and nobody is currently eligible (issue #21, fifth corrective pass, Section 2)", () => {
       render(
         <SpeakerStage
