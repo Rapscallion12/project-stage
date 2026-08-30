@@ -119,6 +119,9 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
   // harmless no-op mock, same as every other action here this file's
   // own composition tests don't otherwise care about.
   reconcileStageRoundAction: vi.fn(),
+  // Issue #21, fifth corrective pass: useSpeakerSelectionReconciliation's
+  // own equivalent — same reasoning.
+  reconcileSpeakerSelectionAction: vi.fn(),
 }));
 
 vi.mock("@/components/room/portrait-room", () => ({

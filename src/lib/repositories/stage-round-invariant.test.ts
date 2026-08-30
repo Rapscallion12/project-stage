@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServiceClient } from "@/lib/supabase/service";
 import { claimSpeakerSeat, endSpeakerSeat } from "./event-speakers";
+import type { EventSpeaker } from "./event-speakers";
 import { requestToSpeakAsGuest, markSpeakerRequestGranted, resetSpeakerCandidatePool } from "./speaker-requests";
 import { ensureStageRound, resolveStageRound } from "./stage-rounds";
 import { ensureActiveSelectionRound } from "@/app/events/[id]/room/actions";
@@ -44,9 +45,9 @@ describe.skipIf(!hasServiceCredentials)("shared-round invariant: no active round
   let service: ReturnType<typeof createServiceClient>;
   let eventId: string;
 
-  async function activeSeats() {
+  async function activeSeats(): Promise<EventSpeaker[]> {
     const { data } = await service.from("event_speakers").select("*").eq("event_id", eventId).is("left_at", null).order("seat_number");
-    return data ?? [];
+    return (data ?? []) as EventSpeaker[];
   }
 
   async function vacateAllSeats() {
@@ -72,7 +73,7 @@ describe.skipIf(!hasServiceCredentials)("shared-round invariant: no active round
   async function establishSeatViaAuthorizedSelection(seatNumber: 1 | 2, displayName: string): Promise<string> {
     const guestId = crypto.randomUUID();
     const { requestId } = await requestToSpeakAsGuest(eventId, guestId, displayName, "let me speak");
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     const row = await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, seatNumber, displayName);
     await markSpeakerRequestGranted(requestId);
     await resetSpeakerCandidatePool(eventId, requestId);

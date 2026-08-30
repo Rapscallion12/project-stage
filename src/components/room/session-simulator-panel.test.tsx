@@ -182,6 +182,7 @@ function request(overrides: Partial<RankedPendingRequest> = {}): RankedPendingRe
     frozen_vote_count: null,
     is_current_candidate: false,
     selection_failed: false,
+    reserved_seat_number: null,
     voteCount: 0,
     isMyVote: false,
     ...overrides,
@@ -197,6 +198,8 @@ function stageRoundFixture(overrides: Partial<StageRound> = {}): StageRound {
     ends_at: new Date(Date.now() + 60_000).toISOString(),
     phase: "active",
     updated_at: new Date().toISOString(),
+    fallback_excluded_profile_ids: [],
+    fallback_excluded_guest_ids: [],
     ...overrides,
   };
 }
@@ -692,6 +695,31 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
 
       expect(simulateAdvanceSelection).not.toHaveBeenCalled();
     });
+
+    it("both seats empty: the replacement loop fills both seats with distinct candidates over successive polls, never claiming the same one twice (issue #21, fifth corrective pass, Section 16)", async () => {
+      // Two seats open at once — simulateAdvanceSelection (now seat-aware,
+      // see its own doc comment) reports whichever reserved candidate it
+      // finds each call; this mock alternates between two distinct
+      // simulated winners, one per seat, matching what the real seat-aware
+      // reservation RPC would hand back across two ticks.
+      simulateAdvanceSelection
+        .mockResolvedValueOnce({ claimed: true, guestId: "sim-guest-a", seatNumber: 1 })
+        .mockResolvedValueOnce({ claimed: true, guestId: "sim-guest-b", seatNumber: 2 })
+        .mockResolvedValue({ claimed: false });
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await vi.advanceTimersByTimeAsync(14_000);
+
+      const log = screen.getByTestId("sim-log");
+      expect(log).toHaveTextContent("Seat 1");
+      expect(log).toHaveTextContent("Seat 2");
+      // Both promotions are distinctly logged — never the same claim
+      // reported twice, never a seat number collision.
+      const promotionLines = screen.getAllByText(/promoted/);
+      expect(promotionLines.length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   describe("per-seat vote configuration + shared Resolve Round Now (corrective pass — one shared deadline, per-seat outcomes)", () => {
@@ -841,7 +869,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         <SessionSimulatorPanel
           {...baseProps}
           pendingRequests={[
-            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: true }),
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: true, reserved_seat_number: 1 }),
             request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 5, is_current_candidate: false }),
             request({ id: "r3", guest_id: "g3", message_id: "m3", frozen_rank: 3, frozen_vote_count: 3, is_current_candidate: false }),
           ]}
@@ -861,7 +889,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(candidates[1]).toHaveTextContent("#2 Eager Deer — 5 votes");
       expect(candidates[2]).toHaveTextContent("#3 Restless Wolf — 3 votes");
 
-      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("Selected: Calm Sparrow");
+      expect(screen.getByTestId("sim-selection-status-1")).toHaveTextContent("Calm Sparrow — authorized, joining");
       expect(screen.getByTestId("sim-selection-reason")).toHaveTextContent("Highest vote count");
     });
 
@@ -870,7 +898,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         <SessionSimulatorPanel
           {...baseProps}
           pendingRequests={[
-            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: true }),
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 8, is_current_candidate: true, reserved_seat_number: 1 }),
             request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 8, is_current_candidate: false }),
           ]}
           messages={
@@ -884,24 +912,95 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByTestId("sim-selection-reason")).toHaveTextContent("Tied at 8 votes · earlier request");
     });
 
-    it("reports 'joining' before the candidate occupies a seat, and 'promoted (Seat N)' once they do — the same identity, read from the real speakers list, never a separate guess", () => {
+    it("reports 'authorized, joining' before the candidate occupies a seat, and 'occupied' once they do — the same identity, read from the real speakers list, never a separate guess", () => {
       const { rerender } = render(
         <SessionSimulatorPanel
           {...baseProps}
-          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 4, is_current_candidate: true })]}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 4, is_current_candidate: true, reserved_seat_number: 2 })]}
         />,
       );
-      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("joining");
-      expect(screen.getByTestId("sim-selection-status")).not.toHaveTextContent("promoted");
+      expect(screen.getByTestId("sim-selection-status-2")).toHaveTextContent("authorized, joining");
+      expect(screen.getByTestId("sim-selection-status-2")).not.toHaveTextContent("occupied");
 
       rerender(
         <SessionSimulatorPanel
           {...baseProps}
-          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 4, is_current_candidate: true })]}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 4, is_current_candidate: true, reserved_seat_number: 2 })]}
           speakers={[speaker({ id: "seat-2", seat_number: 2, guest_id: "g1", profile_id: null })]}
         />,
       );
-      expect(screen.getByTestId("sim-selection-status")).toHaveTextContent("promoted (Seat 2)");
+      expect(screen.getByTestId("sim-selection-status-2")).toHaveTextContent("occupied");
+    });
+
+    it("shows two simultaneous reservations distinctly — one per seat, never collapsed into one ambiguous status (issue #21, fifth corrective pass, Section 16)", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 6, is_current_candidate: true, reserved_seat_number: 1 }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 4, is_current_candidate: true, reserved_seat_number: 2 }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Calm Sparrow", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Eager Deer", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      expect(screen.getByTestId("sim-selection-status-1")).toHaveTextContent("Calm Sparrow");
+      expect(screen.getByTestId("sim-selection-status-2")).toHaveTextContent("Eager Deer");
+      // Never the same candidate shown for both seats.
+      expect(screen.getByTestId("sim-selection-status-1")).not.toHaveTextContent("Eager Deer");
+      expect(screen.getByTestId("sim-selection-status-2")).not.toHaveTextContent("Calm Sparrow");
+    });
+
+    it("shows 'no candidate reserved' for an open seat with nobody currently selected for it", () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
+      expect(screen.getByTestId("sim-selection-status-2")).toHaveTextContent("no candidate reserved");
+    });
+  });
+
+  describe("small-room fallback status (issue #21, fifth corrective pass, Section 16 — 'if blocked, show why')", () => {
+    it("reports fallback as n/a before the stage has ever been established", () => {
+      render(<SessionSimulatorPanel {...baseProps} stageRound={null} speakers={[]} />);
+      expect(screen.getByTestId("sim-fallback-status")).toHaveTextContent("n/a");
+    });
+
+    it("reports fallback open when the stage is established, both seats are empty, and there are zero pending requests", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          speakers={[]}
+          pendingRequests={[]}
+        />,
+      );
+      expect(screen.getByTestId("sim-fallback-status")).toHaveTextContent("open");
+    });
+
+    it("reports fallback closed (requests exist) when both seats are empty but an eligible request exists", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          speakers={[]}
+          pendingRequests={[request()]}
+        />,
+      );
+      expect(screen.getByTestId("sim-fallback-status")).toHaveTextContent("closed (requests exist");
+    });
+
+    it("reports fallback closed (a seat is occupied) when one seat is occupied", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          speakers={[speaker({ id: "seat-1", seat_number: 1 })]}
+          pendingRequests={[]}
+        />,
+      );
+      expect(screen.getByTestId("sim-fallback-status")).toHaveTextContent("closed (a seat is occupied)");
     });
   });
 

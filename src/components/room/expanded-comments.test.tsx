@@ -42,6 +42,7 @@ function makeRequest(overrides: Partial<RankedPendingRequest> = {}): RankedPendi
     frozen_vote_count: null,
     is_current_candidate: false,
     selection_failed: false,
+    reserved_seat_number: null,
     voteCount: 0,
     isMyVote: false,
     ...overrides,

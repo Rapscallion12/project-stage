@@ -229,6 +229,10 @@ describe.skipIf(!hasServiceCredentials)("speaker request voting + selection (iss
       const { error } = await service.rpc("set_current_speaker_candidate", {
         p_round_id: rounds!.id,
         p_request_id: requestA!.id,
+        // Issue #21, fifth corrective pass: now seat-aware — no seat is
+        // actually occupied in this test's own flow, so the specific
+        // number is arbitrary; it only needs to be a valid seat.
+        p_seat_number: 1,
       });
       expect(error).toBeNull();
 

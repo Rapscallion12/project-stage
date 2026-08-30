@@ -4,6 +4,30 @@ import { SpeakerStage } from "./speaker-stage";
 import type { LocalVideoTrack } from "livekit-client";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
+import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
+import type { Identity } from "@/lib/identity";
+
+function pendingRequest(overrides: Partial<RankedPendingRequest> = {}): RankedPendingRequest {
+  return {
+    id: "r1",
+    event_id: "e1",
+    profile_id: null,
+    guest_id: "g1",
+    message_id: "m1",
+    status: "pending",
+    created_at: new Date().toISOString(),
+    resolved_at: null,
+    selection_round_id: null,
+    frozen_rank: null,
+    frozen_vote_count: null,
+    is_current_candidate: false,
+    selection_failed: false,
+    reserved_seat_number: null,
+    voteCount: 0,
+    isMyVote: false,
+    ...overrides,
+  };
+}
 
 function stageRoundFixture(overrides: Partial<StageRound> = {}): StageRound {
   return {
@@ -14,6 +38,8 @@ function stageRoundFixture(overrides: Partial<StageRound> = {}): StageRound {
     ends_at: new Date(Date.now() + 60_000).toISOString(),
     phase: "active",
     updated_at: new Date().toISOString(),
+    fallback_excluded_profile_ids: [],
+    fallback_excluded_guest_ids: [],
     ...overrides,
   };
 }
@@ -185,7 +211,7 @@ describe("SpeakerStage", () => {
       expect(firstSeat).toHaveTextContent("Seat open");
     });
 
-    it("stops being tappable, and reads 'Selecting next speaker…', once the stage has been established (stageRound.round_number >= 1)", () => {
+    it("stops being tappable, and reads 'Selecting next speaker…', once the stage is established and an eligible candidate exists (issue #21, fifth corrective pass)", () => {
       const onTapEmptySeat = vi.fn();
       render(
         <SpeakerStage
@@ -194,6 +220,7 @@ describe("SpeakerStage", () => {
           {...baseProps}
           onTapEmptySeat={onTapEmptySeat}
           stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          pendingRequests={[pendingRequest()]}
         />,
       );
       const emptySeat = screen.getByTestId("empty-seat");
@@ -201,6 +228,22 @@ describe("SpeakerStage", () => {
       expect(emptySeat).toHaveTextContent("Selecting next speaker…");
       fireEvent.click(emptySeat);
       expect(onTapEmptySeat).not.toHaveBeenCalled();
+    });
+
+    it("shows 'Waiting for speaker requests…' — never 'Selecting…' — when the stage is established, one seat is empty, and nobody is currently eligible (issue #21, fifth corrective pass, Section 2)", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1 })]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 3 })}
+          pendingRequests={[]}
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.tagName).toBe("DIV");
+      expect(emptySeat).toHaveTextContent("Waiting for speaker requests…");
+      expect(emptySeat).not.toHaveTextContent("Selecting next speaker…");
     });
 
     it("never visually promotes the open seat (order-first) once established — that priority was for a genuinely tappable opportunity", () => {
@@ -218,6 +261,126 @@ describe("SpeakerStage", () => {
 
     it("a round that never went active (round_number 0, still awaiting its first pairing) does not count as established", () => {
       render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} stageRound={stageRoundFixture({ phase: "awaiting_pairing", round_number: 0 })} />);
+      const [firstSeat] = screen.getAllByTestId("empty-seat");
+      expect(firstSeat.tagName).toBe("BUTTON");
+    });
+  });
+
+  describe("small-room fallback display (issue #21, fifth corrective pass, Sections 8-15)", () => {
+    const established = stageRoundFixture({ phase: "awaiting_pairing", round_number: 4 });
+    const viewerProfile: Identity = { type: "profile", id: "viewer-1", displayName: "Viewer" };
+
+    it("both seats empty + zero eligible requests: shows a tappable 'Stage open' CTA (Section 8, Case C)", () => {
+      const onTapEmptySeat = vi.fn();
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          onTapEmptySeat={onTapEmptySeat}
+          stageRound={established}
+          pendingRequests={[]}
+          viewerIdentity={viewerProfile}
+        />,
+      );
+      for (const seat of screen.getAllByTestId("empty-seat")) {
+        expect(seat.tagName).toBe("BUTTON");
+        expect(seat).toHaveTextContent("Stage open");
+      }
+      fireEvent.click(screen.getAllByTestId("empty-seat")[0]);
+      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("one seat occupied + zero requests: fallback does NOT activate — stays 'Waiting for speaker requests…' (Section 9, Case A)", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ seat_number: 1 })]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={established}
+          pendingRequests={[]}
+          viewerIdentity={viewerProfile}
+        />,
+      );
+      const emptySeat = screen.getByTestId("empty-seat");
+      expect(emptySeat.tagName).toBe("DIV");
+      expect(emptySeat).toHaveTextContent("Waiting for speaker requests…");
+    });
+
+    it("both seats empty + an eligible request exists: fallback does NOT activate — Request-to-Speak still governs (Section 9, Case B)", () => {
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={established}
+          pendingRequests={[pendingRequest()]}
+          viewerIdentity={viewerProfile}
+        />,
+      );
+      for (const seat of screen.getAllByTestId("empty-seat")) {
+        expect(seat.tagName).toBe("DIV");
+        expect(seat).toHaveTextContent("Selecting next speaker…");
+      }
+    });
+
+    it("a recently-removed speaker is excluded from the fallback CTA — non-interactive instead of tappable (Section 10)", () => {
+      const excludedRound: StageRound = {
+        ...established,
+        fallback_excluded_profile_ids: [viewerProfile.id],
+        fallback_excluded_guest_ids: [],
+      };
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={excludedRound}
+          pendingRequests={[]}
+          viewerIdentity={viewerProfile}
+        />,
+      );
+      for (const seat of screen.getAllByTestId("empty-seat")) {
+        expect(seat.tagName).toBe("DIV");
+        expect(seat).not.toHaveTextContent("Stage open");
+      }
+    });
+
+    it("a viewer NOT in the exclusion list can still see the tappable fallback CTA even while others are excluded", () => {
+      const excludedRound: StageRound = {
+        ...established,
+        fallback_excluded_profile_ids: ["someone-else"],
+        fallback_excluded_guest_ids: [],
+      };
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={excludedRound}
+          pendingRequests={[]}
+          viewerIdentity={viewerProfile}
+        />,
+      );
+      const [firstSeat] = screen.getAllByTestId("empty-seat");
+      expect(firstSeat.tagName).toBe("BUTTON");
+      expect(firstSeat).toHaveTextContent("Stage open");
+    });
+
+    it("without a viewerIdentity prop, the exclusion check is simply skipped (defensive default — never crashes, never falsely grants fallback either without the DB's own authoritative check)", () => {
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={established}
+          pendingRequests={[]}
+        />,
+      );
+      // No viewerIdentity means amIExcludedFromFallback can't be computed
+      // as true, so this defaults to showing the fallback CTA — the real
+      // authority is always claim_speaker_seat itself (migration
+      // 00000000000033), never this display-only computation.
       const [firstSeat] = screen.getAllByTestId("empty-seat");
       expect(firstSeat.tagName).toBe("BUTTON");
     });

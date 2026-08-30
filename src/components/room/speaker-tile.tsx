@@ -64,7 +64,7 @@ export function SpeakerTile({
   clearTopChrome = false,
   isPreviewBuild = false,
   isSimulated = false,
-  replacementPending = false,
+  emptySeatState,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -143,17 +143,27 @@ export function SpeakerTile({
    */
   isSimulated?: boolean;
   /**
-   * Issue #21, third corrective pass: true once the stage has ever
-   * achieved its initial two-speaker pairing — see `SpeakerStage`'s own
-   * `established` doc comment. Only meaningful when `speaker` is null:
-   * an empty seat past this point is controlled by Request-to-Speak
-   * selection, not a direct-join opportunity, so it renders
-   * "Selecting next speaker…" instead of the tappable "Seat open" CTA —
-   * `onTapEmptySeat` is never wired for this case either (see
-   * `SpeakerStage`), so this only ever affects the non-interactive
-   * placeholder's own wording, never a second gate on the same decision.
+   * Issue #21, fifth corrective pass: which of three established-stage
+   * empty-seat states this tile is in — only meaningful when `speaker`
+   * is null and the stage has ever achieved its initial pairing (see
+   * `SpeakerStage`'s own `established` doc comment). Undefined for a
+   * never-established stage's ordinary "Seat open"/tap-to-join tile.
+   * - `"selecting"`: at least one eligible Request-to-Speak candidate
+   *   exists — an active, short-lived transition, not a passive wait.
+   *   Non-interactive; `onTapEmptySeat` is never wired for this case.
+   * - `"waiting"`: established, empty, but nobody is currently eligible
+   *   to select (and the small-room fallback below doesn't apply to
+   *   *this* viewer right now) — accurately communicates there's
+   *   genuinely nobody to select, per explicit instruction not to show
+   *   "Selecting next speaker…" when there's nobody to select.
+   *   Non-interactive.
+   * - `"fallback-open"`: both seats are empty, there are zero eligible
+   *   requests, and this viewer isn't excluded (Section 8-15's
+   *   small-room recovery mode) — tappable, same `onTapEmptySeat` prop
+   *   the never-established case already uses (the server-side handler
+   *   itself now covers both cases — see `joinOpenSeat`).
    */
-  replacementPending?: boolean;
+  emptySeatState?: "selecting" | "waiting" | "fallback-open";
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -221,6 +231,13 @@ export function SpeakerTile({
     // the server decides that (see joinOpenSeat), never this component —
     // a queue existing falls back to the composer's request mode instead
     // of anything shown here.
+    //
+    // Issue #21, fifth corrective pass: `onTapEmptySeat` being wired at
+    // all now means one of *two* legitimate direct-join cases — a
+    // never-established stage's ordinary first-come opening, or the
+    // small-room fallback (`emptySeatState === "fallback-open"`) — both
+    // say the same thing to the viewer and both go through the same
+    // server-side handler, so one tappable button covers both.
     if (onTapEmptySeat) {
       return (
         <button
@@ -230,22 +247,29 @@ export function SpeakerTile({
           disabled={isJoiningSeat}
           className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted transition-colors hover:bg-accent/5 hover:text-accent disabled:opacity-60"
         >
-          <p className="text-sm font-medium">{isJoiningSeat ? "Joining…" : "Seat open"}</p>
+          <p className="text-sm font-medium">
+            {isJoiningSeat ? "Joining…" : emptySeatState === "fallback-open" ? "Stage open" : "Seat open"}
+          </p>
           {!isJoiningSeat && <p className="text-xs">Tap to join</p>}
         </button>
       );
     }
-    // Issue #21, third corrective pass: past initial stage formation,
-    // an empty seat is never tappable again — see `replacementPending`'s
-    // own doc comment above. Rendered as a plain, non-interactive
-    // status, not a disabled-looking CTA, so it never reads as "you
-    // could tap this if only X" — there's genuinely nothing to tap.
+    // Issue #21, third/fifth corrective passes: past initial stage
+    // formation, an empty seat is tappable again only in the narrow
+    // fallback case above — every other established-stage empty seat is
+    // a plain, non-interactive status, never a disabled-looking CTA, so
+    // it never reads as "you could tap this if only X." Section 2's
+    // explicit distinction: "Selecting next speaker…" only when there's
+    // actually somebody eligible to select — otherwise "Waiting for
+    // speaker requests…", never the other way around.
     return (
       <div
         data-testid="empty-seat"
         className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted"
       >
-        <p className="text-sm font-medium">{replacementPending ? "Selecting next speaker…" : "Seat open"}</p>
+        <p className="text-sm font-medium">
+          {emptySeatState === "selecting" ? "Selecting next speaker…" : emptySeatState === "waiting" ? "Waiting for speaker requests…" : "Seat open"}
+        </p>
       </div>
     );
   }

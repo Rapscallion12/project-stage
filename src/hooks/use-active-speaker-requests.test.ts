@@ -27,6 +27,7 @@ function request(overrides: Partial<SpeakerRequest> = {}): SpeakerRequest {
     frozen_vote_count: null,
     is_current_candidate: false,
     selection_failed: false,
+    reserved_seat_number: null,
     ...overrides,
   };
 }

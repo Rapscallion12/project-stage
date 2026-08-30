@@ -193,7 +193,11 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
           ]}
         />,
       );
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div — the caller's
+      // own positioning wrapper is now the grandparent, not the
+      // immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bbottom-32\b/);
     });
 

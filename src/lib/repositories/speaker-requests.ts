@@ -30,10 +30,12 @@ export type SpeakerRequest = {
   frozen_rank: number | null;
   /** Vote count snapshot at freeze time — null until frozen. */
   frozen_vote_count: number | null;
-  /** True for exactly one request per active round — the current deterministic (highest-votes) pick, or the current runner-up after an advance. */
+  /** True for at most one request per (round, seat) — the current deterministic (highest-votes) pick for whichever seat `reserved_seat_number` names, or the runner-up after an advance. Issue #21, fifth corrective pass: up to *two* requests in the same round can be `is_current_candidate` simultaneously now, one per open seat — never two for the same seat. */
   is_current_candidate: boolean;
   /** True once this request was the current candidate and failed to claim the seat (withdrew) — excluded from future re-selection within the same round, per Section D. */
   selection_failed: boolean;
+  /** Issue #21, fifth corrective pass: which seat (1 or 2) this request is currently reserved for — set only alongside `is_current_candidate`, null otherwise. See migration 00000000000032. */
+  reserved_seat_number: 1 | 2 | null;
 };
 
 export type SpeakerRequestVote = {
@@ -55,6 +57,8 @@ export type FrozenCandidate = {
   vote_count: number;
   /** Whether this candidate is already the round's committed current pick — lets the caller skip re-selecting when freeze_speaker_candidates returns an already-resolved round (its own idempotent-repeat-call path). */
   is_current: boolean;
+  /** Issue #21, fifth corrective pass: which seat this candidate is currently reserved for, if `is_current` — null otherwise. */
+  reserved_seat_number: 1 | 2 | null;
 };
 
 export type RankedSpeakerRequest = {
@@ -318,15 +322,63 @@ export async function freezeSpeakerCandidates(eventId: string): Promise<FrozenCa
     rank: row.rank,
     vote_count: row.vote_count,
     is_current: row.is_current,
+    reserved_seat_number: row.reserved_seat_number as 1 | 2 | null,
   }));
 }
 
-/** Commits the deterministic highest-votes pick (or a runner-up advancement) computed in application code — see actions.ts' `ensureActiveSelectionRound`. Trusted-server-only. */
-export async function setCurrentSpeakerCandidate(roundId: string, requestId: string): Promise<void> {
+/**
+ * Issue #21, fifth corrective pass, Section 4: the atomic, seat-aware
+ * reservation step — see migration 00000000000036's own doc comment for
+ * the exact race this closes (two concurrent callers each deciding the
+ * same top-ranked candidate for two different seats from a stale
+ * snapshot). Whole decision — "for every seat in `seatNumbers`, reserve
+ * the highest-ranked still-unreserved candidate" — happens in one
+ * transaction, with the frozen round's own rows locked for its
+ * duration; a second concurrent call blocks until the first commits,
+ * then sees the now-current reservations and skips whatever's already
+ * taken. Assumes the round is already frozen (call `freezeSpeakerCandidates`
+ * first) — a no-op (empty array) if there's no active round at all.
+ */
+export async function reserveSpeakerCandidatesForSeats(eventId: string, seatNumbers: (1 | 2)[]): Promise<FrozenCandidate[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("reserve_speaker_candidates_for_seats", {
+    p_event_id: eventId,
+    p_seat_numbers: seatNumbers,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => ({
+    round_id: row.round_id,
+    request_id: row.request_id,
+    profile_id: row.profile_id,
+    guest_id: row.guest_id,
+    message_id: row.message_id,
+    rank: row.rank,
+    vote_count: row.vote_count,
+    is_current: row.reserved_seat_number !== null,
+    reserved_seat_number: row.reserved_seat_number as 1 | 2 | null,
+  }));
+}
+
+/**
+ * Commits the deterministic highest-votes pick (or a runner-up
+ * advancement) computed in application code — see actions.ts'
+ * `ensureActiveSelectionRound`. Trusted-server-only.
+ *
+ * Issue #21, fifth corrective pass: now seat-aware — `seatNumber` is
+ * which open seat this candidate is being reserved for, so two
+ * candidates can be simultaneously reserved (one per seat) without
+ * clobbering each other. See migration 00000000000032's own doc comment
+ * for the exact clear-then-set semantics (scoped to this seat only,
+ * never the whole round).
+ */
+export async function setCurrentSpeakerCandidate(roundId: string, requestId: string, seatNumber: 1 | 2): Promise<void> {
   const supabase = createServiceClient();
   const { error } = await supabase.rpc("set_current_speaker_candidate", {
     p_round_id: roundId,
     p_request_id: requestId,
+    p_seat_number: seatNumber,
   });
   if (error) {
     throw new Error(error.message);

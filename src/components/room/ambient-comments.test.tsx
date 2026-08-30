@@ -25,11 +25,13 @@ function setScrollGeometry(el: HTMLElement, { scrollTop, scrollHeight, clientHei
 describe("AmbientComments (issue #21) — live-stream-style feed, not a self-expiring stack", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   it("renders nothing when there are no messages", () => {
     render(<AmbientComments messages={[]} />);
     expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ambient-comments-hide")).not.toBeInTheDocument();
   });
 
   it("shows a message already present at mount — a viewer arriving mid-conversation sees the room is inhabited immediately", () => {
@@ -54,7 +56,6 @@ describe("AmbientComments (issue #21) — live-stream-style feed, not a self-exp
     // presentation refinement on top of the existing scroll container,
     // not a replacement for it.
     expect(container.className).toMatch(/\boverflow-y-auto\b/);
-    expect(container.className).toMatch(/\bmax-h-32\b/);
   });
 
   it("tapping a comment still opens the expected interaction with the fade applied", () => {
@@ -64,18 +65,18 @@ describe("AmbientComments (issue #21) — live-stream-style feed, not a self-exp
     expect(onExpand).toHaveBeenCalledTimes(1);
   });
 
-  it("shows an avatar placeholder for each bubble — the same canonical presentation Expanded Comments uses (issue #21, third corrective pass)", () => {
+  it("shows an avatar placeholder for each row — the same canonical presentation Expanded Comments uses (issue #21, third corrective pass)", () => {
     render(<AmbientComments messages={[makeMessage({ author_display_name: "Jamie Rivera" })]} />);
     expect(screen.getByTestId("participant-avatar-initials")).toHaveTextContent("JA");
   });
 
-  it("marks a request-to-speak message with the mic badge, distinct from an ordinary comment", () => {
+  it("marks a request-to-speak message with a distinct badge, not folded into the same line as the comment", () => {
     render(
       <AmbientComments
         messages={[makeMessage({ id: "m1", is_speaker_request: true, body: "can I speak?" })]}
       />,
     );
-    expect(screen.getByTitle("Requested the mic")).toBeInTheDocument();
+    expect(screen.getByTestId("ambient-comment-request-badge")).toHaveTextContent(/requesting to speak/i);
   });
 
   it("carries a stable data-message-id per bubble — the Discussion Expanded click-target seam", () => {
@@ -155,5 +156,98 @@ describe("AmbientComments (issue #21) — live-stream-style feed, not a self-exp
 
     rerender(<AmbientComments messages={[makeMessage({ id: "m1" }), makeMessage({ id: "m2" })]} />);
     expect(scrollToSpy).toHaveBeenCalled();
+  });
+
+  describe("readability redesign (issue #21, fifth corrective pass, Sections 19-24)", () => {
+    it("renders the display name on its own line, separate from the comment text below it", () => {
+      render(<AmbientComments messages={[makeMessage({ author_display_name: "Restless Otter", body: "curious where this goes next, been thinking about it all day" })]} />);
+      const bubble = screen.getByTestId("ambient-comment");
+      const name = screen.getByText("Restless Otter");
+      const body = screen.getByText(/curious where this goes next/);
+      expect(bubble).toContainElement(name);
+      expect(bubble).toContainElement(body);
+      // Distinct elements, not one squashed line — the name is not part
+      // of the same text node as the comment body.
+      expect(name).not.toBe(body);
+    });
+
+    it("allows the comment text to wrap (line-clamp, not a single truncated line)", () => {
+      render(<AmbientComments messages={[makeMessage({ body: "a longer comment that should be allowed to wrap across more than one line before it ever gets cut off" })]} />);
+      const body = screen.getByText(/a longer comment that should be allowed to wrap/);
+      expect(body.className).toMatch(/line-clamp-2/);
+    });
+
+    it("keeps the ambient feed constrained to a compact region — bounded height, not growing to fit content", () => {
+      render(<AmbientComments messages={[makeMessage()]} />);
+      const container = screen.getByTestId("ambient-comments");
+      expect(container.className).toMatch(/\bmax-h-\d+\b/);
+    });
+  });
+
+  describe("Hide/Show Live Comments (issue #21, fifth corrective pass, Sections 25-29)", () => {
+    it("shows a Hide Live Comments control alongside the feed by default", () => {
+      render(<AmbientComments messages={[makeMessage()]} />);
+      expect(screen.getByTestId("ambient-comments-hide")).toBeInTheDocument();
+    });
+
+    it("tapping Hide removes only the ambient feed — the toggle itself stays visible as a restore control", () => {
+      render(<AmbientComments messages={[makeMessage()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comments-hide"));
+
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+      expect(screen.getByTestId("ambient-comments-show")).toBeInTheDocument();
+    });
+
+    it("tapping Show restores the feed", () => {
+      render(<AmbientComments messages={[makeMessage({ id: "m1", body: "still here" })]} />);
+      fireEvent.click(screen.getByTestId("ambient-comments-hide"));
+      fireEvent.click(screen.getByTestId("ambient-comments-show"));
+
+      expect(screen.getByTestId("ambient-comments")).toBeInTheDocument();
+      expect(screen.getByText(/still here/)).toBeInTheDocument();
+    });
+
+    it("incoming comments continue to be tracked while hidden — restoring shows them immediately, nothing was lost", () => {
+      const { rerender } = render(<AmbientComments messages={[makeMessage({ id: "m1", body: "first" })]} />);
+      fireEvent.click(screen.getByTestId("ambient-comments-hide"));
+
+      rerender(
+        <AmbientComments
+          messages={[makeMessage({ id: "m1", body: "first" }), makeMessage({ id: "m2", body: "arrived while hidden" })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comments-show"));
+
+      expect(screen.getByText(/arrived while hidden/)).toBeInTheDocument();
+    });
+
+    it("persists the hidden preference across remounts (e.g. room re-render) via localStorage, per explicit instruction not to add schema for this", () => {
+      const { unmount } = render(<AmbientComments messages={[makeMessage()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comments-hide"));
+      unmount();
+
+      render(<AmbientComments messages={[makeMessage()]} />);
+      expect(screen.queryByTestId("ambient-comments")).not.toBeInTheDocument();
+      expect(screen.getByTestId("ambient-comments-show")).toBeInTheDocument();
+    });
+
+    it("persists the shown preference the same way, once explicitly restored", () => {
+      const { unmount } = render(<AmbientComments messages={[makeMessage()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comments-hide"));
+      fireEvent.click(screen.getByTestId("ambient-comments-show"));
+      unmount();
+
+      render(<AmbientComments messages={[makeMessage()]} />);
+      expect(screen.getByTestId("ambient-comments")).toBeInTheDocument();
+    });
+
+    it("falls back to showing comments if localStorage throws (private browsing, disabled storage)", () => {
+      const getItemSpy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("storage disabled");
+      });
+      render(<AmbientComments messages={[makeMessage()]} />);
+      expect(screen.getByTestId("ambient-comments")).toBeInTheDocument();
+      getItemSpy.mockRestore();
+    });
   });
 });

@@ -3,6 +3,194 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-29 — Fifth corrective pass: seat-aware selection reservation, atomic reservation RPC, small-room direct-join fallback, ambient comment redesign, Hide/Show live comments (issue #21)
+
+**Context**: real-device testing found the stage could get genuinely
+stuck — both seats reading "Selecting next speaker…" for far too long
+while Expanded Comments showed two eligible, already-voted-for
+Request-to-Speak candidates. Alongside it: no explicit handling for both
+seats being empty at once; a desire for a narrow small-room fallback so
+a room with nobody requesting the mic doesn't die permanently; and a
+readability redesign for the ambient comment feed plus an easy way to
+hide it.
+
+**Root cause, traced before writing any fix (Section 35's own
+instruction)**: `speaker_requests_current_candidate_uniq` (migration 19)
+allowed at most *one* current candidate per selection round, full stop —
+a leftover from the single-seat-opens-at-a-time model the whole
+selection system was originally built around. With two seats open
+simultaneously, only one candidate could ever be reserved; the *other*
+seat's own legitimate, already-ranked, already-voted candidate sat in
+the pending pool doing nothing. Worse: the moment the one reserved
+candidate's claim succeeded, `reset_speaker_candidate_pool`'s existing
+Section-E bulk reset (correct, unmodified product intent for the
+ordinary single-seat case: "every other pending request expires, no
+automatic requeue") unconditionally expired *every* other pending
+request — including the second seat's own candidate, who had never even
+gotten a chance to be reserved. That is exactly the reported "stuck for
+far too long" state: not slow selection, but a seat with zero remaining
+eligible candidates because its own candidate had been silently wiped
+by an unrelated seat's claim.
+
+**Decision — reservation becomes seat-scoped, not round-scoped**: added
+`speaker_requests.reserved_seat_number` (migration 32); the uniqueness
+constraint moved from "one current candidate per round" to "one current
+candidate per (round, seat)" — up to two simultaneously, one per open
+seat, never two for the same seat. `ensureActiveSelectionRound`
+(room/actions.ts) now determines every currently-open seat
+(`findOpenSeats`, plural — new) and reserves a *distinct* unreserved
+candidate for each, per Section 3's explicit "rank the pool, reserve #1
+for seat A, reevaluate, reserve the next-highest for seat B."
+`reset_speaker_candidate_pool` defers its full wipe whenever another
+request is still actively reserved for a *different* seat — the
+"expire everyone else" step now only fires once no seat has a live
+reservation left, i.e. once the *last* seat's own claim has completed,
+never wiping out a still-in-flight sibling reservation.
+`withdraw_speaker_request(_as_guest)`'s advance-to-next-candidate logic
+is scoped to the withdrawing candidate's own seat only, carrying
+`reserved_seat_number` forward to whichever request replaces them —
+never touching a different seat's own independent reservation, and only
+marking the whole round "exhausted" once *no* seat has a reservation
+left in it.
+
+**A related race this surfaced, fixed alongside it**: `lib/speaker-queue.ts`'s
+`decideClaimEligibility` used to compute the claiming seat via
+`findOpenSeat` — "the lowest-numbered currently-open seat" — regardless
+of which candidate was asking. With two candidates simultaneously
+eligible (one per seat), both would independently compute the *same*
+seat number from the same occupancy snapshot and race each other for it,
+needing a retry. Now reads the candidate's own `reserved_seat_number`
+directly — each candidate goes straight for their authoritatively
+assigned seat, no ambiguity, no retry needed; `claim_speaker_seat` still
+independently re-verifies the match server-side, never trusted from this
+decision alone.
+
+**Decision — the reservation step itself must be atomic, not a
+TypeScript loop (Section 4's explicit instruction)**: the first
+implementation of the seat-aware fix still decided each seat's
+reservation via a separate RPC call per seat, from a `for` loop in
+`ensureActiveSelectionRound`. A real-database concurrency test, written
+specifically to probe Section 36's named "Race A/E" (two selectors
+simultaneously choosing the same top candidate for different seats),
+proved this exact race was still possible: two genuinely concurrent
+callers (from two different clients' own reconciliation polls, entirely
+plausible now that both audience members and candidates trigger
+reconciliation) could each read the same unreserved-candidate snapshot
+before either had committed, and independently reserve the *same*
+candidate for two different seats — each call's own commit simply
+overwriting the other's `reserved_seat_number`. Fixed by moving the
+entire per-open-seat reservation decision into one new SQL function,
+`reserve_speaker_candidates_for_seats` (migration 36), which locks every
+row of the frozen round (`for update`) for the duration of the decision
+— a second concurrent call blocks on that lock until the first commits,
+then re-reads the now-current reservation state and correctly skips
+whatever's already taken. `ensureActiveSelectionRound` calls this once,
+instead of looping and calling `setCurrentSpeakerCandidate` per seat.
+**A same-pass corrective migration (37)**: the first version of the new
+function had a `RETURNS TABLE` column also named `reserved_seat_number`,
+which PL/pgSQL implicitly exposes as an in-scope variable for the whole
+function body — every unqualified reference to the column inside the
+function became ambiguous, caught immediately (not silently) by the
+real-database test suite the moment it ran against the linked project;
+fixed by qualifying every reference explicitly.
+
+**Decision — small-room direct-join fallback, narrowly scoped**: once a
+stage is established, a direct seat claim is illegal for every empty
+seat *except* one specific case — both seats empty and zero eligible
+pending requests (Section 8's Case C, explicitly distinguished from
+Case A "one seat occupied, zero requests — stays selection-controlled"
+and Case B "both empty, requests exist — selection still governs").
+`claim_speaker_seat` (migration 33) enforces this itself, the same
+authoritative tier as every other check in that function — never a
+UI-only affordance. **Authoritative exclusion, not a timer**: the two
+speakers who were just removed the last time both seats emptied
+together are excluded from reclaiming a fallback seat for that specific
+recovery episode, tracked via two new `stage_rounds` array columns
+(`fallback_excluded_profile_ids`/`_guest_ids`), stamped by
+`ensure_stage_round` from `event_speakers`' own `left_at` history — the
+exact identities who most recently departed — the instant occupancy hits
+zero, and cleared the instant a fresh pairing is established. No new
+ban table, no arbitrary multi-minute timer — the lifecycle event itself
+(both empty → fresh pairing established) is the boundary, per explicit
+instruction. `joinOpenSeat` (room/actions.ts) reuses the exact same
+`claimSpeakerSeat` call the fallback's real enforcement lives in, rather
+than adding a second, parallel bypass path — a client-side early
+rejection for a clean typed error, never the actual authority.
+
+**Two same-pass corrective migrations for the fallback, both caught by
+the real-database test suite before this pass's own handoff, not
+discovered later**: (1) migration 33's first version required *both*
+seats to be empty on every single claim — but Section 14 explicitly
+requires the fallback to *continue* covering the second seat once the
+first has been filled through it (as long as it's still empty and
+nobody's requested yet); a test built directly from Section 18's item E
+caught the gap immediately. Fixed (migration 34) by distinguishing "an
+ordinary established-stage steady state" (Section 9 Case A — no
+recovery episode ever started, exclusion arrays empty) from "the second
+half of an in-progress small-room recovery" (exclusion arrays non-empty)
+using the *same* exclusion-array signal already being tracked for a
+different reason, rather than inventing a second flag. (2) That fix then
+revealed a second, more subtle gap of its own: the exclusion arrays
+persisted indefinitely across unrelated later occupancy if a recovery
+episode was ever abandoned mid-way (one fallback speaker seated, then
+also leaving, without the pairing ever completing) — a *new*, entirely
+unrelated occupant seated afterward (e.g. via a bypass claim) would
+incorrectly inherit "recovery in progress" from the stale, unresolved
+episode. Fixed (migration 35) by having a successful bypass claim
+explicitly clear the exclusion arrays — a bypass claim is, by
+definition, never itself part of an unresolved fallback recovery.
+
+**Decision — the reactive reconciliation backstop extends to selection,
+not just the round invariant (Section 6)**: selection is normally
+event-driven, triggered whenever an eligible candidate's own client
+polls `checkPromotionEligibility`. That's a real gap if every eligible
+candidate's tab happens to be backgrounded or closed right when a seat
+opens. New `reconcileSpeakerSelectionAction` +
+`useSpeakerSelectionReconciliation` hook (same shape as the fourth
+pass's `reconcileStageRoundAction`/`useStageRoundReconciliation`) lets
+*any* connected client — audience included — re-trigger selection
+whenever its own view of occupancy or the pending-request pool changes,
+never a blind timer, always re-deriving from actual current state.
+
+**Ambient comment redesign**: moved from a single-line "Name: message…"
+pill (hard-truncated mid-word on real devices) to avatar + name-on-its-
+own-line + wrapped comment text below (`line-clamp-2`), per the
+requested livestream-app pattern. The request badge moved beside the
+name instead of inline with the message. Container height (128px→160px)
+and the fourth pass's own top-edge mask-fade zone (28px→40px) both grew
+modestly to suit the taller rows while staying a compact overlay, not a
+chat panel — the fade was re-verified (not assumed) to still read as a
+dissolve, not a hard clip, at the new proportions. Expanded Comments
+stays deliberately untouched — a different, deliberate reading surface.
+
+**Hide/Show Live Comments — a client preference, not new schema (Section
+29's explicit instruction)**: persisted via `localStorage`, scoped to
+the ambient feed only — the composer, Request-to-Speak, Expanded
+Comments, and the underlying `messages` stream are all completely
+unaffected by hiding it. A small restore control stays visible in the
+same corner whenever hidden, so there's never a state the viewer can't
+recover from with one more tap.
+
+**Reason**: every piece of this pass traces back to the same underlying
+principle already established in the third/fourth passes — authorization
+and invariant-critical decisions live in the database, re-verified at
+the source of truth, never trusted from client state or timing luck;
+this pass extends that principle to a genuinely new dimension (two
+simultaneous seats, not just one) rather than special-casing it in the
+UI layer.
+
+**Tradeoffs**: the atomic reservation RPC (migration 36/37) means a
+seat's reservation decision briefly blocks behind another concurrent
+reservation decision for the *same* round when both fire at once — a
+sub-second lock wait in the rare case of genuinely concurrent
+reconciliation triggers, an intentional and correct cost of closing a
+real double-booking race, not a regression to optimize away. The
+fallback's exclusion tracking is deliberately coarse (the two most
+recently departed identities, not a longer or more granular history) —
+sufficient for the "don't let the two who just lost immediately
+retake the stage" requirement without building a more elaborate
+moderation/ban system this prototype doesn't otherwise have.
+
 ## 2026-08-29 — Fourth corrective pass: bounded simulator startup state machine, Case A/B seat seeding, reactive round-invariant backstop, composer focus preservation, ambient comment fade (issue #21)
 
 **Context**: real-device testing found the simulator could reach a

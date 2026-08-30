@@ -8,6 +8,8 @@ import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
+import type { Identity } from "@/lib/identity";
+import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 
 /**
  * The video-first stage (issue #20) — both seats, full-bleed, filling
@@ -136,6 +138,8 @@ export function SpeakerStage({
   isPreviewBuild = false,
   simulatedGuestIds,
   stageRound = null,
+  viewerIdentity = null,
+  pendingRequests = [],
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -167,6 +171,10 @@ export function SpeakerStage({
   simulatedGuestIds?: ReadonlySet<string>;
   /** Issue #21 corrective pass: the shared round clock for the current pairing — see this component's own "shared round badge" doc comment below. Optional, defaulting to null (no badge), so every existing caller/test that doesn't care can omit it. */
   stageRound?: StageRound | null;
+  /** Issue #21, fifth corrective pass: the viewer's own identity — used only to check `stageRound`'s fallback-exclusion arrays (see the `fallbackOpen`/`amIExcludedFromFallback` doc comment below). Named distinctly from `myIdentity` (the LiveKit-format string used for tile/participant matching) to avoid confusion between the two. Optional, defaulting to null, so tests that don't care about the fallback state don't need to thread it through. */
+  viewerIdentity?: Identity | null;
+  /** Issue #21, fifth corrective pass: every currently-pending Request-to-Speak request — used only to decide each empty seat's display state ("selecting" vs. "waiting" vs. "fallback-open"), never to re-derive anything authorization already decides server-side. Optional, defaulting to empty, so every existing caller/test that doesn't care can omit it. */
+  pendingRequests?: RankedPendingRequest[];
 }) {
   const stageRoundDisplay = useStageRoundCountdown(stageRound, isPreviewBuild);
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
@@ -201,7 +209,41 @@ export function SpeakerStage({
   // opportunity again — see `onTapEmptySeat`'s gating and
   // `replacementPending` below.
   const established = stageRound !== null && stageRound.round_number >= 1;
+  // Issue #21, fifth corrective pass, Sections 1-2: an empty seat only
+  // ever shows "Selecting next speaker…" while there's genuinely
+  // somebody eligible to select — the existence of *any* pending
+  // request is enough (selection now proceeds immediately once one
+  // exists; see `ensureActiveSelectionRound`), not a per-seat
+  // reservation check the client would otherwise have to poll for. This
+  // is what "the wrong thing was papering over slow selection with
+  // display state" actually gets fixed by: the display now reflects
+  // real pool state, not a client-derived guess.
+  const hasEligibleRequests = pendingRequests.length > 0;
+  // Sections 8-15: the small-room fallback — a direct join is legal
+  // again only when both seats are empty AND nobody is eligible to
+  // select from. `amIExcludedFromFallback` reads the same authoritative
+  // exclusion arrays `claim_speaker_seat` itself enforces (migration
+  // 00000000000033) — this is purely a display decision (which state to
+  // show, whether to wire the tap handler at all); the actual gate is
+  // always server-side, never trusted from here alone.
+  const bothSeatsEmpty = seat1 === null && seat2 === null;
+  const fallbackOpen = established && bothSeatsEmpty && !hasEligibleRequests;
+  const amIExcludedFromFallback =
+    fallbackOpen &&
+    stageRound !== null &&
+    viewerIdentity !== null &&
+    (viewerIdentity.type === "profile"
+      ? stageRound.fallback_excluded_profile_ids.includes(viewerIdentity.id)
+      : stageRound.fallback_excluded_guest_ids.includes(viewerIdentity.id));
+  const canFallbackJoin = fallbackOpen && !amIExcludedFromFallback;
   const promoteOpenSeat = !isSpeaker && !established && (seat1 === null) !== (seat2 === null);
+
+  function emptySeatState(seat: EventSpeaker | null): "selecting" | "waiting" | "fallback-open" | undefined {
+    if (seat !== null || !established) return undefined;
+    if (hasEligibleRequests) return "selecting";
+    if (canFallbackJoin) return "fallback-open";
+    return "waiting";
+  }
 
   function renderTile(seatNumber: 1 | 2) {
     const seat = seatNumber === 1 ? seat1 : seat2;
@@ -213,6 +255,7 @@ export function SpeakerStage({
           seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
         )
       : null;
+    const seatState = emptySeatState(seat);
     return (
       <div
         key={seat?.id ?? `empty-${seatNumber}`}
@@ -225,22 +268,22 @@ export function SpeakerStage({
           needsMediaActivation={needsMediaActivation}
           activateMedia={activateMedia}
           mediaError={mediaError}
-          // Issue #21, third corrective pass: an empty seat stops being
-          // a tap target the moment the stage has ever been established
-          // — real-device finding, tapping it used to bypass
-          // Request-to-Speak selection entirely. The database's own
-          // `claim_speaker_seat` (migration 00000000000029) enforces
-          // this independently regardless of what this prop does; this
-          // is what keeps the *tile itself* from ever inviting a tap
-          // that could only fail.
-          onTapEmptySeat={isSpeaker || (seat === null && established) ? undefined : onTapEmptySeat}
+          // Issue #21, third/fifth corrective passes: an empty seat is a
+          // tap target only while it's genuinely a direct-join
+          // opportunity — never established (unchanged), or the
+          // small-room fallback specifically. The database's own
+          // `claim_speaker_seat` (migrations 00000000000029/00033)
+          // enforces both independently regardless of what this prop
+          // does; this is what keeps the *tile itself* from ever
+          // inviting a tap that could only fail.
+          onTapEmptySeat={isSpeaker || (seat === null && established && seatState !== "fallback-open") ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           isInactive={identity !== null && reconnectingIdentities.has(identity)}
           orientation={orientation}
           clearTopChrome={seatNumber === 1}
           isPreviewBuild={isPreviewBuild}
           isSimulated={Boolean(seat?.guest_id && simulatedGuestIds?.has(seat.guest_id))}
-          replacementPending={established}
+          emptySeatState={seatState}
         />
       </div>
     );

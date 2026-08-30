@@ -318,6 +318,7 @@ export type Database = {
           is_current_candidate: boolean
           message_id: string
           profile_id: string | null
+          reserved_seat_number: number | null
           resolved_at: string | null
           selection_failed: boolean
           selection_round_id: string | null
@@ -333,6 +334,7 @@ export type Database = {
           is_current_candidate?: boolean
           message_id: string
           profile_id?: string | null
+          reserved_seat_number?: number | null
           resolved_at?: string | null
           selection_failed?: boolean
           selection_round_id?: string | null
@@ -348,6 +350,7 @@ export type Database = {
           is_current_candidate?: boolean
           message_id?: string
           profile_id?: string | null
+          reserved_seat_number?: number | null
           resolved_at?: string | null
           selection_failed?: boolean
           selection_round_id?: string | null
@@ -469,6 +472,8 @@ export type Database = {
         Row: {
           ends_at: string
           event_id: string
+          fallback_excluded_guest_ids: string[]
+          fallback_excluded_profile_ids: string[]
           id: string
           phase: string
           round_number: number
@@ -478,6 +483,8 @@ export type Database = {
         Insert: {
           ends_at?: string
           event_id: string
+          fallback_excluded_guest_ids?: string[]
+          fallback_excluded_profile_ids?: string[]
           id?: string
           phase?: string
           round_number?: number
@@ -487,6 +494,8 @@ export type Database = {
         Update: {
           ends_at?: string
           event_id?: string
+          fallback_excluded_guest_ids?: string[]
+          fallback_excluded_profile_ids?: string[]
           id?: string
           phase?: string
           round_number?: number
@@ -659,6 +668,8 @@ export type Database = {
         Returns: {
           ends_at: string
           event_id: string
+          fallback_excluded_guest_ids: string[]
+          fallback_excluded_profile_ids: string[]
           id: string
           phase: string
           round_number: number
@@ -681,6 +692,7 @@ export type Database = {
           profile_id: string
           rank: number
           request_id: string
+          reserved_seat_number: number
           round_id: string
           vote_count: number
         }[]
@@ -966,6 +978,19 @@ export type Database = {
           request_id: string
         }[]
       }
+      reserve_speaker_candidates_for_seats: {
+        Args: { p_event_id: string; p_seat_numbers: number[] }
+        Returns: {
+          guest_id: string
+          message_id: string
+          profile_id: string
+          rank: number
+          request_id: string
+          reserved_seat_number: number
+          round_id: string
+          vote_count: number
+        }[]
+      }
       reset_speaker_candidate_pool: {
         Args: { p_event_id: string; p_winning_request_id: string }
         Returns: undefined
@@ -989,7 +1014,11 @@ export type Database = {
         }[]
       }
       set_current_speaker_candidate: {
-        Args: { p_request_id: string; p_round_id: string }
+        Args: {
+          p_request_id: string
+          p_round_id: string
+          p_seat_number: number
+        }
         Returns: undefined
       }
       withdraw_speaker_request: {
@@ -1004,6 +1033,7 @@ export type Database = {
           is_current_candidate: boolean
           message_id: string
           profile_id: string | null
+          reserved_seat_number: number | null
           resolved_at: string | null
           selection_failed: boolean
           selection_round_id: string | null
@@ -1028,6 +1058,7 @@ export type Database = {
           is_current_candidate: boolean
           message_id: string
           profile_id: string | null
+          reserved_seat_number: number | null
           resolved_at: string | null
           selection_failed: boolean
           selection_round_id: string | null

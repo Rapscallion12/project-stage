@@ -1027,14 +1027,20 @@ export function SessionSimulatorPanel({
   const frozenCandidates = pendingRequests
     .filter((r) => r.frozen_rank !== null)
     .sort((a, b) => (a.frozen_rank ?? 0) - (b.frozen_rank ?? 0));
-  const selectedCandidate = frozenCandidates.find((r) => r.is_current_candidate) ?? null;
-  const selectedSeat = selectedCandidate
-    ? (speakers.find(
-        (s) =>
-          (selectedCandidate.profile_id && s.profile_id === selectedCandidate.profile_id) ||
-          (selectedCandidate.guest_id && s.guest_id === selectedCandidate.guest_id),
-      ) ?? null)
-    : null;
+  /**
+   * Issue #21, fifth corrective pass: up to *two* simultaneously-current
+   * candidates now — one per open seat (`reserved_seat_number`), never
+   * two for the same seat. Section 16's "SIM observability should show
+   * per seat: candidate selected / authorized / Going Live / occupied" —
+   * this reads the same live `reserved_seat_number`/`is_current_candidate`
+   * fields the real reservation RPC sets, never a separate derivation.
+   */
+  function selectedCandidateForSeat(seatNumber: 1 | 2) {
+    return frozenCandidates.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber) ?? null;
+  }
+  function seatIsOccupied(seatNumber: 1 | 2): boolean {
+    return speakers.some((s) => s.seat_number === seatNumber);
+  }
 
   return (
     <div
@@ -1275,23 +1281,62 @@ export function SessionSimulatorPanel({
                 {r.is_current_candidate && (
                   <span data-testid="sim-selected-candidate" className="font-semibold text-emerald-400">
                     {" "}
-                    — selected
+                    — selected (Seat {r.reserved_seat_number ?? "?"})
                   </span>
                 )}
               </p>
             ))}
-            {selectedCandidate && (
-              <>
-                <p data-testid="sim-selection-status">
-                  Selected: {candidateName(selectedCandidate)} — {selectedSeat ? `promoted (Seat ${selectedSeat.seat_number})` : "joining"}
-                </p>
-                <p data-testid="sim-selection-reason" className="text-white/50">
-                  Reason: {selectionReason(frozenCandidates)}
-                </p>
-              </>
-            )}
+            <p data-testid="sim-selection-reason" className="text-white/50">
+              Reason: {selectionReason(frozenCandidates)}
+            </p>
           </>
         )}
+        {/*
+          Issue #21, fifth corrective pass, Section 16: per-seat
+          candidate/authorization/occupancy — up to two reservations can
+          be in flight simultaneously (two seats opened at once), never
+          collapsed into one ambiguous "the" selection the way a single
+          seat's worth of state used to be enough to show.
+        */}
+        {([1, 2] as const).map((seatNumber) => {
+          const candidate = selectedCandidateForSeat(seatNumber);
+          const occupied = seatIsOccupied(seatNumber);
+          return (
+            <p key={seatNumber} data-testid={`sim-selection-status-${seatNumber}`}>
+              Seat {seatNumber}:{" "}
+              {occupied
+                ? "occupied"
+                : candidate
+                  ? `${candidateName(candidate)} — authorized, joining`
+                  : "no candidate reserved"}
+            </p>
+          );
+        })}
+        {/*
+          Issue #21, fifth corrective pass, Section 16: "if blocked, show
+          why" — the small-room fallback's own current state, read from
+          the exact same authoritative signals `SpeakerStage` uses to
+          decide the same thing (never a separate derivation): both
+          seats empty, zero eligible requests, established stage.
+        */}
+        {(() => {
+          const established = stageRound !== null && stageRound.round_number >= 1;
+          const bothEmpty = speakers.length === 0;
+          const hasRequests = pendingRequests.length > 0;
+          const fallbackOpen = established && bothEmpty && !hasRequests;
+          const label = !established
+            ? "n/a (stage not yet established)"
+            : fallbackOpen
+              ? "open (both seats empty, no requests)"
+              : bothEmpty
+                ? "closed (requests exist — selection governs)"
+                : "closed (a seat is occupied)";
+          return (
+            <p data-testid="sim-fallback-status">
+              Fallback: {label}
+            </p>
+          );
+        })()}
 
         <div className="border-t border-white/10 pt-1">
           <p data-testid="sim-pool-reset-count">pool resets observed: {poolResetCount}</p>

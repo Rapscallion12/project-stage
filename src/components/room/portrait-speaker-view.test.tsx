@@ -284,7 +284,12 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
           ]}
         />,
       );
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div (see that
+      // component's own doc comment) — the caller's own positioning
+      // wrapper (what this assertion cares about) is now the
+      // grandparent, not the immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bbottom-32\b/);
       expect(wrapper.className).not.toMatch(/\bbottom-16\b/);
     });
@@ -460,6 +465,7 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
               frozen_vote_count: null,
               is_current_candidate: false,
               selection_failed: false,
+              reserved_seat_number: null,
               voteCount: 0,
               isMyVote: false,
             },

@@ -16,7 +16,7 @@ import {
   castSpeakerRoundVote,
   castSpeakerRoundVoteAsGuest,
 } from "@/lib/repositories/event-speakers";
-import type { SeatIdentity } from "@/lib/repositories/event-speakers";
+import type { SeatIdentity, EventSpeaker } from "@/lib/repositories/event-speakers";
 import { resolveStageRound, resolveSeatClosing } from "@/lib/repositories/stage-rounds";
 import type { SeatResolutionOutcome } from "@/lib/repositories/stage-rounds";
 import {
@@ -30,12 +30,12 @@ import {
   castSpeakerRequestVote,
   castSpeakerRequestVoteAsGuest,
   freezeSpeakerCandidates,
-  setCurrentSpeakerCandidate,
+  reserveSpeakerCandidatesForSeats,
   resetSpeakerCandidatePool,
 } from "@/lib/repositories/speaker-requests";
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
-import { decideClaimEligibility, findOpenSeat, type ClaimDecision } from "@/lib/speaker-queue";
+import { decideClaimEligibility, findOpenSeat, findOpenSeats, type ClaimDecision } from "@/lib/speaker-queue";
 import { isStageEstablished, ensureStageRound } from "@/lib/repositories/stage-rounds";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
 
@@ -260,14 +260,52 @@ const CLAIM_REJECTION_MESSAGES = {
  * identity's own behalf (see that function's own doc comment), but the
  * freeze/pick step itself is identity-agnostic and needs no adapter at
  * all to reuse directly.
+ *
+ * **Issue #21, fifth corrective pass: seat-aware, not "pick one winner
+ * for the event."** A real-device pass found the stage stuck on
+ * "Selecting next speaker…" on *both* seats for far too long even with
+ * two already-voted-for eligible candidates in the pool — traced to the
+ * old event-wide "at most one current candidate" model: with two seats
+ * open at once, only one candidate could ever be reserved, and claiming
+ * a seat wiped every other pending request (including the second seat's
+ * own legitimate candidate) via `resetSpeakerCandidatePool`'s bulk
+ * reset. This now reserves a *distinct* candidate for every currently
+ * open seat, per Section 3's explicit "rank the pool, reserve #1 for
+ * seat A, reevaluate the remaining pool, reserve the next-highest for
+ * seat B." Never selects the same request for both seats, and never
+ * re-picks a seat that's already got a live reservation from an earlier
+ * call (idempotent — safe to call on every poll).
+ *
+ * **Section 4: the reservation decision itself is one atomic,
+ * server-side call** (`reserveSpeakerCandidatesForSeats`, migration
+ * 00000000000036), not a TypeScript loop making one RPC call per seat —
+ * seat 1's own decision doesn't have to trust that seat 2's concurrent
+ * decision (from a *different* connected client's own reconciliation
+ * poll landing at the same moment) won't independently pick the same
+ * top-ranked candidate for a different seat. See that migration's own
+ * doc comment for the exact race this closes.
+ *
+ * **Takes `activeSpeakers` as a parameter, not a self-fetch**: every real
+ * caller (`resolveClaimDecision` below, `simulator-actions.ts`'s
+ * `simulateAdvanceSelection`) already has a fresh occupancy read of its
+ * own by the time it needs this — re-fetching internally would mean a
+ * second, redundant read on every call, and would force this function
+ * onto one specific data-access tier (the request-scoped `listActiveSpeakers`)
+ * that real-database tests calling this directly, outside any Next.js
+ * request context, can't use at all (`cookies()` throws outside a
+ * request scope). Passing it in keeps this function I/O-source-agnostic:
+ * a real request's own `listActiveSpeakers`, the simulator's service-
+ * client `listActiveSpeakersForSimulator`, or a bare test's own
+ * `service.from("event_speakers_active")` read all work identically.
  */
-export async function ensureActiveSelectionRound(eventId: string): Promise<void> {
+export async function ensureActiveSelectionRound(eventId: string, activeSpeakers: Pick<EventSpeaker, "seat_number">[]): Promise<void> {
+  const openSeats = findOpenSeats(activeSpeakers);
+  if (openSeats.length === 0) return;
+
   const candidates = await freezeSpeakerCandidates(eventId);
   if (candidates.length === 0) return;
-  if (candidates.some((c) => c.is_current)) return;
 
-  const winner = candidates.find((c) => c.rank === 1) ?? candidates[0];
-  await setCurrentSpeakerCandidate(winner.round_id, winner.request_id);
+  await reserveSpeakerCandidatesForSeats(eventId, openSeats);
 }
 
 /**
@@ -288,14 +326,16 @@ async function resolveClaimDecision(
   identity: SeatIdentity,
 ): Promise<{ decision: ClaimDecision; myRequestId: string | null }> {
   const activeSpeakers = await listActiveSpeakers(eventId);
-  if (findOpenSeat(activeSpeakers) !== null) {
-    await ensureActiveSelectionRound(eventId);
+  if (findOpenSeats(activeSpeakers).length > 0) {
+    await ensureActiveSelectionRound(eventId, activeSpeakers);
   }
 
   const myRequest = await getPendingRequestForIdentity(eventId, identity);
 
   const decision = decideClaimEligibility({
-    myPendingRequest: myRequest ? { is_current_candidate: myRequest.is_current_candidate } : null,
+    myPendingRequest: myRequest
+      ? { is_current_candidate: myRequest.is_current_candidate, reserved_seat_number: myRequest.reserved_seat_number }
+      : null,
     activeSpeakers,
   });
 
@@ -446,6 +486,18 @@ export type JoinOpenSeatResult =
    * there, never trusted based on this check alone.
    */
   | { ok: false; reason: "selection-required" }
+  /**
+   * Issue #21, fifth corrective pass, Section 10: the small-room
+   * fallback (both seats empty, zero eligible requests) is open, but
+   * this identity is one of the speaker(s) just removed the last time
+   * both seats went empty — ineligible to reclaim a fallback seat for
+   * *this* recovery cycle specifically (not a ban: they can still
+   * comment, vote, and submit a fresh Request-to-Speak — see Section
+   * 11). `claim_speaker_seat` (migration 00000000000033) is the actual
+   * authority; this is a clean typed rejection for a check this action
+   * doesn't need to duplicate to report accurately.
+   */
+  | { ok: false; reason: "fallback-excluded" }
   | { ok: false; reason: "error"; error: string };
 
 /**
@@ -500,17 +552,36 @@ export async function joinOpenSeat(eventId: string): Promise<JoinOpenSeatResult>
     return { ok: false, reason: "already-speaking", seatNumber: alreadySeated.seat_number };
   }
 
-  if (await isStageEstablished(eventId)) {
-    return { ok: false, reason: "selection-required" };
-  }
-
   const [activeSpeakers, ranked] = await Promise.all([
     listActiveSpeakers(eventId),
     rankPendingSpeakerRequests(eventId),
   ]);
 
-  // The actual queue-protection check — see this function's own doc
-  // comment. Checked before touching any seat, not after.
+  if (await isStageEstablished(eventId)) {
+    // Issue #21, fifth corrective pass, Sections 8-15: the small-room
+    // fallback — a direct join is legal again in exactly one established-
+    // stage case: both seats empty AND nobody eligible to select from.
+    // Any other established-stage empty seat stays selection-controlled.
+    if (activeSpeakers.length > 0 || ranked.length > 0) {
+      return { ok: false, reason: "selection-required" };
+    }
+    const seatNumber = findOpenSeat(activeSpeakers) ?? 1; // both empty, confirmed above
+    try {
+      await claimSpeakerSeat(eventId, identity, seatNumber, identity.displayName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("recently removed")) {
+        return { ok: false, reason: "fallback-excluded" };
+      }
+      return { ok: false, reason: "error", error: "That seat was just taken — try again." };
+    }
+    await syncPublishPermission({ eventId, identity, canPublish: true });
+    return { ok: true };
+  }
+
+  // Initial stage formation — unchanged. The actual queue-protection
+  // check (see this function's own doc comment), checked before
+  // touching any seat, not after.
   if (ranked.length > 0) {
     return { ok: false, reason: "queue-exists" };
   }
@@ -745,4 +816,29 @@ export async function resolveSeatClosingAction(eventSpeakersId: string): Promise
  */
 export async function reconcileStageRoundAction(eventId: string): Promise<void> {
   await ensureStageRound(eventId);
+}
+
+/**
+ * Issue #21, fifth corrective pass, Section 6: the bounded-recovery
+ * backstop for candidate selection/reservation — same reasoning as
+ * `reconcileStageRoundAction` above, for a different invariant.
+ * Selection is normally event-driven: `ensureActiveSelectionRound` is
+ * triggered whenever an eligible candidate's own client polls
+ * `checkPromotionEligibility`, or a claim is attempted. That relies on
+ * *some* eligible candidate's tab actually being the one to poll — a
+ * real gap if every candidate's tab happens to be backgrounded/closed
+ * right when a seat opens, or a partially-failed transition left a seat
+ * open with an eligible pool nobody has re-evaluated yet. Any connected
+ * client (not just a waiting candidate) calling this whenever its own
+ * view of occupancy or the pending-request pool changes closes that gap
+ * — idempotent and safe from every connected client simultaneously, the
+ * same "any connected client can be the one whose action fires"
+ * precedent `useStageRoundResolution`/`useStageRoundReconciliation`
+ * already established. Never a blind timer: this re-derives from actual
+ * current state every time, exactly like the function it calls.
+ */
+export async function reconcileSpeakerSelectionAction(eventId: string): Promise<void> {
+  const activeSpeakers = await listActiveSpeakers(eventId);
+  if (findOpenSeats(activeSpeakers).length === 0) return;
+  await ensureActiveSelectionRound(eventId, activeSpeakers);
 }

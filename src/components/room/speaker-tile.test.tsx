@@ -80,9 +80,9 @@ describe("SpeakerTile", () => {
     });
   });
 
-  describe("replacement-pending empty seat (issue #21, third corrective pass — no bypassing Request-to-Speak)", () => {
-    it("shows 'Selecting next speaker…' instead of the tappable CTA once the stage has been established", () => {
-      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} replacementPending={true} />);
+  describe("established-stage empty seat states (issue #21, third/fifth corrective passes — no bypassing Request-to-Speak)", () => {
+    it("shows 'Selecting next speaker…' instead of the tappable CTA when an eligible candidate exists", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="selecting" />);
       const tile = screen.getByTestId("empty-seat");
       expect(tile.tagName).toBe("DIV"); // never interactive
       expect(tile).toHaveTextContent("Selecting next speaker…");
@@ -90,18 +90,37 @@ describe("SpeakerTile", () => {
       expect(tile).not.toHaveTextContent("Tap to join");
     });
 
-    it("stays a plain 'Seat open' placeholder during initial stage formation (replacementPending false/omitted)", () => {
+    it("shows 'Waiting for speaker requests…' — never 'Selecting…' — when nobody is currently eligible (issue #21, fifth corrective pass, Section 2)", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="waiting" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("DIV");
+      expect(tile).toHaveTextContent("Waiting for speaker requests…");
+      expect(tile).not.toHaveTextContent("Selecting next speaker…");
+    });
+
+    it("shows a tappable 'Stage open' CTA for the small-room fallback (issue #21, fifth corrective pass, Section 15)", () => {
+      const onTapEmptySeat = vi.fn();
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} emptySeatState="fallback-open" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("BUTTON");
+      expect(tile).toHaveTextContent("Stage open");
+      expect(tile).toHaveTextContent("Tap to join");
+      fireEvent.click(tile);
+      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays a plain 'Seat open' placeholder during initial stage formation (emptySeatState omitted)", () => {
       render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} />);
       expect(screen.getByTestId("empty-seat")).toHaveTextContent("Seat open");
     });
 
-    it("never renders as tappable even if a caller mistakenly passes both onTapEmptySeat and replacementPending — the caller (SpeakerStage) is responsible for omitting the handler, but this stays a defensive belt", () => {
-      // This documents the actual contract: replacementPending only
-      // changes wording, the *real* gate is whether onTapEmptySeat is
-      // provided at all (SpeakerStage never provides both together) — see
-      // that component's own onTapEmptySeat gating.
+    it("never renders as tappable even if a caller mistakenly passes both onTapEmptySeat and a non-interactive emptySeatState — the caller (SpeakerStage) is responsible for omitting the handler, but this stays a defensive belt", () => {
+      // This documents the actual contract: emptySeatState only changes
+      // wording, the *real* gate is whether onTapEmptySeat is provided at
+      // all (SpeakerStage never provides both together for "selecting"/
+      // "waiting") — see that component's own onTapEmptySeat gating.
       const onTapEmptySeat = vi.fn();
-      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} replacementPending={true} />);
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} emptySeatState="selecting" />);
       expect(screen.getByTestId("empty-seat").tagName).toBe("BUTTON");
     });
   });

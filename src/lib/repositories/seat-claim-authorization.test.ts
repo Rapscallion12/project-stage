@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServiceClient } from "@/lib/supabase/service";
 import { claimSpeakerSeat, endSpeakerSeat } from "./event-speakers";
+import type { EventSpeaker } from "./event-speakers";
 import {
   requestToSpeakAsGuest,
   castSpeakerRequestVoteAsGuest,
@@ -36,9 +37,9 @@ describe.skipIf(!hasServiceCredentials)("seat-claim authorization after initial 
   let service: ReturnType<typeof createServiceClient>;
   let eventId: string;
 
-  async function activeSeats() {
+  async function activeSeats(): Promise<EventSpeaker[]> {
     const { data } = await service.from("event_speakers").select("*").eq("event_id", eventId).is("left_at", null).order("seat_number");
-    return data ?? [];
+    return (data ?? []) as EventSpeaker[];
   }
 
   async function vacateAllSeats() {
@@ -126,7 +127,7 @@ describe.skipIf(!hasServiceCredentials)("seat-claim authorization after initial 
   it("the currently authorized Request-to-Speak candidate can claim the open seat", async () => {
     const guestId = crypto.randomUUID();
     const { requestId } = await requestToSpeakAsGuest(eventId, guestId, "Authorized Candidate", "let me speak");
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
 
     const row = await claimAsAuthorizedCandidate(guestId, 2, "Authorized Candidate", requestId);
     expect(row.left_at).toBeNull();
@@ -140,7 +141,7 @@ describe.skipIf(!hasServiceCredentials)("seat-claim authorization after initial 
     const a = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Race Test Speaker A", true);
     const authorizedGuestId = crypto.randomUUID();
     const { requestId } = await requestToSpeakAsGuest(eventId, authorizedGuestId, "Race Test Authorized", "let me speak");
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await stageEstablished()).toBe(true); // still established from earlier tests' pairing
 
     const unauthorizedGuestId = crypto.randomUUID();
@@ -192,7 +193,7 @@ describe.skipIf(!hasServiceCredentials)("seat-claim authorization after initial 
     await castSpeakerRequestVoteAsGuest(eventId, yMessageId, crypto.randomUUID());
     await castSpeakerRequestVoteAsGuest(eventId, yMessageId, crypto.randomUUID());
     await castSpeakerRequestVoteAsGuest(eventId, zMessageId, crypto.randomUUID());
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
 
     // Only Y (the authorized candidate) can claim — Viewer X is still rejected.
     await expect(claimSpeakerSeat(eventId, { type: "guest", id: viewerX }, 2, "Viewer X")).rejects.toThrow(/selection authorization/);
@@ -236,6 +237,18 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
       .single();
     if (error || !event) throw new Error(error?.message ?? "failed to create test event");
     eventId = event.id;
+
+    // Issue #21, fifth corrective pass: this describe block's own tests
+    // are about ranking mechanics for *one* open seat, matching how they
+    // were originally written — anchor seat 1 permanently occupied for
+    // this file's whole lifetime so exactly one seat (seat 2) stays open
+    // throughout. Without this, the new seat-aware selection model
+    // (see `ensureActiveSelectionRound`'s own doc comment) correctly
+    // reserves a candidate for *every* open seat — with both seats
+    // genuinely open, it would reserve two simultaneously, which is
+    // correct behavior but not what these single-seat-focused ranking
+    // tests are about.
+    await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Permanent Anchor Speaker", true);
   }, 30_000);
 
   afterAll(async () => {
@@ -245,6 +258,12 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
   async function currentCandidateGuestId(): Promise<string | null> {
     const { data } = await service.from("speaker_requests").select("guest_id").eq("event_id", eventId).eq("status", "pending").eq("is_current_candidate", true).maybeSingle();
     return data?.guest_id ?? null;
+  }
+
+  /** Seat 1 is permanently occupied for this whole describe block (see beforeAll) — only seat 2 is ever open. */
+  async function activeSeats(): Promise<EventSpeaker[]> {
+    const { data } = await service.from("event_speakers").select("*").eq("event_id", eventId).is("left_at", null).order("seat_number");
+    return (data ?? []) as EventSpeaker[];
   }
 
   it("the candidate with the most votes is selected — never a random draw among the eligible pool", async () => {
@@ -257,7 +276,7 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
     await castSpeakerRequestVoteAsGuest(eventId, highMessageId, crypto.randomUUID());
     await castSpeakerRequestVoteAsGuest(eventId, lowMessageId, crypto.randomUUID());
 
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await currentCandidateGuestId()).toBe(high);
 
     await withdrawSpeakerRequestAsGuest(eventId, low);
@@ -275,7 +294,7 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
     await castSpeakerRequestVoteAsGuest(eventId, laterMessageId, crypto.randomUUID());
     await castSpeakerRequestVoteAsGuest(eventId, laterMessageId, crypto.randomUUID());
 
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await currentCandidateGuestId()).toBe(earlier);
 
     await withdrawSpeakerRequestAsGuest(eventId, earlier);
@@ -293,7 +312,7 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
     // Leader withdraws before any freeze/selection ever happens.
     await withdrawSpeakerRequestAsGuest(eventId, leader);
 
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await currentCandidateGuestId()).toBe(runnerUp);
 
     await withdrawSpeakerRequestAsGuest(eventId, runnerUp);
@@ -307,7 +326,7 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
     await castSpeakerRequestVoteAsGuest(eventId, winnerMessageId, crypto.randomUUID());
     await castSpeakerRequestVoteAsGuest(eventId, winnerMessageId, crypto.randomUUID());
 
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await currentCandidateGuestId()).toBe(winner);
 
     // Declines during their own Going Live opportunity.
@@ -325,7 +344,7 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
   it("if everyone in the frozen round declines, the seat has no authorized candidate and a brand-new request starts a fresh round", async () => {
     const onlyCandidate = crypto.randomUUID();
     await requestToSpeakAsGuest(eventId, onlyCandidate, "Only Candidate", "a");
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await currentCandidateGuestId()).toBe(onlyCandidate);
 
     await withdrawSpeakerRequestAsGuest(eventId, onlyCandidate);
@@ -333,7 +352,7 @@ describe.skipIf(!hasServiceCredentials)("deterministic Request-to-Speak selectio
 
     const fresh = crypto.randomUUID();
     await requestToSpeakAsGuest(eventId, fresh, "Fresh Candidate", "b");
-    await ensureActiveSelectionRound(eventId);
+    await ensureActiveSelectionRound(eventId, await activeSeats());
     expect(await currentCandidateGuestId()).toBe(fresh);
 
     await withdrawSpeakerRequestAsGuest(eventId, fresh);

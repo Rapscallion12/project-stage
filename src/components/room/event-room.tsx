@@ -18,6 +18,7 @@ import { useReleaseStuckLocalMedia } from "@/hooks/use-release-stuck-local-media
 import { useStageRound } from "@/hooks/use-stage-round";
 import { useStageRoundResolution } from "@/hooks/use-stage-round-resolution";
 import { useStageRoundReconciliation } from "@/hooks/use-stage-round-reconciliation";
+import { useSpeakerSelectionReconciliation } from "@/hooks/use-speaker-selection-reconciliation";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -248,6 +249,16 @@ export function EventRoom({
         void refetchSpeakers();
         return;
       }
+      if (result.reason === "fallback-excluded") {
+        // Issue #21, fifth corrective pass, Section 10: this identity was
+        // one of the speaker(s) just removed the last time both seats
+        // went empty — not eligible to instantly reclaim a fallback
+        // seat this recovery cycle. Framed as guidance, not a dead-end:
+        // Request-to-Speak is still open to them (Section 11).
+        setJoinSeatMessage("You can't immediately rejoin after being removed — try Request to Speak instead.");
+        setMicRequestMode(true);
+        return;
+      }
       setJoinSeatMessage(result.error);
     });
   }
@@ -457,6 +468,14 @@ export function EventRoom({
   // this one catches the round ever being active without a genuinely
   // established pairing in the first place).
   useStageRoundReconciliation(event.id, speakers);
+
+  // Issue #21, fifth corrective pass, Section 6: the same reactive-
+  // backstop discipline, for candidate selection/reservation this time —
+  // see the hook's own doc comment for why event-driven selection alone
+  // (triggered only by an eligible candidate's own polling) isn't always
+  // enough. Any connected client re-verifies whenever its own view of
+  // occupancy or the pending-request pool changes.
+  useSpeakerSelectionReconciliation(event.id, speakers, pendingRequests);
 
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own

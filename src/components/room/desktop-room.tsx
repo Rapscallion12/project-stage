@@ -68,6 +68,7 @@ export function DesktopRoom({
   stageRound,
   messages,
   reactions,
+  pendingRequests,
 }: RoomLayoutProps) {
   return (
     <div className="flex h-full min-h-0 flex-row overflow-hidden">
@@ -97,6 +98,8 @@ export function DesktopRoom({
             isPreviewBuild={isPreviewBuild}
             simulatedGuestIds={simulatedGuestIds}
             stageRound={stageRound}
+            viewerIdentity={identity}
+            pendingRequests={pendingRequests}
           />
         </div>
         {joinSeatMessage && (

@@ -137,6 +137,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         isPreviewBuild={isPreviewBuild}
         simulatedGuestIds={simulatedGuestIds}
         stageRound={stageRound}
+        viewerIdentity={identity}
+        pendingRequests={pendingRequests}
         // Issue #18 UX finding: dims the stage behind the center-stage
         // "Going live" countdown — SpeakerStage's own existing scrim
         // mechanism (issue #21), reused rather than a second dimming

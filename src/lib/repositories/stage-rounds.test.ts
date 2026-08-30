@@ -353,7 +353,7 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     const { data: seat2Fresh } = await service.from("event_speakers").select("round_number, round_ends_at").eq("id", newSeat2.id).single();
     expect(seat2Fresh!.round_number).toBe(round.round_number);
     expect(seat2Fresh!.round_ends_at).toBe(round.ends_at);
-  });
+  }, 15_000); // issue #21, fifth corrective pass: this test's own long chain of real round-trips was already tight against the default 5000ms timeout; claim_speaker_seat's slightly larger body (the small-room fallback check, migrations 33-35) pushed it over — a real, if marginal, added latency cost, not a logic regression (every assertion here is unaffected by and unrelated to this pass's changes).
 
   it("claim_speaker_seat refuses to steal an already-occupied seat — the corrective pass's race fix", async () => {
     await claimBothSeats();

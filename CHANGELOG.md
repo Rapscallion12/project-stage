@@ -13,6 +13,39 @@ merged to `main`.
 
 ### Changed
 
+- **Next-speaker selection now reserves a distinct candidate for every
+  currently-open seat, not just one per event** (issue #21, fifth
+  corrective pass) — with both stage seats empty at once, the highest-
+  ranked eligible Request-to-Speak candidate is reserved for one seat
+  and the next-highest for the other, atomically (a new database
+  function locks the decision so two simultaneous selectors can never
+  reserve the same candidate for two different seats); claiming one
+  seat no longer wipes out the other seat's own already-reserved
+  candidate. Fixes a real-device-found bug where both seats could show
+  "Selecting next speaker…" indefinitely despite eligible, already-
+  voted-for candidates existing. See DECISIONS.md.
+- **Small-room direct-join fallback** (issue #21, fifth corrective
+  pass) — once a stage is established, an empty seat is normally
+  controlled entirely by Request-to-Speak selection, but if *both*
+  seats are empty and there are *zero* eligible pending requests, a
+  direct seat claim is temporarily permitted again so the room can't
+  die permanently with nobody on stage and nobody requesting the mic.
+  The two speakers who were just removed the last time both seats
+  emptied together cannot immediately reclaim a fallback seat (though
+  they can still submit a fresh Request-to-Speak); everyone else can. A
+  real Request-to-Speak arriving at any point closes the fallback and
+  hands priority back to selection. Enforced server-side, the same
+  authoritative tier as every other seat-claim rule. See DECISIONS.md.
+- **Ambient (live/floating) comments redesigned for readability** (issue
+  #21, fifth corrective pass, real-device finding: messages were
+  chopped mid-word in a single-line "Name: message…" format) — now
+  avatar + display name on its own line (with a "requesting to speak"
+  badge beside it, not crammed into the message line) + the full
+  comment text below, wrapped up to two lines before truncating with an
+  ellipsis. The container and its existing top-edge fade both grew
+  modestly to suit the taller rows while staying a compact overlay, not
+  a full chat panel. Expanded Comments (the deliberate full-reading
+  surface) is unaffected. See DECISIONS.md.
 - **Session Simulator seat seeding now respects seat-claim authorization
   once a stage is already established** (issue #21, fourth corrective
   pass) — closes a simulator-only loophole: re-seeding an already-
@@ -102,6 +135,14 @@ merged to `main`.
 
 ### Added
 
+- **Hide/Show Live Comments** (issue #21, fifth corrective pass) — a
+  one-tap, easily reversible control on the ambient comment feed. Hiding
+  it only hides the floating overlay itself — comments keep arriving,
+  the composer, Request-to-Speak, likes/votes, and Expanded Comments are
+  all completely unaffected. Persisted per-browser via `localStorage`
+  (a lightweight client preference, not a database column) so it
+  survives room re-renders and navigation within the same browser. A
+  small restore control stays visible whenever comments are hidden.
 - **Weighted-selection observability + Continue/Replace vote detail in
   the Session Simulator** (issue #21, second corrective pass) — a
   replaced speaker not being who was expected is answerable now: the

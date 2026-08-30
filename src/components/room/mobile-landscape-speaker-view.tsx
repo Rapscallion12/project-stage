@@ -115,6 +115,8 @@ export function MobileLandscapeSpeakerView({
         isPreviewBuild={isPreviewBuild}
         simulatedGuestIds={simulatedGuestIds}
         stageRound={stageRound}
+        viewerIdentity={identity}
+        pendingRequests={pendingRequests}
         soloMode
       />
 

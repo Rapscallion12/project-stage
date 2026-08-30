@@ -4,6 +4,122 @@ Newest entry first.
 
 ---
 
+## 2026-08-29 — Session 46: Fifth corrective pass — seat-aware selection, small-room fallback, atomic reservation, ambient comment redesign, Hide/Show comments (issue #21)
+
+**Goal**: another real-device pass. Build "getting much closer" overall.
+Found: replacement selection stuck for far too long despite eligible
+Request-to-Speak candidates existing; needed explicit handling for both
+seats empty at once; wanted a narrow small-room direct-join fallback
+when both seats are empty and nobody's requesting; wanted the normal
+live/ambient comments redesigned toward a livestream-app readability
+pattern (avatar, name on its own line, wrapped comment below); wanted an
+easy Hide/Show control for live comments. Do not redesign Vote UI.
+
+**Root cause of the stuck-selection bug, traced before writing any
+fix**: the selection model was event-wide, not seat-aware —
+`speaker_requests_current_candidate_uniq` allowed at most one current
+candidate per round, period. With two seats open simultaneously, only
+one candidate could ever be reserved, and `reset_speaker_candidate_pool`
+(Section E's own, still-correct-for-the-single-seat-case bulk reset)
+unconditionally expired every *other* pending request the instant the
+first candidate's claim succeeded — wiping out the second seat's own
+already-ranked, already-voted candidate before they ever got a chance to
+claim. That's the exact "both seats stuck on 'Selecting…' with eligible
+candidates visible" state from the real-device report.
+
+**Seat-aware selection (migration 00000000000032)**: `speaker_requests`
+gained `reserved_seat_number` — up to two requests can be
+`is_current_candidate` simultaneously now, one per open seat, never two
+for the same seat (new unique index on `(selection_round_id,
+reserved_seat_number)`). `reset_speaker_candidate_pool` defers its full
+wipe whenever another request is still actively reserved for a
+different seat — the full reset now runs once the *last* open seat's own
+claim completes, not the first. `withdraw_speaker_request(_as_guest)`
+advances only the withdrawing candidate's own seat's reservation, never
+touching the other seat's. `lib/speaker-queue.ts`'s
+`decideClaimEligibility` now targets a candidate's own
+`reserved_seat_number` directly instead of `findOpenSeat`'s generic
+"lowest-numbered open seat" — closes a real, related race where two
+simultaneously-eligible candidates would have both computed the same
+seat number and had to retry.
+
+**Atomic reservation (migrations 00000000000036/37)**: Section 4's
+explicit "use an atomic/transactional/locking approach, not client
+state" requirement — a real-database concurrency test proved the
+initial TypeScript-level "loop over open seats, one RPC call per seat"
+approach could let two genuinely concurrent callers (two different
+clients' own reconciliation polls) each decide the same top-ranked
+candidate for two different seats from a stale snapshot. Replaced with
+one atomic RPC, `reserve_speaker_candidates_for_seats`, that locks the
+frozen round's own rows (`for update`) for the whole decision — a second
+concurrent call blocks until the first commits, then sees the
+now-current reservations. Migration 37 was a same-pass corrective fix
+for an ambiguous-column-reference bug in 36's first version, caught
+immediately by the real-database suite.
+
+**Small-room fallback (migrations 00000000000033-35)**: once a stage is
+established, a direct seat claim is legal again in exactly one case —
+both seats empty *and* zero eligible pending requests. `stage_rounds`
+gained `fallback_excluded_profile_ids`/`fallback_excluded_guest_ids`,
+stamped by `ensure_stage_round` from `event_speakers`' own recent
+`left_at` history the moment occupancy hits zero (an authoritative
+lifecycle boundary, not a timer), cleared once a fresh pairing is
+established. `claim_speaker_seat` enforces the whole thing itself — the
+two just-removed speakers are rejected, everyone else succeeds, and a
+real Request-to-Speak arriving at any point closes the fallback and
+hands priority back to selection. A real-device-adjacent bug surfaced by
+the test suite itself: the first version required *both* seats empty on
+every claim, breaking the documented "fallback continues for the second
+seat once the first is filled" case (migration 34) — and a bypass claim
+needed to explicitly clear a lingering recovery flag so an unrelated,
+later occupancy didn't inherit a stale exclusion episode (migration 35).
+`joinOpenSeat` (room/actions.ts) reuses the exact same
+`claimSpeakerSeat` call for this path, never a parallel bypass.
+
+**Selection reconciliation backstop (Section 6)**: new
+`reconcileSpeakerSelectionAction` + `useSpeakerSelectionReconciliation`
+hook, same reactive-backstop shape the fourth pass's round-invariant
+fix established — any connected client (not just a polling candidate)
+re-triggers selection whenever its own view of occupancy or the pending
+pool changes.
+
+**Empty-seat display states (Sections 1-2, 15)**: `SpeakerStage` now
+derives one of four states per empty seat — the original "Seat open"
+(never established), "Selecting next speaker…" (eligible requests
+exist), "Waiting for speaker requests…" (established, nobody eligible,
+fallback not available here — new), or "Stage open" (fallback available
+to this viewer — new, tappable via the same `onTapEmptySeat` handler).
+Never shows "Selecting…" when there's nobody to select.
+
+**Ambient comment redesign (Sections 19-24)**: rebuilt row structure —
+avatar, display name on its own line (with a "requesting to speak"
+badge beside it, not crammed into the same line as the message), full
+comment text below, `line-clamp-2` instead of a single hard-truncated
+line. Container height and top-edge mask-fade zone both grew slightly
+(128px→160px, 28px→40px) to suit the taller two-line rows while staying
+compact — the fade was verified to still read as a natural dissolve, not
+a hard clip, at the new size. Expanded Comments deliberately unaffected.
+
+**Hide/Show Live Comments (Sections 25-29)**: one-tap toggle, persisted
+via `localStorage` (a lightweight per-browser preference, not new
+schema, per explicit instruction) — hides only the floating ambient
+feed; comments keep arriving, the composer/Expanded Comments/Request-to-
+Speak are all untouched. A small restore pill stays visible whenever
+hidden.
+
+**Verification**: 3 real-database integration test files
+(`two-seat-selection-fallback.test.ts` new — two-seat reservation, all
+seven fallback cases A-G, and an explicit true-concurrency race test
+proving the atomic RPC; `seat-claim-authorization.test.ts` and
+`stage-round-invariant.test.ts` updated for the new
+`ensureActiveSelectionRound(eventId, activeSpeakers)` signature) plus
+component-level coverage for the new empty-seat states, the ambient
+comment redesign, and Hide/Show. Full suite, lint, tsc, build all clean
+— exact count in the commit. Fresh preview deployed; stopping here for
+the user's review — not merged to main.
+
+---
+
 ## 2026-08-29 — Session 45: Fourth corrective pass — bounded simulator startup, Case A/B seat seeding, reactive round-invariant backstop, composer focus, ambient fade (issue #21)
 
 **Goal**: another real-device pass. Overall build working well (RTS

@@ -348,7 +348,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       );
       const bubble = screen.getByTestId("ambient-comment");
       expect(bubble).toHaveTextContent("great show");
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div — the caller's
+      // own positioning wrapper is now the grandparent, not the
+      // immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bpointer-events-none\b/);
       // The scrollable feed area itself opts back into pointer events (not
       // just each bubble individually) — issue #21's live-stream-feed
@@ -374,7 +378,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
           ]}
         />,
       );
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div — the caller's
+      // own positioning wrapper is now the grandparent, not the
+      // immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\babsolute\b/);
       expect(wrapper.className).toMatch(/\bbottom-16\b/);
       expect(wrapper.className).toMatch(/\bleft-3\b/);

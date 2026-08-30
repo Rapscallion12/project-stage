@@ -62,7 +62,7 @@ import { claimSpeakerSeat, endSpeakerSeat, castSpeakerRoundVoteAsGuest } from "@
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import { ensureStageRound } from "@/lib/repositories/stage-rounds";
 import type { SeatResolutionOutcome } from "@/lib/repositories/stage-rounds";
-import { findOpenSeat } from "@/lib/speaker-queue";
+import { findOpenSeats } from "@/lib/speaker-queue";
 import { resolveStageRoundAction, resolveSeatClosingAction, ensureActiveSelectionRound } from "./actions";
 
 function assertSimulatorAvailable(): void {
@@ -412,6 +412,19 @@ export type AdvanceSelectionResult =
  * own `useAutomaticPromotion` to claim it for themselves exactly as
  * production always has. This function only ever completes a promotion
  * production itself could never have completed on its own.
+ *
+ * **Issue #21, fifth corrective pass: seat-aware, like the real
+ * selection pipeline it mirrors.** With two seats able to open — and get
+ * reserved candidates — simultaneously (see `ensureActiveSelectionRound`'s
+ * own doc comment, room/actions.ts), this now looks for *any* currently-
+ * reserved candidate that's a known simulated identity, across every
+ * open seat, and claims that candidate's own `reserved_seat_number` —
+ * never `findOpenSeat`'s generic "the lowest-numbered open one," which
+ * could name a seat reserved for a *different* candidate entirely. One
+ * call still only ever completes one claim (matching one seat's own
+ * reservation); the caller (the natural replacement loop, or the
+ * simulator's own sequential startup seeding) polls/calls again for the
+ * other seat, same as before.
  */
 export async function simulateAdvanceSelection(
   eventId: string,
@@ -421,16 +434,18 @@ export async function simulateAdvanceSelection(
   assertSimulatorAvailable();
 
   const activeSpeakers = await listActiveSpeakersForSimulator(eventId);
-  const seatNumber = findOpenSeat(activeSpeakers);
-  if (seatNumber === null) return { claimed: false };
+  if (findOpenSeats(activeSpeakers).length === 0) return { claimed: false };
 
-  await ensureActiveSelectionRound(eventId);
+  await ensureActiveSelectionRound(eventId, activeSpeakers);
   const candidates = await freezeSpeakerCandidates(eventId);
-  const winner = candidates.find((c) => c.is_current);
-  if (!winner?.guest_id || !simulatedGuestIds.includes(winner.guest_id)) {
+  const winner = candidates.find(
+    (c) => c.is_current && c.reserved_seat_number !== null && c.guest_id && simulatedGuestIds.includes(c.guest_id),
+  );
+  if (!winner?.guest_id || winner.reserved_seat_number === null) {
     return { claimed: false };
   }
 
+  const seatNumber = winner.reserved_seat_number;
   const displayName = displayNameByGuestId[winner.guest_id] ?? "Simulated Speaker";
   try {
     await claimSpeakerSeat(eventId, { type: "guest", id: winner.guest_id }, seatNumber, displayName);

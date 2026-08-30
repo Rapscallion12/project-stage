@@ -21,6 +21,19 @@ export type StageRound = {
   ends_at: string;
   phase: StageRoundPhase;
   updated_at: string;
+  /**
+   * Issue #21, fifth corrective pass: the identities of whoever was most
+   * recently removed the last time both seats went empty simultaneously
+   * — authoritatively excluded from the small-room direct-join fallback
+   * (Sections 8-15) until a fresh two-speaker pairing is established,
+   * never a client-side/timer-based ban. Publicly readable (same tier as
+   * every other `stage_rounds` column) so a client can render the right
+   * empty-seat state for itself without a second fetch — the real
+   * enforcement is `claim_speaker_seat` re-checking this itself, never
+   * trusted from here. See migration 00000000000033.
+   */
+  fallback_excluded_profile_ids: string[];
+  fallback_excluded_guest_ids: string[];
 };
 
 export type SeatResolutionOutcome = "continue" | "narrow-loss" | "decisive-replace" | "replaced-after-closing";

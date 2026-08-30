@@ -939,6 +939,53 @@ different dependencies. Current order:
       round begins once both are authoritatively occupied, both via fresh
       seeding and via the speaker-loss/replacement path. See DECISIONS.md
       and SESSION_LOG.md's Session 45.
+      **Fifth corrective pass (2026-08-29, same branch)**: real-device
+      testing found replacement selection getting stuck for far too
+      long despite eligible, already-voted-for Request-to-Speak
+      candidates existing — traced to selection being event-wide, not
+      seat-aware: with two seats open at once, only one candidate could
+      ever be reserved (a leftover unique index from the single-seat
+      model), and claiming that one seat wiped every other pending
+      request — including the second seat's own legitimate candidate —
+      via the existing bulk pool reset. Fixed by making reservation
+      seat-scoped (`speaker_requests.reserved_seat_number`, migration
+      32) — up to two simultaneous reservations per round, one per open
+      seat, the pool reset now deferred until no seat has a live
+      reservation left. A real-database concurrency test then caught a
+      *second*, subtler race the fix's first cut still had: two
+      genuinely concurrent selectors could still reserve the same
+      candidate for two different seats from a stale snapshot before
+      either committed. Closed by moving the whole per-seat reservation
+      decision into one atomic, row-locked SQL function
+      (`reserve_speaker_candidates_for_seats`, migrations 36/37 — 37 a
+      same-pass fix for an ambiguous-column bug 36's first version had,
+      caught immediately by the test suite) rather than a TypeScript
+      loop making one RPC call per seat. New small-room direct-join
+      fallback: once a stage is established, a direct claim is illegal
+      everywhere except one narrow case — both seats empty and zero
+      eligible requests — with the two just-removed speakers excluded
+      from immediately reclaiming it (an authoritative exclusion stamped
+      from `event_speakers`' own departure history, cleared once a
+      fresh pairing is established — no timer, no ban table). Two
+      same-pass corrective migrations (34, 35) fixed real gaps the test
+      suite caught in the fallback's own lifecycle: the fallback
+      needed to keep covering a second still-empty seat once the first
+      filled through it, and a lingering exclusion flag needed clearing
+      on an unrelated later occupancy. New reactive selection-
+      reconciliation backstop
+      (`reconcileSpeakerSelectionAction`/`useSpeakerSelectionReconciliation`),
+      same shape as the fourth pass's round-invariant backstop. Ambient
+      comments redesigned (avatar, name on its own line, wrapped
+      two-line comment text below, replacing the old single-line
+      hard-truncated pill) with a new Hide/Show control (a
+      `localStorage`-persisted client preference, hides only the
+      floating feed — composer/Request-to-Speak/Expanded Comments
+      untouched). Vote UI left untouched per explicit instruction. New
+      real-database integration test file
+      (`two-seat-selection-fallback.test.ts`) covers two-seat
+      reservation, all seven fallback cases, and an explicit true-
+      concurrency race test proving the atomic RPC. See DECISIONS.md and
+      SESSION_LOG.md's Session 46.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
