@@ -394,6 +394,14 @@ export function SessionSimulatorPanel({
   // second tap while one is already in flight is a no-op, not a second
   // overlapping capture.
   const capturingSnapshotRef = useRef(false);
+  // Issue #21, twelfth corrective pass: "meaningful transition" log
+  // watchers (see the effects below, right after `appendLog`'s own
+  // definition) — previous-value refs, one per observed concept, so a
+  // real transition can be diffed against what this tab last saw
+  // without spuriously logging on mount.
+  const prevSpeakersForLogRef = useRef<EventSpeaker[] | null>(null);
+  const prevReservationsForLogRef = useRef<Partial<Record<1 | 2, string | null>>>({});
+  const prevRoundPhaseForLogRef = useRef<string | null>(null);
   // Display names for every guest id above — kept alongside the id set
   // rather than re-derived, since `simulateAdvanceSelection` needs a
   // display name for whichever simulated identity gets promoted, and the
@@ -476,6 +484,69 @@ export function SessionSimulatorPanel({
     }
     prevPendingCountRef.current = pendingRequests.length;
   }, [pendingRequests.length]);
+
+  /**
+   * Issue #21, twelfth corrective pass: "OBSERVED" transition logging —
+   * a real-device debug snapshot's own activity log ended with startup
+   * information, giving no clue why a seat had gone vacant, because
+   * this panel's log previously only ever recorded actions *this SIM's
+   * own buttons* initiated — never a transition the tab merely
+   * *observed* happen (a natural round-boundary replacement via the
+   * real per-tab deadline timer, an eviction, or any other production
+   * path with no SIM button behind it at all). These three effects log
+   * exactly what this tab actually observed, purely from prop diffs,
+   * regardless of what caused it — the only thing a client can ever
+   * honestly claim to know, and the one thing that's true for *every*
+   * vacancy/reservation-creating path uniformly, not just the ones a
+   * SIM button happens to cover. Deliberately not logged on mount (the
+   * `!== null`/`!== undefined` guards below) and deliberately narrow —
+   * occupancy, reservation, and round-phase transitions only, never a
+   * vote-count tick or any other high-frequency value (Section 19's own
+   * "log meaningful transitions, not every timer tick").
+   */
+  useEffect(() => {
+    const prevSpeakers = prevSpeakersForLogRef.current;
+    if (prevSpeakers !== null) {
+      for (const seatNumber of [1, 2] as const) {
+        const prevOccupant = prevSpeakers.find((s) => s.seat_number === seatNumber);
+        const nowOccupant = speakers.find((s) => s.seat_number === seatNumber);
+        if (prevOccupant && !nowOccupant) {
+          appendLog(`OBSERVED: Seat ${seatNumber} vacated (was ${prevOccupant.display_name})`);
+        } else if (!prevOccupant && nowOccupant) {
+          appendLog(`OBSERVED: Seat ${seatNumber} occupied (${nowOccupant.display_name})`);
+        } else if (prevOccupant && nowOccupant && prevOccupant.id !== nowOccupant.id) {
+          appendLog(`OBSERVED: Seat ${seatNumber} occupant changed (${prevOccupant.display_name} → ${nowOccupant.display_name})`);
+        }
+      }
+    }
+    prevSpeakersForLogRef.current = speakers;
+  }, [speakers]);
+
+  useEffect(() => {
+    const prevReservations = prevReservationsForLogRef.current;
+    const nextReservations: Partial<Record<1 | 2, string | null>> = {};
+    for (const seatNumber of [1, 2] as const) {
+      const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
+      const name = reserved ? candidateName(reserved) : null;
+      nextReservations[seatNumber] = name;
+      const prevName = prevReservations[seatNumber];
+      if (prevName !== undefined && prevName !== name) {
+        if (name) appendLog(`OBSERVED: Seat ${seatNumber} reservation → ${name}`);
+        else appendLog(`OBSERVED: Seat ${seatNumber} reservation cleared (was ${prevName})`);
+      }
+    }
+    prevReservationsForLogRef.current = nextReservations;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- candidateName is redefined every render (reads live `messages`/`guestDisplayNames`); listing it would re-run this diff on every unrelated render instead of only when pendingRequests itself changes, defeating the whole point of diffing against the previous value.
+  }, [pendingRequests]);
+
+  useEffect(() => {
+    const prevPhase = prevRoundPhaseForLogRef.current;
+    const nowPhase = stageRound?.phase ?? null;
+    if (prevPhase !== null && prevPhase !== nowPhase) {
+      appendLog(`OBSERVED: Round phase ${prevPhase} → ${nowPhase ?? "none"}`);
+    }
+    prevRoundPhaseForLogRef.current = nowPhase;
+  }, [stageRound?.phase]);
 
   /**
    * Issue #21, eighth corrective pass, Sections 8, 33: a real-device
@@ -1489,6 +1560,50 @@ export function SessionSimulatorPanel({
     push(`STATE CHANGED DURING CAPTURE: ${stateChangedDuringCapture ? "yes" : "no"}`);
     push("");
 
+    // Issue #21, twelfth corrective pass, Section "ADD INVARIANT
+    // DETECTION TO SNAPSHOT": a real-device capture proved the room
+    // could sit in established + fillable-vacant + eligible-RTS + no-
+    // reservation for at least 591ms with nothing in the snapshot
+    // *saying so directly* — the reader had to work it out by eye from
+    // several separate sections. This makes that specific invariant
+    // explicit, per seat, computed from the authoritative read when it
+    // succeeded (the trustworthy source) and falling back to client-
+    // observed state with a clear label when it didn't.
+    push("VACANCY DIAGNOSTICS");
+    const vacancySource = authoritative ? "authoritative" : "client-observed (authoritative fetch did not succeed)";
+    for (const seatNumber of [1, 2] as const) {
+      const vacant = authoritative
+        ? !authoritative.seats.some((s) => s.seat_number === seatNumber)
+        : !speakers.some((s) => s.seat_number === seatNumber);
+      push(`Seat ${seatNumber} (${vacancySource}):`);
+      push(`  vacant: ${vacant ? "yes" : "no"}`);
+      if (!vacant) continue;
+      push(`  established: ${established ? "yes" : "no"}`);
+      const eligibleCount = authoritative
+        ? authoritative.pendingRequests.filter((r) => !r.selection_failed).length
+        : pendingRequests.filter((r) => !r.selection_failed).length;
+      push(`  eligible RTS: ${eligibleCount}`);
+      const clientReserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
+      const reservedName = authoritative
+        ? authoritative.pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber)?.display_name
+        : clientReserved
+          ? candidateName(clientReserved)
+          : undefined;
+      push(`  reservation: ${reservedName ?? "none"}`);
+      const fillable = established;
+      push(`  fillable: ${fillable ? "yes" : "no"}${fillable ? "" : " — stage not yet established"}`);
+      if (!fillable) continue;
+      const violation = eligibleCount > 0 && !reservedName;
+      push(`  INVARIANT STATUS: ${violation ? "VIOLATION" : "OK"}`);
+      if (violation) {
+        push("  WAITING AT: selection reconciliation");
+        push(`  BLOCKED BECAUSE: established room has a fillable vacant seat and ${eligibleCount} eligible RTS candidate(s) but no valid reservation`);
+      } else if (eligibleCount === 0) {
+        push("  (no eligible RTS candidates — nothing to reserve; not a violation)");
+      }
+    }
+    push("");
+
     push("STATE MISMATCHES");
     const mismatches: string[] = [];
     if (authoritative) {
@@ -1504,6 +1619,19 @@ export function SessionSimulatorPanel({
       }
       if ((authoritative.round?.round_number ?? null) !== (stageRound?.round_number ?? null)) {
         mismatches.push(`Round number: client=${stageRound?.round_number ?? "none"}, database=${authoritative.round?.round_number ?? "none"}`);
+      }
+      // Issue #21, twelfth corrective pass: a real-device capture showed
+      // the client's own Realtime-accumulated vote count disagreeing
+      // with a fresh authoritative count for the *same* candidate
+      // (4 vs 3) while this section still said "none detected" — the
+      // comparison simply never looked at vote counts at all. Matched
+      // by request id, not display name (two different requests can
+      // legitimately share a name).
+      for (const authReq of authoritative.pendingRequests) {
+        const clientReq = pendingRequests.find((r) => r.id === authReq.id);
+        if (clientReq && clientReq.voteCount !== authReq.vote_count) {
+          mismatches.push(`RTS vote count for ${authReq.display_name}: client=${clientReq.voteCount}, database=${authReq.vote_count}`);
+        }
       }
     }
     if (mismatches.length === 0) {

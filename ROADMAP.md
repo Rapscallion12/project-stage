@@ -1171,6 +1171,42 @@ different dependencies. Current order:
       unresolved, most consistent with the delayed snapshot's own
       capture-timing uncertainty, rather than concluded either way. See
       DECISIONS.md and SESSION_LOG.md's Session 52.
+
+      **Twelfth corrective pass (2026-08-31, same branch)**: the
+      eleventh pass's own two-phase debug snapshot delivered exactly
+      the clean, trustworthy real-device capture it was built for — 591ms
+      T0→T1 latency, no state change during capture, client and
+      authoritative state fully agreeing on an established room, a
+      freshly vacant seat, two eligible RTS candidates, and no
+      reservation. Root-caused by querying the real linked database
+      directly: the permanent test room had a
+      `speaker_selection_rounds` row frozen two days earlier, still
+      `status = 'active'`, with nothing live left referencing it —
+      `freeze_speaker_candidates`'s own "reuse an existing active round"
+      idempotency check had no liveness check, so it kept reusing this
+      dead round forever, on every call, silently blocking the event
+      from ever freezing a fresh round from its own current pool.
+      Fixed at the source (migration 00000000000040): the function now
+      verifies an existing "active" round actually has a live
+      reservation or a remaining viable candidate before reusing it,
+      self-healing (marking it exhausted, then creating a genuinely
+      fresh round) otherwise. Also closed the one remaining vacancy path
+      with no direct reconciliation trigger (`simulateOpenSeat`,
+      deliberately left alone in the ninth/tenth passes) and the same
+      gap in the simulator's own `simulateRequestToSpeak`/
+      `simulateWithdrawRequest` — matching architecture consistency
+      across every path, though none were provably the cause of this
+      specific capture (that transition's own row-level evidence had
+      already been cleared by later ordinary use of the shared room —
+      reported honestly as unrecoverable). New "OBSERVED" transition
+      logging (seat occupancy/reservation/round-phase changes, from prop
+      diffs, regardless of cause) and "VACANCY DIAGNOSTICS" with an
+      explicit per-seat `INVARIANT STATUS` added to Copy Debug Snapshot;
+      RTS vote-count comparison added to `STATE MISMATCHES` after the
+      same capture showed a real, previously-undetected 4-vs-3 client/
+      authoritative disagreement. A 20-cycle real-database stress test
+      measured avg 463ms/max 532ms vacancy→reservation latency. See
+      DECISIONS.md and SESSION_LOG.md's Session 53.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

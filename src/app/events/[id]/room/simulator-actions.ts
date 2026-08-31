@@ -108,9 +108,22 @@ export async function simulateLike(messageId: string, guestId: string) {
   await insertReaction({ messageId, identity: { type: "guest", id: guestId }, emoji: "👍" });
 }
 
+/**
+ * Issue #21, twelfth corrective pass: matches production `requestToSpeak`'s
+ * own tenth-pass fix — a simulated request arriving after a vacancy
+ * already exists must reconcile immediately, the same as a real one,
+ * not depend solely on the reactive client hook. Best-effort: a
+ * genuinely successful request must never be reported as failed merely
+ * because this follow-up reconciliation hit a transient problem.
+ */
 export async function simulateRequestToSpeak(eventId: string, guestId: string, displayName: string, body: string) {
   assertSimulatorAvailable();
   await requestToSpeakAsGuest(eventId, guestId, displayName, body);
+  try {
+    await ensureActiveSelectionRound(eventId, await listActiveSpeakersForSimulator(eventId));
+  } catch {
+    // Swallow — see this function's own doc comment.
+  }
 }
 
 export async function simulateRequestVote(eventId: string, messageId: string, guestId: string) {
@@ -129,10 +142,23 @@ export async function simulateRequestVote(eventId: string, messageId: string, gu
  * logic. Already a safe no-op (returns `null`, never throws) if the
  * request was already granted/withdrawn/expired by the time this fires —
  * see `withdrawSpeakerRequestAsGuest`'s own doc comment.
+ *
+ * **Issue #21, twelfth corrective pass**: matches production
+ * `withdrawSpeakerRequest`'s own tenth-pass fix — the RPC itself
+ * already advances the next-ranked candidate within the same round
+ * when the withdrawer was reserved (migration 00000000000038); this is
+ * the backstop for the round ending up exhausted (needing a fresh
+ * freeze from the current live pool), same reasoning as the production
+ * action.
  */
 export async function simulateWithdrawRequest(eventId: string, guestId: string) {
   assertSimulatorAvailable();
   await withdrawSpeakerRequestAsGuest(eventId, guestId);
+  try {
+    await ensureActiveSelectionRound(eventId, await listActiveSpeakersForSimulator(eventId));
+  } catch {
+    // Swallow — see this function's own doc comment.
+  }
 }
 
 export async function simulateRoundVote(eventSpeakersId: string, choice: "continue" | "replace", guestId: string) {
@@ -171,10 +197,38 @@ export async function simulateSeedSpeaker(
   await claimSpeakerSeat(eventId, { type: "guest", id: guestId }, seatNumber, displayName, true);
 }
 
-/** "Open Speaker Seat" deterministic test-panel action — ends whichever seat is asked for, the same `end_speaker_seat` RPC a moderator-removal would use. Real eviction, not a display trick: the seat is genuinely open afterward, picked up by Phase 1's own polling exactly like any other opening. */
+/**
+ * "Open Speaker Seat" deterministic test-panel action — ends whichever
+ * seat is asked for, the same `end_speaker_seat` RPC a moderator-removal
+ * would use. Real eviction, not a display trick.
+ *
+ * **Issue #21, twelfth corrective pass**: also directly reconciles
+ * selection for the vacancy this just created, the same fix the ninth/
+ * tenth passes already made to every *production* vacancy path
+ * (`resolveStageRoundAction`, `resolveSeatClosingAction`,
+ * `leaveSpeakerSeat`, `checkAndEvictInactiveSpeaker`) — this simulator
+ * action was the one vacancy-creating path left depending entirely on
+ * the reactive `useSpeakerSelectionReconciliation` client hook. A real-
+ * device capture (established room, this seat freshly vacant, two
+ * eligible RTS candidates, simulator still running, a 591ms
+ * authoritative read agreeing with the client) traced to a *different*,
+ * deeper root cause this pass also fixed (migration 00000000000040 —
+ * `freeze_speaker_candidates` reusing a long-dead "active" round
+ * forever) — but this gap was real regardless and is closed the same
+ * way as every other path, for the same "one coherent architecture, not
+ * an expanding set of special cases" reasoning. Best-effort: a genuine,
+ * successful Open Seat must never be reported as failed merely because
+ * this *follow-up* reconciliation hit a transient problem — the
+ * reactive hook remains the backstop for exactly that case.
+ */
 export async function simulateOpenSeat(eventId: string, guestId: string) {
   assertSimulatorAvailable();
   await endSpeakerSeat(eventId, { type: "guest", id: guestId }, "moderator_removed");
+  try {
+    await ensureActiveSelectionRound(eventId, await listActiveSpeakersForSimulator(eventId));
+  } catch {
+    // Swallow — see this function's own doc comment.
+  }
 }
 
 /**

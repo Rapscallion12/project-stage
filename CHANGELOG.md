@@ -13,6 +13,30 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed a genuine server-side bug that could permanently block
+  next-speaker selection for an event, silently, indefinitely, across
+  completely unrelated future sessions** (issue #21, twelfth corrective
+  pass) — found via a clean real-device debug-snapshot capture and
+  root-caused against the real database: a selection round that goes
+  stale (its own candidates all claimed, withdrawn, or expired by later,
+  unrelated activity) without a specific later event ever marking it
+  resolved was being reused forever instead of ever creating a fresh
+  round from the event's own current pending pool. Fixed at the source
+  — a stale round now self-heals the moment it's next encountered. See
+  DECISIONS.md.
+- **Every path that can vacate a speaker seat now reconciles selection
+  directly** (issue #21, twelfth corrective pass) — closed the one
+  remaining gap (the Session Simulator's own "Open Seat" action, plus
+  its own request/withdrawal equivalents), matching the direct-trigger
+  fix every *production* path already received in the ninth and tenth
+  passes. See DECISIONS.md.
+- **Session Simulator's activity log now records what actually happened
+  to a seat/reservation/round, regardless of what caused it** (issue
+  #21, twelfth corrective pass) — previously only ever recorded actions
+  its own buttons initiated, giving no trace of a transition it merely
+  observed. Copy Debug Snapshot gained explicit per-seat vacancy/
+  invariant diagnostics and now checks RTS vote counts for client/
+  database disagreement. See DECISIONS.md.
 - **Session Simulator now shows a prominent "Next Speaker Candidate"
   during an active round — the live #1-ranked eligible RTS requester,
   reactive to vote changes, with no vacancy or reservation required to

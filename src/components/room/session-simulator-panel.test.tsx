@@ -1946,6 +1946,163 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(simulateRoundVote).not.toHaveBeenCalled();
       expect(simulateRequestVote).not.toHaveBeenCalled();
     });
+
+    // Issue #21, twelfth corrective pass: a real-device capture proved
+    // the room could sit in established + fillable-vacant + eligible-
+    // RTS + no-reservation with nothing in the snapshot saying so
+    // directly.
+    describe("VACANCY DIAGNOSTICS / INVARIANT STATUS (issue #21, twelfth corrective pass)", () => {
+      it("reports VIOLATION for a fillable vacant seat with eligible RTS candidates but no reservation", async () => {
+        const writeText = mockClipboard();
+        fetchDebugSnapshotState.mockResolvedValueOnce({
+          fetchedAt: new Date().toISOString(),
+          round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString() },
+          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false }],
+          pendingRequests: [
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+          ],
+        });
+        render(
+          <SessionSimulatorPanel
+            {...baseProps}
+            stageRound={stageRoundFixture({ round_number: 1, phase: "awaiting_pairing" })}
+            speakers={[speaker({ id: "s1", seat_number: 1 })]}
+            pendingRequests={[request({ id: "r1", guest_id: "g1", voteCount: 3 })]}
+          />,
+        );
+
+        fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+        const copied = writeText.mock.calls[0][0];
+        expect(copied).toContain("VACANCY DIAGNOSTICS");
+        expect(copied).toContain("Seat 2 (authoritative):");
+        expect(copied).toContain("vacant: yes");
+        expect(copied).toContain("eligible RTS: 1");
+        expect(copied).toContain("reservation: none");
+        expect(copied).toContain("INVARIANT STATUS: VIOLATION");
+        expect(copied).toContain("BLOCKED BECAUSE: established room has a fillable vacant seat and 1 eligible RTS candidate(s) but no valid reservation");
+      });
+
+      it("reports OK, not a violation, when the vacant seat's #1 candidate is actually reserved", async () => {
+        const writeText = mockClipboard();
+        fetchDebugSnapshotState.mockResolvedValueOnce({
+          fetchedAt: new Date().toISOString(),
+          round: { round_number: 1, phase: "active", ends_at: new Date().toISOString() },
+          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false }],
+          pendingRequests: [
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: true, reserved_seat_number: 2, frozen_rank: 1, selection_failed: false },
+          ],
+        });
+        render(
+          <SessionSimulatorPanel
+            {...baseProps}
+            stageRound={stageRoundFixture({ round_number: 1 })}
+            speakers={[speaker({ id: "s1", seat_number: 1 })]}
+            pendingRequests={[request({ id: "r1", guest_id: "g1", voteCount: 3, is_current_candidate: true, reserved_seat_number: 2 })]}
+          />,
+        );
+
+        fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+        const copied = writeText.mock.calls[0][0];
+        expect(copied).toContain("reservation: Dapper Rabbit");
+        expect(copied).toContain("INVARIANT STATUS: OK");
+        expect(copied).not.toContain("VIOLATION");
+      });
+
+      it("does not flag a violation for a vacant seat with zero eligible RTS candidates", async () => {
+        const writeText = mockClipboard();
+        fetchDebugSnapshotState.mockResolvedValueOnce({
+          fetchedAt: new Date().toISOString(),
+          round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString() },
+          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false }],
+          pendingRequests: [],
+        });
+        render(
+          <SessionSimulatorPanel
+            {...baseProps}
+            stageRound={stageRoundFixture({ round_number: 1, phase: "awaiting_pairing" })}
+            speakers={[speaker({ id: "s1", seat_number: 1 })]}
+            pendingRequests={[]}
+          />,
+        );
+
+        fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+        const copied = writeText.mock.calls[0][0];
+        expect(copied).toContain("eligible RTS: 0");
+        expect(copied).toContain("not a violation");
+        expect(copied).not.toContain("VIOLATION");
+      });
+
+      it("flags an RTS vote-count mismatch between client and authoritative state — never silently 'none detected'", async () => {
+        const writeText = mockClipboard();
+        fetchDebugSnapshotState.mockResolvedValueOnce({
+          fetchedAt: new Date().toISOString(),
+          round: null,
+          seats: [],
+          pendingRequests: [
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+          ],
+        });
+        render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1", voteCount: 4 })]} />);
+
+        fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+        const copied = writeText.mock.calls[0][0];
+        expect(copied).toContain("RTS vote count for Dapper Rabbit: client=4, database=3");
+        expect(copied).not.toContain("none detected");
+      });
+    });
+  });
+
+  // Issue #21, twelfth corrective pass: "OBSERVED" transition logging —
+  // meaningful state transitions this tab actually observed, regardless
+  // of what caused them (a SIM button, a natural production timer, or
+  // anything else) — a real-device debug snapshot's own activity log
+  // previously only ever recorded SIM-button-initiated actions.
+  describe("OBSERVED transition logging (issue #21, twelfth corrective pass)", () => {
+    it("logs a seat vacating, with the previous occupant's name, regardless of what caused it", () => {
+      const { rerender } = render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 2, display_name: "Eager Otter" })]} />);
+      rerender(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("OBSERVED: Seat 2 vacated (was Eager Otter)");
+    });
+
+    it("logs a seat becoming occupied", () => {
+      const { rerender } = render(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
+      rerender(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 1, display_name: "Nimble Owl" })]} />);
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("OBSERVED: Seat 1 occupied (Nimble Owl)");
+    });
+
+    it("does not log anything spurious on initial mount", () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 1 })]} />);
+      expect(screen.queryByTestId("sim-log")).not.toHaveTextContent("OBSERVED");
+    });
+
+    it("logs a reservation appearing and clearing", () => {
+      const { rerender } = render(<SessionSimulatorPanel {...baseProps} pendingRequests={[]} />);
+      rerender(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", message_id: "m1", is_current_candidate: true, reserved_seat_number: 2 })]}
+          messages={[{ id: "m1", author_display_name: "Dapper Rabbit", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true }] as LobbyMessage[]}
+        />,
+      );
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("OBSERVED: Seat 2 reservation → Dapper Rabbit");
+
+      rerender(<SessionSimulatorPanel {...baseProps} pendingRequests={[]} />);
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("OBSERVED: Seat 2 reservation cleared (was Dapper Rabbit)");
+    });
+
+    it("logs a round phase transition", () => {
+      const { rerender } = render(<SessionSimulatorPanel {...baseProps} stageRound={stageRoundFixture({ phase: "active" })} />);
+      rerender(<SessionSimulatorPanel {...baseProps} stageRound={stageRoundFixture({ phase: "awaiting_pairing" })} />);
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("OBSERVED: Round phase active → awaiting_pairing");
+    });
   });
 
   // Issue #21, eleventh corrective pass, Sections 1-6: "Next Speaker

@@ -3,6 +3,137 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-31 — Twelfth corrective pass: a genuinely stale `speaker_selection_rounds` row could block selection forever — found via the eleventh pass's own two-phase debug snapshot, root-caused against the real linked database, fixed at its actual source (issue #21)
+
+**Context**: the eleventh pass's own two-phase T0/T1 debug snapshot did
+exactly its job — the user captured a clean, trustworthy real-device
+failure while the simulator was still running (591ms T0→T1 latency,
+"STATE CHANGED DURING CAPTURE: no," client and authoritative state in
+full agreement): an established room, one seat freshly vacant, two
+eligible RTS candidates (Dapper Rabbit #1 at 3-4 votes), and no
+reservation at all. The user explicitly asked that this not be dismissed
+as a timing artifact (it demonstrably wasn't) and that the investigation
+trace the exact failing transition rather than add another speculative
+workaround.
+
+**Root cause, found by querying the real linked database directly, not
+guessed**: the permanent test room
+(`00000000-0000-0000-0000-000000000001`, the event the capture came
+from) had a `speaker_selection_rounds` row frozen on 2026-08-29 — two
+days before this capture — still `status = 'active'`, with zero
+`speaker_requests` rows still referencing it (every candidate that was
+ever part of it had long since been claimed, withdrawn, or expired by
+completely unrelated later activity). `freeze_speaker_candidates`'s own
+idempotency check ("if an active round already exists for this event,
+reuse it, never create a second one" — migration 00000000000020, built
+so two concurrent callers can't spin up colliding rounds) has no
+corresponding *liveness* check: it reused this two-day-old, completely
+dead round on every single call, silently preventing this event from
+ever freezing a fresh round from its own current live pending pool —
+regardless of how many new requests arrived, how many votes they got,
+or how many seats opened. Every vacancy path in this codebase already
+funnels through this one function, so this single gap could defeat
+reconciliation regardless of *which* vacancy-creating action ran — a
+deeper, more general bug than any one specific trigger path could
+explain, and the reason a clean, unambiguous real-device capture was
+needed to actually find it.
+
+**Why nothing had ever resolved this round**: the two mechanisms that
+ever transition a round out of `'active'`
+(`reset_speaker_candidate_pool`, only called after a normal claim → grant
+flow; and the withdrawal/failed-claim exhaustion checks, migrations
+00000000000038/00000000000039, which only fire for a *specific* request
+tied to that exact round) both depend on some later, specific event
+happening to that round. A room whose next activity happens to use the
+bypass-authorization seed path (`claim_speaker_seat` with
+`p_bypass_selection_authorization = true` — the Session Simulator's own
+initial-pairing/re-seed mechanism, which never calls
+`reset_speaker_candidate_pool` at all) can go arbitrarily long, across
+arbitrarily many unrelated future sessions, without either mechanism
+ever running — exactly what happened here, confirmed by reproducing the
+identical condition directly against the real database (manufacture a
+dead "active" round with zero live references, add two fresh eligible
+candidates, call the real RPC) before writing any fix.
+
+**Fix (migration 00000000000040)**: `freeze_speaker_candidates` now
+verifies liveness before reusing an "active" round — does it have a
+live reservation, or at least one remaining viable (still-`pending`,
+not-`selection_failed`) candidate of its own? If neither, it is dead
+regardless of its own `status` column: mark it `exhausted` right there
+and fall through to the existing "create a fresh round from the current
+live pool" logic, rather than returning early with nothing. Race-safe
+(two concurrent callers both finding and exhausting the same dead round
+is a harmless double no-op; the fresh-round-creation path already
+handles concurrent creation races). Verified directly against the real
+database: the manufactured reproduction now correctly self-heals (the
+dead round is marked `exhausted`, a fresh round is created, the #1
+candidate is reserved) — and the actual two-day-old stale round found in
+the permanent test room was cleared as a one-time courtesy (the fix
+makes this self-healing going forward regardless).
+
+**Architecture, per the user's own explicit request — "one coherent
+architecture, not an expanding collection of special-case fixes"**:
+audited every vacancy-creating path again. `simulateOpenSeat` (the
+Session Simulator's own "Open Seat" button) was the one remaining
+vacancy path with no direct reconciliation trigger — deliberately left
+alone in the ninth/tenth passes, revisited now. Fixed the same way as
+every production path: calls `ensureActiveSelectionRound` directly after
+creating the vacancy. Also found and fixed the identical gap in
+`simulateRequestToSpeak` and `simulateWithdrawRequest` — the simulator's
+own natural-activity equivalents of `requestToSpeak`/
+`withdrawSpeakerRequest`, which had gotten the same fix in the tenth
+pass for their *production* counterparts but not their simulator
+equivalents, a real inconsistency with "the simulator exercises the same
+authoritative semantics as the real product." None of these were
+provably the cause of *this specific* capture (the exact triggering
+transition is unrecoverable — see below) but are independently justified
+architecture-consistency fixes regardless, and the root-cause fix above
+means the underlying bug is now closed regardless of which vacancy path
+a future session happens to use.
+
+**What could and couldn't be determined about the exact triggering
+transition**: by the time this investigation began, the specific
+`event_speakers`/`speaker_requests` rows from the user's own capture had
+already been cleared by later, ordinary use of the shared permanent
+room (most plausibly the user's own continued testing after the
+capture) — `speaker_selection_rounds` rows are the one thing nothing
+in this codebase ever deletes, which is exactly why the stale round
+survived to be found while the specific vacancy-causing action's own
+row-level evidence did not. Rather than guess, this is reported
+honestly as unrecoverable; the root-cause fix does not depend on
+knowing it.
+
+**New diagnostics, directly requested**: Session Simulator's activity
+log now records "OBSERVED" transitions — seat occupancy changes,
+reservation changes, and round-phase changes — purely from prop diffs,
+regardless of what caused them, closing the exact gap that left the
+original capture's own activity log ending at startup information with
+no clue why a seat had gone vacant (the log previously only recorded
+actions *this SIM's own buttons* initiated, never a transition the tab
+merely observed happen from an unrelated cause). Copy Debug Snapshot
+gained a "VACANCY DIAGNOSTICS" section with an explicit `INVARIANT
+STATUS: OK`/`VIOLATION` per vacant seat, and RTS vote-count comparison
+was added to `STATE MISMATCHES` (a real, separate, honestly-noted
+observation: the same capture that proved this bug also showed the
+client's own Realtime-accumulated vote count for Dapper Rabbit
+disagreeing with a fresh authoritative count — 4 vs 3 — while the
+snapshot's own mismatch detection simply never compared vote counts at
+all; now it does, though the root cause of *that* particular drift is
+not itself investigated this pass, per explicit instruction not to let
+it distract from the primary bug).
+
+**Reason**: this is exactly the outcome the two-phase debug snapshot
+was built for — a trustworthy, unambiguous, timing-annotated real-device
+capture that made a genuine, previously undiagnosable bug traceable to
+its actual source in the real database, rather than another round of
+guessing at trigger paths.
+
+**Tradeoffs**: none against any previously-established invariant —
+deterministic RTS ranking, the atomic dual-seat reservation, the "don't
+reserve early" behavior, Reset's one-tap/real-data-safe behavior, and
+every prior pass's own fixes are unchanged; the full existing test suite
+(real-database tests included) still passes.
+
 ## 2026-08-31 — Eleventh corrective pass: "Next Speaker" redefined as the prospective #1 live candidate (not a reservation), a two-phase T0/T1 debug-snapshot capture, and a live-reproduction audit of a delayed-snapshot vacancy report (issue #21)
 
 **Context**: the user clarified that "Next Speaker" in this project's own
