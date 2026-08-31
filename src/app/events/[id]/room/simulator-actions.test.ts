@@ -371,6 +371,71 @@ describe.skipIf(!hasServiceCredentials)("resetSimulatorSession (real database) �
       await endSpeakerSeat(eventId, { type: "guest", id: realGuestId }, "moderator_removed");
     }
   });
+
+  /**
+   * Issue #21, fourteenth corrective pass: "Can the delayed Reset cleanup
+   * sweep delete state belonging to a newly started simulation?" — the
+   * guest-scoped deletes above were always exact (a fresh run's guest
+   * ids are freshly random UUIDs, provably unable to collide with an old
+   * run's captured list), but `resetSimulatorSession`'s own
+   * `stage_rounds` reconciliation decided purely from the event's
+   * *current, global* occupancy at the instant it ran — with no
+   * guest-id scoping at all. `reconcileStageRound: false` is what the
+   * panel's own delayed follow-up sweep now passes, specifically so it
+   * can never make that shared-state decision a second time. These two
+   * tests reproduce the exact mechanism directly against the real
+   * database — not a hypothetical — proving both that the danger was
+   * real and that the fix closes it.
+   */
+  describe("reconcileStageRound (the delayed follow-up sweep's own fix)", () => {
+    // Both tests below insert a `stage_rounds` row *directly* — standing
+    // in for one that legitimately exists at zero occupancy (e.g. the
+    // brief instant `ensure_stage_round` creates it as part of a claim
+    // that's still completing, or between a new run's first and second
+    // seat claims where a transient failure mid-retry has momentarily
+    // dropped occupancy back to zero — see `establishSeat`'s own
+    // leftover-seat self-heal). Deterministic and instant, rather than
+    // racing real claim timing, because the actual mechanism under test
+    // is `resetSimulatorSession`'s own *unscoped* stage_rounds decision,
+    // not any specific sequence that produces zero occupancy.
+    it("reconcileStageRound: false never touches an existing stage_rounds row, even when occupancy happens to be zero at that instant", async () => {
+      const oldGuestA = crypto.randomUUID();
+      await claimSpeakerSeat(eventId, { type: "guest", id: oldGuestA }, 1, "Old A", true);
+      await resetSimulatorSession(eventId, [oldGuestA]); // primary pass: occupancy 0, real deletion (unchanged, correct)
+
+      const { error: insertError } = await service
+        .from("stage_rounds")
+        .insert({ event_id: eventId, round_number: 1, phase: "awaiting_pairing" });
+      if (insertError) throw new Error(insertError.message);
+
+      await resetSimulatorSession(eventId, [oldGuestA], false);
+
+      const { data: roundAfter } = await service.from("stage_rounds").select("round_number, phase").eq("event_id", eventId).maybeSingle();
+      expect(roundAfter).not.toBeNull();
+      expect(roundAfter!.round_number).toBe(1);
+      expect(roundAfter!.phase).toBe("awaiting_pairing");
+    });
+
+    it("proves the danger was real: reconcileStageRound: true deletes an existing stage_rounds row purely because occupancy is zero at that instant — regardless of whose row it is or when it was created", async () => {
+      const oldGuestA = crypto.randomUUID();
+      await claimSpeakerSeat(eventId, { type: "guest", id: oldGuestA }, 1, "Old A", true);
+      await resetSimulatorSession(eventId, [oldGuestA]);
+
+      const { error: insertError } = await service
+        .from("stage_rounds")
+        .insert({ event_id: eventId, round_number: 1, phase: "awaiting_pairing" });
+      if (insertError) throw new Error(insertError.message);
+
+      // The pre-fix shape: the follow-up sweep reconciling stage_rounds
+      // (default true) purely from current global occupancy, with no
+      // idea this row belongs to something entirely unrelated to
+      // `oldGuestA`.
+      await resetSimulatorSession(eventId, [oldGuestA], true);
+
+      const { data: roundAfter } = await service.from("stage_rounds").select("id").eq("event_id", eventId).maybeSingle();
+      expect(roundAfter).toBeNull(); // the bug this pass fixed
+    });
+  });
 });
 
 /**

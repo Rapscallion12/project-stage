@@ -4,6 +4,91 @@ Newest entry first.
 
 ---
 
+## 2026-08-31 — Session 55: Fourteenth corrective pass — simulator startup made idempotent and self-healing; React #441 grounded to a real, redacted Server Action error; a genuine Reset-follow-up race closed (issue #21)
+
+**Goal**: a third, separate real-device pattern, isolated from the now-
+healthy replacement/RTS work: the Session Simulator sometimes needed two
+or three Reset→Start attempts before becoming useful, instead of "Reset
+once → Start once → simulator becomes useful." A real-device snapshot
+showed startup logging "Seat 1 seed failed: Minified React error #441"
+and a half-established failure, yet the same log later showed that same
+seat's occupancy transition — meaning a mutation startup believed had
+failed had actually succeeded. Explicit instruction: don't assume the
+cause, prove it; don't touch the working replacement/RTS architecture.
+
+**React #441, grounded**: fetched React's real error-codes table for
+this project's installed version (19.2.8) — #441 is React's own generic
+"an error occurred in the Server Components render... the message is
+omitted in production builds," i.e. exactly what any thrown `Error`
+inside a Next.js Server Action looks like once a production build
+redacts it client-side. Read `claimSpeakerSeat` and `claim_speaker_seat`
+(migration 35) directly: a bypass claim throws a real, specific,
+authoritative error ('seat already occupied' / 'identity already holds
+a seat') — #441 was never a client bug, just production redaction
+hiding a real message. Proven directly against the real database.
+
+**The actual gap**: `establishSeat`'s Case A branch decided success
+solely from whether the mutation promise threw or resolved, never from
+authoritative state. A leftover occupant from an earlier incomplete
+Start (one seat succeeded, the other failed, so `running` never
+flipped true and nothing cleaned up the successful seat) collided with
+every retry on the same seat number, deterministically, since the stage
+genuinely never finishes pairing without a Reset. Fixed: every seed
+attempt is now followed by a fresh authoritative
+`event_speakers_active` read — an intended-identity match is treated as
+a real success (never retried); a leftover simulator-owned occupant
+(tracked via `allSimulatedGuestIdsRef`) is cleared via the existing
+`simulateOpenSeat` adapter and retried (bounded, `MAX_SEED_ATTEMPTS =
+2`); anyone else is never evicted (could be a real participant) —
+startup reports a precise `FAILED PHASE/ATTEMPTS/EXPECTED/
+AUTHORITATIVE/LAST ERROR/RECOVERY` detail instead of a generic message.
+
+**Two structural races closed alongside it**: a synchronous
+`startupInFlightRef` re-entrancy guard (checked before any `await`,
+since `SimButton`'s own executing-disables-itself state depends on a
+React re-render that's never synchronous with the triggering click —
+proven with a same-`act()`-batch double-dispatch test, which two
+sequential `fireEvent.click` calls would have hidden); and a
+`resetInFlightRef` Reset-Start barrier closing the window where Reset's
+own synchronous `running=false` would otherwise re-enable Start before
+its database deletes actually land.
+
+**A third, real, narrow Reset race found while investigating**: the
+guest-scoped deletes in `resetSimulatorSession` were always exact (fresh
+UUIDs can't collide with an old run's list), but its `stage_rounds`
+reconciliation (delete if occupancy is 0, else resync) was never
+guest-scoped at all — decided purely from current global occupancy. The
+panel's own ~2s delayed follow-up sweep calls this same function again
+for the *old* run's ids — if a *new* run's occupancy is transiently zero
+at that exact moment, the follow-up would delete the *new* run's own
+round row, unrelated to the old ids entirely. Proven deterministically
+against the real database (a directly-inserted round row genuinely gets
+deleted at zero occupancy, regardless of whose ids were passed). Fixed:
+`resetSimulatorSession` gained `reconcileStageRound` (default `true`,
+unchanged for the primary pass); the delayed follow-up sweep now passes
+`false`.
+
+**Debug snapshot**: kept the T0/T1 architecture exactly as established.
+Added a `SIMULATOR STARTUP` block — state/phase/run-generation-id/
+reset-in-progress/reset-generation/startup-attempt/per-seat intended vs.
+authoritative occupant/last error/pending-cleanup — so the next
+real-device report is immediately diagnosable.
+
+**Verification**: full suite (1116 tests, 82 files — up from 1103/81),
+lint, tsc, build all clean. New real-database coverage
+(`simulator-startup.test.ts` + additions to `simulator-actions.test.ts`):
+the real "already occupied" error message, the leftover-seat
+clear-and-reclaim flow, a genuine concurrent-claim race (exactly one
+winner), the `reconcileStageRound` fix proven both ways, and a 20-cycle
+Reset→Start stress test at 20/20 first-attempt successes. Live browser:
+two consecutive first-try Reset→Start cycles against a real dev server,
+new log lines and the new `SIMULATOR STARTUP` snapshot block confirmed
+rendering correctly. Replacement/vacancy (ninth-twelfth passes) and
+RTS/weighted-selection (thirteenth pass) work confirmed untouched by
+diff scope. Not merged to `main`; fresh preview deployed.
+
+---
+
 ## 2026-08-31 — Session 54: Thirteenth corrective pass — RTS vote-count drift traced to a real Realtime delivery gap and closed with a bounded backstop; "weighted selection" confirmed stale wording only (issue #21)
 
 **Goal**: a narrow, diagnostic pass on two smaller issues with the now-

@@ -371,8 +371,37 @@ export type ResetSimulatorSessionResult = {
  * Scoped to `eventId` wherever a table has that column, as defense in
  * depth — the guest-id list alone is already exact, since each id is a
  * freshly generated UUID that could never coincide with a real guest's.
+ *
+ * **`reconcileStageRound` (issue #21, fourteenth corrective pass)**: every
+ * delete above is exact guest-id matching, so it was already provably
+ * impossible for this function to remove a *different* simulation run's
+ * own rows — a fresh run's guest ids are freshly random and can never
+ * collide with an old run's captured list. The one thing that genuinely
+ * *wasn't* scoped to a guest-id list at all was the `stage_rounds`
+ * reconciliation below: it decides whether to delete or resync the
+ * shared round row purely from the event's *current, global* seat
+ * occupancy at the instant it runs — which matters because
+ * `SessionSimulatorPanel`'s "Reset Session" fires a second, delayed
+ * (~2s) follow-up sweep for exactly this same guest-id list, to catch a
+ * write that was still in flight when the first sweep ran (see that
+ * panel's own doc comment). If a *new* Start Simulated Session begins
+ * during that 2s window and briefly has zero seats occupied event-wide
+ * (e.g. between its own first and second seat claims), the delayed
+ * sweep's stage-round reconciliation could delete the *new* run's
+ * `stage_rounds` row purely on timing — a real, if narrow, way an old
+ * Reset's own follow-up could disturb new simulation state, even though
+ * every actual data row was already safe. The follow-up sweep's only
+ * real job is catching stray guest-scoped rows; it has no business
+ * re-deciding the event's shared round state a second time, 2s after the
+ * primary pass already made that call correctly. `reconcileStageRound`
+ * defaults to `true` (the primary sweep's existing behavior, unchanged);
+ * the panel's follow-up sweep call passes `false`.
  */
-export async function resetSimulatorSession(eventId: string, guestIds: string[]): Promise<ResetSimulatorSessionResult> {
+export async function resetSimulatorSession(
+  eventId: string,
+  guestIds: string[],
+  reconcileStageRound = true,
+): Promise<ResetSimulatorSessionResult> {
   assertSimulatorAvailable();
   const empty: ResetSimulatorSessionResult = {
     messagesDeleted: 0,
@@ -413,16 +442,18 @@ export async function resetSimulatorSession(eventId: string, guestIds: string[])
     .eq("event_id", eventId)
     .in("author_guest_id", guestIds);
 
-  const { count: remainingOccupied } = await supabase
-    .from("event_speakers")
-    .select("*", { count: "exact", head: true })
-    .eq("event_id", eventId)
-    .is("left_at", null);
+  if (reconcileStageRound) {
+    const { count: remainingOccupied } = await supabase
+      .from("event_speakers")
+      .select("*", { count: "exact", head: true })
+      .eq("event_id", eventId)
+      .is("left_at", null);
 
-  if ((remainingOccupied ?? 0) === 0) {
-    await supabase.from("stage_rounds").delete().eq("event_id", eventId);
-  } else {
-    await ensureStageRound(eventId);
+    if ((remainingOccupied ?? 0) === 0) {
+      await supabase.from("stage_rounds").delete().eq("event_id", eventId);
+    } else {
+      await ensureStageRound(eventId);
+    }
   }
 
   return {

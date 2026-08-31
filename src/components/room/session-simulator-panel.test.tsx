@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionSimulatorPanel } from "./session-simulator-panel";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -45,6 +45,7 @@ const {
   autoActivateRound,
   resetSeedTracking,
   noteSeatClaimed,
+  seatOccupants,
 } = vi.hoisted(() => {
   const stageRoundRow: { current: { round_number: number; phase: string } | null } = {
     current: { round_number: 0, phase: "awaiting_pairing" },
@@ -52,8 +53,21 @@ const {
   const roundVotesData: { current: Array<{ event_speakers_id: string; choice: "continue" | "replace" }> } = { current: [] };
   const autoActivateRound = { current: true };
   let claimedCount = 0;
+  // Issue #21, fourteenth corrective pass: `establishSeat`'s Case A
+  // branch now confirms every seed attempt against a fresh, authoritative
+  // `event_speakers_active` read (`fetchSeatOccupants`) rather than
+  // trusting the mutation promise alone — this is that authoritative
+  // read's own backing store in the mock, snake_case to match the real
+  // view's own column names exactly (the production code reads
+  // `row.guest_id`/`row.profile_id`/`row.display_name`).
+  const seatOccupants: {
+    current: Record<1 | 2, { guest_id: string | null; profile_id: string | null; display_name: string } | null>;
+  } = { current: { 1: null, 2: null } };
 
-  function noteSeatClaimed() {
+  function noteSeatClaimed(seatNumber?: 1 | 2, occupant?: { guest_id: string | null; profile_id: string | null; display_name: string }) {
+    if (seatNumber !== undefined && occupant !== undefined) {
+      seatOccupants.current[seatNumber] = occupant;
+    }
     claimedCount++;
     if (autoActivateRound.current && claimedCount >= 2) {
       stageRoundRow.current = { round_number: (stageRoundRow.current?.round_number ?? 0) + 1, phase: "active" };
@@ -61,14 +75,28 @@ const {
   }
   function resetSeedTracking() {
     claimedCount = 0;
+    seatOccupants.current = { 1: null, 2: null };
   }
 
-  const simulateSeedSpeaker = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {
-    noteSeatClaimed();
+  const simulateSeedSpeaker = vi.fn<(...args: unknown[]) => Promise<void>>(async (...args: unknown[]) => {
+    const [, guestId, displayName, seatNumber] = args as [string, string, string, 1 | 2];
+    noteSeatClaimed(seatNumber, { guest_id: guestId, profile_id: null, display_name: displayName });
   });
   const simulateAdvanceSelection = vi.fn<(...args: unknown[]) => Promise<{ claimed: boolean; guestId?: string; seatNumber?: 1 | 2 }>>(
     async () => ({ claimed: false }),
   );
+  // Default: a real removal, mirroring production's own `endSpeakerSeat`
+  // — clears whichever seat this guest id currently occupies, so a test
+  // exercising the "leftover simulator seat" self-heal (fourteenth pass)
+  // sees the same authoritative-vacancy the real RPC would produce.
+  const simulateOpenSeat = vi.fn<(...args: unknown[]) => Promise<void>>(async (...args: unknown[]) => {
+    const [, guestId] = args as [string, string];
+    for (const seatNumber of [1, 2] as const) {
+      if (seatOccupants.current[seatNumber]?.guest_id === guestId) {
+        seatOccupants.current[seatNumber] = null;
+      }
+    }
+  });
 
   const supabaseFrom = vi.fn((table: string) => {
     if (table === "stage_rounds") {
@@ -76,6 +104,17 @@ const {
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
             maybeSingle: vi.fn(async () => ({ data: stageRoundRow.current })),
+          })),
+        })),
+      };
+    }
+    if (table === "event_speakers_active") {
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(async () => ({
+            data: ([1, 2] as const)
+              .filter((seatNumber) => seatOccupants.current[seatNumber] !== null)
+              .map((seatNumber) => ({ seat_number: seatNumber, ...seatOccupants.current[seatNumber]! })),
           })),
         })),
       };
@@ -94,7 +133,7 @@ const {
     simulateRequestVote: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     simulateRoundVote: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     simulateSeedSpeaker,
-    simulateOpenSeat: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+    simulateOpenSeat,
     forceStageRoundDeadline: vi.fn<(...args: unknown[]) => Promise<Array<{ eventSpeakersId: string; outcome: SeatResolutionOutcome }>>>(
       async () => [],
     ),
@@ -128,6 +167,7 @@ const {
     autoActivateRound,
     resetSeedTracking,
     noteSeatClaimed,
+    seatOccupants,
   };
 });
 
@@ -247,10 +287,19 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     // -Once) would otherwise leak that override into every later test.
     // Restored explicitly here, not just left to each such test's own
     // cleanup, so this can never happen silently again.
-    simulateSeedSpeaker.mockImplementation(async () => {
-      noteSeatClaimed();
+    simulateSeedSpeaker.mockImplementation(async (...args: unknown[]) => {
+      const [, guestId, displayName, seatNumber] = args as [string, string, string, 1 | 2];
+      noteSeatClaimed(seatNumber, { guest_id: guestId, profile_id: null, display_name: displayName });
     });
     simulateAdvanceSelection.mockImplementation(async () => ({ claimed: false }));
+    simulateOpenSeat.mockImplementation(async (...args: unknown[]) => {
+      const [, guestId] = args as [string, string];
+      for (const seatNumber of [1, 2] as const) {
+        if (seatOccupants.current[seatNumber]?.guest_id === guestId) {
+          seatOccupants.current[seatNumber] = null;
+        }
+      }
+    });
     reconcileStageRoundAction.mockImplementation(async () => {});
   });
 
@@ -471,6 +520,15 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     });
 
     it("one seat failing to seed reports it clearly and does NOT half-start the session (issue #21, fourth corrective pass: a shared round requires both seats)", async () => {
+      // Issue #21, fourteenth corrective pass: `establishSeat` now
+      // authoritatively re-checks after a throw and retries a genuinely
+      // transient-looking failure (no occupant found) up to
+      // MAX_SEED_ATTEMPTS times — both attempts need to fail here for
+      // seat 1 to end up genuinely, permanently unseeded, matching what
+      // this test is actually about (one seat truly can't be seeded).
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        throw new Error("seat already occupied");
+      });
       simulateSeedSpeaker.mockImplementationOnce(async () => {
         throw new Error("seat already occupied");
       });
@@ -491,7 +549,17 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     it("surfaces the failure in the panel, rather than continuing silently, when both seats fail to seed", async () => {
       // mockImplementationOnce (not the persistent mockImplementation) —
       // this must not leak its failure into later tests' default
-      // (successful) seeding behavior.
+      // (successful) seeding behavior. Issue #21, fourteenth corrective
+      // pass: two throws *per* seat (four total) — MAX_SEED_ATTEMPTS
+      // means a single throw with no matching occupant now gets one
+      // retry, so both attempts for both seats need to fail for this to
+      // stay a genuine, permanent double-failure.
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        throw new Error("both seats occupied");
+      });
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        throw new Error("both seats occupied");
+      });
       simulateSeedSpeaker.mockImplementationOnce(async () => {
         throw new Error("both seats occupied");
       });
@@ -528,12 +596,19 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     it("claims seat 1 before seat 2, sequentially — never both at once (issue #21, second corrective pass: concurrent claims raced a real database bug)", async () => {
       const callOrder: number[] = [];
       simulateSeedSpeaker.mockImplementation(async (...args: unknown[]) => {
-        const seatNumber = args[3] as number;
+        const [, guestId, displayName, seatNumber] = args as [string, string, string, 1 | 2];
         callOrder.push(seatNumber);
         // If seat 2 were claimed concurrently with seat 1 rather than
         // strictly after it, this delay would let seat 2's call resolve
         // *first* and prove the two were racing — it never does.
         if (seatNumber === 1) await new Promise((resolve) => setTimeout(resolve, 20));
+        // Issue #21, fourteenth corrective pass: `establishSeat` now
+        // authoritatively re-checks after every attempt — this override
+        // must report a real occupant the same way the default mock does,
+        // or a spurious "authoritative state disagreed" retry would call
+        // this a second time for the same seat and break the exact
+        // call-order assertion this test exists to make.
+        noteSeatClaimed(seatNumber, { guest_id: guestId, profile_id: null, display_name: displayName });
       });
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
@@ -643,6 +718,166 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         expect(simulateSeedSpeaker).not.toHaveBeenCalled();
         expect(screen.getByTestId("sim-stop")).toBeDisabled();
       }, 20_000);
+    });
+  });
+
+  describe("Startup reliability (issue #21, fourteenth corrective pass — Reset/Start self-healing, re-entrancy, and React #441)", () => {
+    it("a leftover simulator-owned seat from an earlier incomplete Start is cleared and retried automatically — never requires a manual Reset", async () => {
+      // Reproduces the real-device shape directly: seat 1's mutation
+      // throws (matching the redacted "Minified React error #441" a
+      // production Server Action throw looks like), but authoritative
+      // state shows the seat already held by a *different* identity this
+      // tab itself generated — `onSimulatedIdentitiesCreated` reports the
+      // exact ids this run's own `allSimulatedGuestIdsRef` now tracks
+      // (the audience pool, generated before the seed speakers), so one
+      // of those stands in for "a leftover simulator-owned occupant from
+      // an earlier incomplete attempt" without needing a whole separate
+      // prior run.
+      let capturedIds: string[] = [];
+      let seat1Attempts = 0;
+      simulateSeedSpeaker.mockImplementation(async (...args: unknown[]) => {
+        const [, guestId, displayName, seatNumber] = args as [string, string, string, 1 | 2];
+        if (seatNumber === 1) {
+          seat1Attempts++;
+          if (seat1Attempts === 1) {
+            seatOccupants.current[1] = { guest_id: capturedIds[0], profile_id: null, display_name: "Leftover Speaker" };
+            throw new Error("seat 1 in event e1 is already occupied");
+          }
+        }
+        noteSeatClaimed(seatNumber, { guest_id: guestId, profile_id: null, display_name: displayName });
+      });
+
+      render(<SessionSimulatorPanel {...baseProps} onSimulatedIdentitiesCreated={(ids) => (capturedIds = ids)} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("leftover simulator seat"), { timeout: 5000 });
+      // simulateOpenSeat is the real cleanup adapter — must be called with
+      // the leftover occupant's own guest id, never a real participant's.
+      await waitFor(() => expect(simulateOpenSeat).toHaveBeenCalledWith("e1", capturedIds[0]));
+      // Recovers fully — reaches Running, not Failed.
+      await waitFor(() => expect(screen.queryByTestId("sim-startup")).not.toBeInTheDocument(), { timeout: 5000 });
+      expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
+    });
+
+    it("never evicts a seat occupied by an identity this tab did not generate — reports a precise failure instead", async () => {
+      simulateSeedSpeaker.mockImplementationOnce(async () => {
+        seatOccupants.current[1] = { guest_id: "real-participant-guest", profile_id: null, display_name: "Real Person" };
+        throw new Error("seat 1 in event e1 is already occupied");
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-startup-phase")).toHaveTextContent("Failed"), { timeout: 5000 });
+      expect(simulateOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("not simulator-owned");
+      expect(screen.getByTestId("sim-startup-error")).toHaveTextContent("FAILED PHASE");
+      expect(screen.getByTestId("sim-startup-error")).toHaveTextContent("RECOVERY");
+    });
+
+    it("treats a throw as a real success, and does not retry, when authoritative state shows the intended identity already seated (the React #441 shape)", async () => {
+      // The exact real-device scenario: the mutation succeeded server-side
+      // (the seat authoritatively holds this identity), but a downstream
+      // client-visible error still surfaced — never treated as a failure.
+      simulateSeedSpeaker.mockImplementationOnce(async (...args: unknown[]) => {
+        const [, guestId, displayName, seatNumber] = args as [string, string, string, 1 | 2];
+        noteSeatClaimed(seatNumber, { guest_id: guestId, profile_id: null, display_name: displayName });
+        throw new Error("Minified React error #441; visit https://react.dev/errors/441");
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("the mutation succeeded despite the client-visible error"), {
+        timeout: 5000,
+      });
+      // Only one attempt for seat 1 — never retried once confirmed occupied.
+      expect(simulateSeedSpeaker.mock.calls.filter((call) => call[3] === 1)).toHaveLength(1);
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+    });
+
+    it("a rapid double-tap on Start launches only one startup pipeline — never two overlapping ones", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const startButton = screen.getByTestId("sim-start");
+      // Two synchronous DOM click dispatches in the same `act()` batch —
+      // React only commits/re-renders (and therefore only updates the
+      // button's own `disabled` attribute) once, *after* this callback
+      // returns, so at the moment of the second dispatch the DOM element
+      // itself is still not disabled yet. This is the actual race
+      // `startupInFlightRef`'s synchronous guard exists for: a real
+      // double-tap or duplicate pointer event arriving before a frame
+      // paints, which two sequential `fireEvent.click` calls (each their
+      // own `act()`, each flushing a render in between) cannot reproduce.
+      act(() => {
+        startButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        startButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("ignoring duplicate tap"));
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2), { timeout: 5000 });
+      // Never more than 2 — a second overlapping pipeline would double this.
+      expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+    });
+
+    it("the Start button is disabled, and Start cannot proceed, while a Reset's primary pass is still in flight", async () => {
+      let resolveReset!: () => void;
+      resetSimulatorSession.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReset = () =>
+              resolve({ messagesDeleted: 0, reactionsDeleted: 0, speakersDeleted: 0, requestVotesDeleted: 0, roundVotesDeleted: 0 });
+          }),
+      );
+      render(<SessionSimulatorPanel {...baseProps} />);
+      const resetButton = screen.getByTestId("sim-reset");
+      const startButton = screen.getByTestId("sim-start");
+      // Both clicks dispatched in the same synchronous `act()` batch, on
+      // a never-yet-started panel (`running`/`startingUp` both already
+      // false going in) — the only thing that can explain the second
+      // click being blocked is the Reset-Start barrier itself
+      // (`resetInFlightRef`), read synchronously before React has had any
+      // chance to commit the re-render that would otherwise disable this
+      // button via the `resetInFlight` *state* a render later.
+      act(() => {
+        resetButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        startButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Reset still in progress"));
+      expect(simulateSeedSpeaker).not.toHaveBeenCalled();
+      await waitFor(() => expect(startButton).toBeDisabled());
+
+      resolveReset();
+      await waitFor(() => expect(startButton).not.toBeDisabled());
+    });
+
+    it("the debug snapshot's SIMULATOR STARTUP block reports run/generation id, reset state, and per-seat intended vs. authoritative occupant", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      fetchDebugSnapshotState.mockResolvedValueOnce({
+        fetchedAt: new Date().toISOString(),
+        round: { round_number: 1, phase: "active", ends_at: new Date().toISOString() },
+        seats: [{ seat_number: 1, display_name: "Dapper Heron", identity_kind: "guest", disconnected: false }],
+        pendingRequests: [],
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("SIMULATOR STARTUP");
+      expect(copied).toContain("State: ready");
+      expect(copied).toContain("Run/generation ID:");
+      expect(copied).toContain("Reset in progress: no");
+      expect(copied).toContain("Reset generation:");
+      expect(copied).toContain("Startup attempt:");
+      expect(copied).toContain("Seat 1 intended:");
+      expect(copied).toContain("Seat 1 authoritative:");
+      expect(copied).toContain("Seat 2 intended:");
+      expect(copied).toContain("Seat 2 authoritative:");
+      expect(copied).toContain("Last startup error: none");
+      expect(copied).toContain("Pending cleanup from previous generation:");
     });
   });
 

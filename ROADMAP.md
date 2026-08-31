@@ -1236,6 +1236,44 @@ different dependencies. Current order:
       dedicated per-candidate block (both counts, signed delta, both
       ranks) with an explicit `PROSPECTIVE RANKING MISMATCH` call-out.
       See DECISIONS.md and SESSION_LOG.md's Session 54.
+
+      **Fourteenth corrective pass (2026-08-31, same branch)**: a third,
+      separate real-device pattern, isolated from the now-healthy
+      replacement/RTS work — the Session Simulator sometimes needed
+      multiple Reset→Start attempts before becoming useful. Grounded
+      "Minified React error #441" (via React's real error-codes table
+      for this project's version) to what it actually is: production
+      redaction of a genuine, specific Server Action throw from
+      `claim_speaker_seat` ('seat already occupied'), never a client
+      rendering bug. Traced the real gap to `establishSeat`'s Case A
+      branch trusting the mutation promise alone instead of authoritative
+      state — a leftover occupant from an earlier incomplete Start
+      collided with every retry on the same seat, deterministically,
+      until a manual Reset. Fixed with authoritative confirmation after
+      every attempt (throw or not): the intended identity already seated
+      is treated as a real success and never retried; a leftover
+      simulator-owned occupant (tracked via this tab's own guest-id
+      bookkeeping) is cleared via the existing `simulateOpenSeat` adapter
+      and retried, bounded; anyone else is never evicted, and startup
+      reports a precise FAILED PHASE/ATTEMPTS/EXPECTED/AUTHORITATIVE/
+      LAST ERROR/RECOVERY detail instead of a generic message. Closed two
+      structural races alongside it: a synchronous re-entrancy guard for
+      Start (`SimButton`'s own executing-state depends on a React
+      re-render, never synchronous with the triggering click) and a
+      Reset-Start completion barrier. Found and closed a third, genuinely
+      narrow Reset race while investigating: `resetSimulatorSession`'s
+      `stage_rounds` reconciliation was never guest-id-scoped, so the
+      panel's own delayed follow-up sweep could delete a brand-new run's
+      round row if occupancy was transiently zero at the exact moment it
+      fired — proven directly against the real database, fixed with a new
+      `reconcileStageRound` parameter the follow-up sweep now passes
+      `false`. Debug Snapshot gained a `SIMULATOR STARTUP` block (state,
+      phase, run/reset generation, per-seat intended vs. authoritative
+      occupant, last error). New real-database coverage proved the real
+      "already occupied" error, the leftover-seat self-heal, a genuine
+      concurrent-claim race, the `reconcileStageRound` fix both ways, and
+      a 20-cycle Reset→Start stress test at 20/20 first-attempt
+      successes. See DECISIONS.md and SESSION_LOG.md's Session 55.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

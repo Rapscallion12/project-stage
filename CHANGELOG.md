@@ -13,6 +13,21 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed the Session Simulator sometimes needing two or three Reset →
+  Start attempts before producing a genuinely running session**
+  (issue #21, fourteenth corrective pass, preview/dev tooling only) — a
+  real-device report showed a contradiction: startup logged "Seat 1 seed
+  failed" (a redacted production error — the real, underlying cause was
+  a genuine, specific database error, never a client bug), yet that same
+  seat later showed up occupied. Traced to a leftover seat from an
+  earlier incomplete attempt colliding with every retry until a manual
+  Reset. Startup now authoritatively confirms every seat attempt instead
+  of trusting whether the request threw or not, automatically clears a
+  leftover seat it created itself and retries, and never touches a seat
+  it didn't create. Also closed a rapid double-tap race on the Start
+  button and a narrow timing gap where Reset's own delayed cleanup
+  could, in rare cases, disturb a brand-new session that started right
+  after it. See DECISIONS.md.
 - **Fixed a recurring drift between the live Request-to-Speak vote
   count shown on a real device and the actual count in the database**
   (issue #21, thirteenth corrective pass) — the underlying vote-transfer
