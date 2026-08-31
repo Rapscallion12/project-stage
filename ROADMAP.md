@@ -1079,6 +1079,30 @@ different dependencies. Current order:
       event-wide rather than round-scoped) was surfaced rather than
       fixed, as a genuine design decision rather than an obvious bug.
       See DECISIONS.md and SESSION_LOG.md's Session 49.
+
+      **Ninth corrective pass (2026-08-30, same branch)**: a focused
+      re-investigation, discarding a prior branch entirely, found the
+      round boundary itself never triggered selection — the two
+      authoritative functions that resolve a round/closing-period
+      boundary and create a vacancy (`resolveStageRoundAction`,
+      `resolveSeatClosingAction`) never called `ensureActiveSelectionRound`
+      directly; selection depended entirely on a separate chain (DB
+      write → Realtime delivery → a client's own reconciliation effect
+      → a second Server Action call). Fixed by calling the same
+      idempotent, row-locked selection function directly from both
+      boundary actions, immediately after the vacancy is created —
+      collapsing that chain into the call that already resolves the
+      boundary, not a second competing selection path. A real-database
+      test proved 10 consecutive replacement cycles in one
+      continuously-running event, no reset between, with real measured
+      boundary→reservation latency of 719-824ms (avg 747ms); corroborated
+      live in a real browser (548-559ms observed). Session Simulator
+      gained a collapsible "Selection Forensics" panel distinguishing
+      the ranking frozen at the boundary from the live current ranking.
+      Deliberately not extended to `checkAndEvictInactiveSpeaker`/
+      `leaveSpeakerSeat` (same gap exists there, left for a future pass —
+      this pass's own instructions scoped it to the round boundary
+      specifically). See DECISIONS.md and SESSION_LOG.md's Session 50.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -1189,6 +1189,86 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     });
   });
 
+  // Issue #21, ninth corrective pass, Sections 12-13: "Selection
+  // Forensics" — collapsed by default, expands to show the exact RTS
+  // ranking at the selection boundary (frozen_rank/frozen_vote_count)
+  // separately from the current live ranking, plus the expected vs.
+  // actually-reserved winner and a specific WAITING AT/BLOCKED BECAUSE
+  // reason.
+  describe("Selection Forensics (issue #21, ninth corrective pass, Sections 12-13)", () => {
+    it("is collapsed by default, and expands on tap", () => {
+      render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 3 })]} />);
+      expect(screen.queryByTestId("sim-forensics-1")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("sim-forensics-toggle"));
+      expect(screen.getByTestId("sim-forensics-1")).toBeInTheDocument();
+    });
+
+    it("shows the ranking at the selection boundary (frozen) separately from the current live ranking, and names the expected winner from the boundary ranking specifically", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 5, voteCount: 5 }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 2, voteCount: 9 }), // gained votes *after* the boundary
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Boundary Winner", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Later Riser", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-forensics-toggle"));
+      const seat1 = screen.getByTestId("sim-forensics-1");
+      expect(seat1).toHaveTextContent("RTS ranking at boundary:");
+      expect(seat1).toHaveTextContent("#1 Boundary Winner — 5");
+      expect(seat1).toHaveTextContent("Current RTS ranking");
+      // Later Riser now outranks Boundary Winner live, but the boundary
+      // ranking (what actually decided the winner) is unaffected by it.
+      expect(seat1).toHaveTextContent("#2 Later Riser — 2");
+      expect(screen.getByTestId("sim-forensics-expected-1")).toHaveTextContent("Boundary Winner");
+    });
+
+    it("flags when the reserved candidate differs from the expected boundary winner", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 5 }),
+            request({ id: "r2", guest_id: "g2", frozen_rank: 2, frozen_vote_count: 2, is_current_candidate: true, reserved_seat_number: 1 }),
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-forensics-toggle"));
+      expect(screen.getByTestId("sim-forensics-reserved-1")).toHaveTextContent("different from expected winner");
+    });
+
+    it("does not flag a mismatch when the reserved candidate matches the expected boundary winner", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 5, is_current_candidate: true, reserved_seat_number: 1 })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-forensics-toggle"));
+      expect(screen.getByTestId("sim-forensics-reserved-1")).not.toHaveTextContent("different from expected winner");
+    });
+
+    it("shows WAITING AT / BLOCKED BECAUSE for a vacant seat, and nothing for an occupied one", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "s1", seat_number: 1 })]}
+          pendingRequests={[request({ id: "r1", guest_id: "g1" })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-forensics-toggle"));
+      expect(screen.queryByTestId("sim-forensics-blocked-1")).not.toBeInTheDocument();
+      expect(screen.getByTestId("sim-forensics-blocked-2")).toHaveTextContent("WAITING AT / BLOCKED BECAUSE:");
+    });
+  });
+
   describe("small-room fallback status (issue #21, fifth corrective pass, Section 16 — 'if blocked, show why')", () => {
     it("reports fallback as n/a before the stage has ever been established", () => {
       render(<SessionSimulatorPanel {...baseProps} stageRound={null} speakers={[]} />);

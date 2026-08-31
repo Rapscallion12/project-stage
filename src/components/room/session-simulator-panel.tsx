@@ -312,6 +312,13 @@ export function SessionSimulatorPanel({
   // interrupting the simulated session underneath it.
   const [collapsed, setCollapsed] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  // Issue #21, ninth corrective pass, Section 12: "Selection Forensics"
+  // (below) is deliberately collapsed by default — real per-seat RTS
+  // ranking detail is exactly the "huge raw JSON" this section's own
+  // instruction says not to dump into the main panel; expandable on
+  // demand instead, same discipline the panel-minimize control already
+  // established for the whole panel.
+  const [forensicsExpanded, setForensicsExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   // Issue #21, eighth corrective pass, Section 29: a short, preview-only
@@ -1215,6 +1222,41 @@ export function SessionSimulatorPanel({
     return speakers.some((s) => s.seat_number === seatNumber);
   }
 
+  /**
+   * Issue #21, ninth corrective pass, Sections 12-13: the one, shared
+   * "why is this seat still waiting" computation — extracted so
+   * "Selection Timing" and "Selection Forensics" (below) never show two
+   * subtly different reasons for the same seat. More granular than the
+   * eighth pass's own version (Section 9 there): distinguishes "still
+   * within the intentional 3s Going Live window" from "reserved a while
+   * ago and still not occupied," using real, observed elapsed time
+   * (`seatTiming`'s own real `Date.now()` timestamps) — never an
+   * estimate. Returns `null` only when the seat is occupied (nothing to
+   * wait for) — every other case gets a specific reason, never a
+   * generic "Selecting…".
+   */
+  function computeWaitingReason(seatNumber: 1 | 2): string {
+    const t = seatTiming[seatNumber];
+    const hasEligibleRequests = pendingRequests.length > 0;
+    const establishedForFallback = stageRound !== null && stageRound.round_number >= 1;
+    const bothEmpty = speakers.length === 0;
+    const fallbackOpen = establishedForFallback && bothEmpty && !hasEligibleRequests;
+    const reservedForThisSeat = pendingRequests.some((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
+    const reservedForMs = t.reservedAt !== null && now !== null ? now - t.reservedAt : null;
+    const CLAIM_GRACE_MS = 4000;
+
+    if (reservedForThisSeat) {
+      return reservedForMs !== null && reservedForMs > PROMOTION_COUNTDOWN_SECONDS * 1000 + CLAIM_GRACE_MS
+        ? `authoritative seat claim — reserved ${formatDelta(reservedForMs)} ago, past the intentional ${PROMOTION_COUNTDOWN_SECONDS}s countdown, not yet occupied`
+        : `Going Live (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional) or candidate client acknowledgement — cannot be distinguished from this vantage point`;
+    }
+    if (hasEligibleRequests) {
+      return "reservation RPC pending, or reservation not yet propagated to this client — cannot be distinguished from this vantage point";
+    }
+    if (fallbackOpen) return "fallback open — tap to join";
+    return "eligible candidate detection — no eligible request observed yet";
+  }
+
   return (
     <div
       ref={panelRef}
@@ -1466,6 +1508,89 @@ export function SessionSimulatorPanel({
           })
         )}
         {/*
+          Issue #21, ninth corrective pass, Sections 12-13: "Selection
+          Forensics" — if the boundary→reservation bug in this pass's own
+          report ever recurs, this is what should make it immediately
+          diagnosable from a real device: the exact RTS ranking *at the
+          selection boundary* (frozen_rank/frozen_vote_count — captured
+          once, when the round was frozen) shown separately from the
+          *current* live ranking (voteCount, which can keep changing
+          afterward — Section 10's "later votes must not retroactively
+          change an already-resolved winner") — the only way to actually
+          answer "did the correct candidate win" instead of guessing from
+          whichever comment happens to be visible. Collapsed by default;
+          Section 12 explicitly asks this not be dumped into the main
+          panel unconditionally.
+        */}
+        <button
+          type="button"
+          data-testid="sim-forensics-toggle"
+          onClick={() => setForensicsExpanded((v) => !v)}
+          className="mt-1 w-full border-t border-white/10 pt-1 text-left font-semibold text-white/70"
+        >
+          Selection Forensics {forensicsExpanded ? "▾" : "▸"}
+        </button>
+        {forensicsExpanded &&
+          ([1, 2] as const).map((seatNumber) => {
+            const vacant = !seatIsOccupied(seatNumber);
+            // RANKING AT BOUNDARY: frozen_rank/frozen_vote_count — set
+            // once, by the real freeze RPC, never recomputed here.
+            const atBoundary = pendingRequests
+              .filter((r) => r.frozen_rank !== null)
+              .sort((a, b) => (a.frozen_rank ?? 0) - (b.frozen_rank ?? 0));
+            // CURRENT RTS ranking: live voteCount — the same order
+            // `pendingRequests` already arrives in (see
+            // useActiveSpeakerRequests' own doc comment), shown
+            // separately so a diverging vote count after the boundary is
+            // visible without being mistaken for what actually decided
+            // the winner.
+            const current = pendingRequests;
+            const expectedWinner = atBoundary[0] ?? null;
+            const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber) ?? null;
+            return (
+              <div key={seatNumber} data-testid={`sim-forensics-${seatNumber}`} className="mt-1 rounded bg-white/5 p-1.5">
+                <p className="font-medium text-white/80">Seat {seatNumber}</p>
+                <p className="text-white/70">Vacant: {vacant ? "yes" : "no"}</p>
+                <p className="text-white/70">Round: #{stageRound?.round_number ?? "—"}</p>
+                <p className="mt-1 text-white/50">RTS ranking at boundary:</p>
+                {atBoundary.length === 0 ? (
+                  <p className="pl-2 text-white/40">none frozen yet</p>
+                ) : (
+                  atBoundary.map((r) => (
+                    <p key={r.id} className="pl-2 text-white/70">
+                      #{r.frozen_rank} {candidateName(r)} — {r.frozen_vote_count}
+                    </p>
+                  ))
+                )}
+                <p className="mt-1 text-white/50">Current RTS ranking (live — may differ from boundary):</p>
+                {current.length === 0 ? (
+                  <p className="pl-2 text-white/40">none</p>
+                ) : (
+                  current.map((r, i) => (
+                    <p key={r.id} className="pl-2 text-white/70">
+                      #{i + 1} {candidateName(r)} — {r.voteCount}
+                    </p>
+                  ))
+                )}
+                <p className="mt-1 text-white/70" data-testid={`sim-forensics-expected-${seatNumber}`}>
+                  Expected winner: {expectedWinner ? candidateName(expectedWinner) : "none"}
+                </p>
+                <p className="text-white/70" data-testid={`sim-forensics-reserved-${seatNumber}`}>
+                  Reserved: {reserved ? candidateName(reserved) : "none"}
+                  {reserved && expectedWinner && reserved.id !== expectedWinner.id && (
+                    <span className="font-semibold text-red-400"> — different from expected winner</span>
+                  )}
+                </p>
+                <p className="text-white/70">Occupied: {vacant ? "no" : "yes"}</p>
+                {vacant && (
+                  <p data-testid={`sim-forensics-blocked-${seatNumber}`} className="font-semibold text-amber-400">
+                    WAITING AT / BLOCKED BECAUSE: {computeWaitingReason(seatNumber)}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        {/*
           Issue #21, fifth corrective pass, Section 16: per-seat
           candidate/authorization/occupancy — up to two reservations can
           be in flight simultaneously (two seats opened at once), never
@@ -1502,11 +1627,6 @@ export function SessionSimulatorPanel({
         <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Selection Timing (real, observed)</div>
         {([1, 2] as const).map((seatNumber) => {
           const t = seatTiming[seatNumber];
-          const hasEligibleRequests = pendingRequests.length > 0;
-          const establishedForFallback = stageRound !== null && stageRound.round_number >= 1;
-          const bothEmpty = speakers.length === 0;
-          const fallbackOpen = establishedForFallback && bothEmpty && !hasEligibleRequests;
-          const reservedForThisSeat = pendingRequests.some((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
 
           if (t.vacantAt === null) {
             return (
@@ -1521,32 +1641,7 @@ export function SessionSimulatorPanel({
           if (t.reservedAt !== null) rows.push({ label: "Reservation observed locally", value: formatDelta(t.reservedAt - t.vacantAt) });
           if (t.occupiedAt !== null) rows.push({ label: "Occupied", value: formatDelta(t.occupiedAt - t.vacantAt) });
 
-          // Issue #21, eighth corrective pass, Section 9: more granular
-          // WAITING AT reasons — the sixth pass's single "Going Live
-          // countdown or claim pending" bucket couldn't distinguish
-          // "still within the intentional 3s window" from "reserved a
-          // while ago and still not occupied," which is exactly the
-          // distinction needed to tell a genuine stall apart from normal
-          // Going Live. `reservedForMs` is real, observed elapsed time
-          // (now - the real reservedAt timestamp) — never an estimate.
-          // `PROMOTION_COUNTDOWN_SECONDS` is the one real intentional
-          // delay in this path; the extra buffer accounts for claim
-          // round-trip time, not a second guess at another intentional
-          // wait.
-          const reservedForMs = t.reservedAt !== null && now !== null ? now - t.reservedAt : null;
-          const CLAIM_GRACE_MS = 4000;
-          const waitingReason =
-            t.occupiedAt !== null
-              ? null
-              : reservedForThisSeat
-                ? reservedForMs !== null && reservedForMs > PROMOTION_COUNTDOWN_SECONDS * 1000 + CLAIM_GRACE_MS
-                  ? `authoritative seat claim — reserved ${formatDelta(reservedForMs)} ago, past the intentional ${PROMOTION_COUNTDOWN_SECONDS}s countdown, not yet occupied`
-                  : `Going Live (up to ${PROMOTION_COUNTDOWN_SECONDS}s, intentional) or candidate client acknowledgement — cannot be distinguished from this vantage point (see doc comment)`
-                : hasEligibleRequests
-                  ? "reservation RPC pending, or reservation not yet propagated to this client — cannot be distinguished from this vantage point"
-                  : fallbackOpen
-                    ? "fallback open — tap to join"
-                    : "eligible candidate detection — no eligible request observed yet";
+          const waitingReason = t.occupiedAt !== null ? null : computeWaitingReason(seatNumber);
 
           return (
             <div key={seatNumber} data-testid={`sim-seat-timing-${seatNumber}`}>

@@ -13,6 +13,24 @@ merged to `main`.
 
 ### Changed
 
+- **The highest-voted eligible Request-to-Speak candidate is now
+  reserved immediately when the shared round boundary resolves, in the
+  same call — not seconds later, after a separate client notices the
+  vacancy** (issue #21, ninth corrective pass) — the two authoritative
+  functions that resolve a round/closing-period boundary and create a
+  vacant seat never themselves triggered selection; it depended entirely
+  on a Realtime round trip plus a client-side React effect making a
+  second, separate call. A real-database test proved 10 consecutive
+  replacement cycles in one continuously-running event with real
+  measured boundary→reservation latency under a second every time,
+  corroborated live in a real browser. No selection ranking, threshold,
+  or authorization behavior changed. See DECISIONS.md.
+- **Session Simulator gained a "Selection Forensics" panel** (issue #21,
+  ninth corrective pass), collapsed by default — per seat, shows the RTS
+  ranking frozen at the moment selection actually happened, separately
+  from the live current ranking (which can keep changing afterward), the
+  expected winner, the actual reserved candidate (flagged if they ever
+  diverge), and why a still-vacant seat is waiting. See DECISIONS.md.
 - **Fixed a genuine server-side bug that could permanently hide a
   Request-to-Speak candidate from next-speaker selection** (issue #21,
   eighth corrective pass) — found via live inspection of the real

@@ -4,6 +4,99 @@ Newest entry first.
 
 ---
 
+## 2026-08-30 — Session 50: Ninth corrective pass — the round boundary never triggered selection itself; it depended on a separate reactive client round trip (issue #21)
+
+**Goal**: a focused re-scope after discarding a prior investigation
+branch entirely. One question only: at the shared-round boundary, why
+isn't the highest-voted eligible RTS candidate authoritatively selected
+for the vacant seat immediately? The ranking rule itself (most votes,
+tie → earliest still-active) was already established, not to be
+touched — follow the winner through reservation and promotion, name the
+exact failing transition, and specifically check whether round
+resolution performs selection itself or waits on a client noticing the
+vacancy afterward.
+
+**Root cause**: `resolveStageRoundAction`/`resolveSeatClosingAction`
+(`room/actions.ts`) — the two authoritative functions that resolve a
+round/closing-period boundary and create a vacancy — never themselves
+called `ensureActiveSelectionRound`. Selection depended entirely on a
+separate chain: DB write → Realtime delivery → a client's own
+`useSpeakerSelectionReconciliation` React effect noticing it → that
+effect's own separate Server Action call. Every hop is individually
+fast; the chain itself was the measurable delay at the boundary
+specifically.
+
+**Fix**: both functions now call `ensureActiveSelectionRound` directly,
+immediately after creating the vacancy — the exact same idempotent,
+row-locked function the reactive hook already called, so this isn't a
+second competing selection path, just closing the gap between "vacancy
+created" and "selection triggered." The reactive hook is unchanged and
+remains a bounded backstop for a missed delta or a since-disconnected
+resolver.
+
+**A real bug found while implementing the fix**: the first attempt
+called the existing request-scoped `listActiveSpeakers` (reads cookies)
+from the authoritative action, which threw `cookies was called outside
+a request scope` under a bare test script — and was architecturally
+fragile regardless, since round resolution isn't naturally scoped to
+any one caller's session. Fixed by adding a service-client-based
+`listActiveSpeakersAuthoritative` to `event-speakers.ts`, matching the
+pattern `resolveStageRound`/`resolveSeatClosing` already use.
+
+**Scope decision**: `checkAndEvictInactiveSpeaker`/`leaveSpeakerSeat`
+have the identical gap (confirmed by reading both) but were deliberately
+left untouched — this pass's own instructions repeatedly scoped the
+investigation to the round boundary specifically and said not to start
+unrelated work. Not treated as a QUESTIONS item; the scope itself
+already answers it.
+
+**Proof — the strongest evidence this pass produced**: a real-database
+test ran 10 consecutive replacement cycles in one continuously-running
+test event, no reset between cycles, fresh randomized candidates each
+time, asserting for every cycle that the actual highest-voted candidate
+was already reserved the instant `resolveStageRoundAction` returned.
+Real measured latency: 719-824ms (avg 747ms), well under the 3-second
+Going Live countdown and under the "effectively immediate" target. A
+second test confirmed the tie-break rule with a real ~50ms `created_at`
+gap between two equally-voted candidates — the earlier one won. Both
+corroborated live in a real browser: two forced round-boundary
+replacements, each promoting the correct top-ranked RTS candidate, with
+the client observing the reservation in 548-559ms.
+
+**New diagnostics**: Session Simulator gained a collapsible "Selection
+Forensics" section (collapsed by default, per this pass's own "don't
+dump raw JSON" instruction) showing, per seat: the one-time RTS ranking
+frozen at the selection boundary versus the live current ranking (which
+can keep changing afterward), the expected winner, the actual reserved
+candidate (flagged if they diverge), and a `WAITING AT / BLOCKED
+BECAUSE` reason for a still-vacant seat — extracted into a shared
+`computeWaitingReason` helper so this and the existing "Selection
+Timing" section can never disagree about why a seat is still waiting.
+
+**Verification**: full suite (1055 tests, 79 files), lint, tsc, build
+all clean. Also found and fixed one pre-existing, unrelated test flake
+— the shared "permanent test room" fixture had leftover state from
+earlier manual testing this session (an occupied seat, 46 stale
+messages), causing `dev-harness.test.ts`'s clear-sandbox test to fail
+on a unique-constraint violation; cleared via `npm run dev:harness --
+clear-sandbox` (the literal fix that test exists to verify), re-ran
+clean. Not a regression from this pass's own code — the new test file
+uses its own dedicated, isolated event throughout.
+
+**Real-device note**: an unrelated, pre-existing artifact was observed
+during live-browser verification — the Session Simulator's background
+"simulated audience" continued casting round-votes against a seat's
+*old* occupancy row for a moment after a replacement, producing repeated
+(harmless — correctly rejected server-side) "no active speaker
+occupancy to vote on" console errors. Out of this pass's explicit scope
+(round votes, not RTS selection); noted for a future pass, not fixed
+here.
+
+**Not merged to `main`; fresh preview deployed for the user's own
+real-device review.**
+
+---
+
 ## 2026-08-30 — Session 49: Eighth corrective pass — four real latency bugs found and fixed (stale Realtime state, simulator promotion gap, retry budget, stuck server-side round) (issue #21)
 
 **Goal**: a real iPhone still showed "Selecting next speaker…" for an

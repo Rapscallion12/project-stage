@@ -3,6 +3,104 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-30 — Ninth corrective pass: the round boundary itself never triggered selection — it depended on a separate, reactive client round trip (issue #21)
+
+**Context**: explicit instruction to discard the prior ("Bold Falcon")
+investigation branch entirely and start over from one focused question:
+at the shared-round boundary, why doesn't the highest-voted eligible
+Request-to-Speak candidate get authoritatively selected for the vacant
+seat *immediately*? The rule itself (most votes wins, tie → earliest
+still-active request) was already established and not in question — the
+investigation was told to follow that winner through reservation and
+promotion, name the exact failing transition, and specifically audit
+whether round resolution itself performs selection or waits on some
+client noticing the vacancy afterward.
+
+**Root cause, found by reading the actual authoritative functions, not
+guessing**: `resolveStageRoundAction` and `resolveSeatClosingAction`
+(`room/actions.ts`) — the two functions that authoritatively resolve a
+round/closing-period boundary and create a seat vacancy — never
+themselves called `ensureActiveSelectionRound`. Selection depended
+entirely on a separate, subsequent chain: the vacancy's DB write →
+Realtime delivery of the `event_speakers` change to some connected
+client's `useActiveSpeakers` subscription → that client's own
+`useSpeakerSelectionReconciliation` React effect noticing the occupancy
+change → that effect making a *second*, separate Server Action call
+(`reconcileSpeakerSelectionAction`), which only then calls
+`ensureActiveSelectionRound`. Every individual hop is fast, but the
+chain itself — one DB write, one Realtime round trip, one React effect
+firing, one more Server Action round trip — was the actual, measurable
+source of the reported delay specifically at the round boundary, even
+though the sixth pass's reactive-promotion fix had already made *each*
+of those hops individually about as fast as it could be. The old doc
+comment on `resolveStageRoundAction` (referencing an even older,
+pre-fifth-pass polling mechanism) was stale, but the gap it was
+gesturing at — "not triggered from the same authoritative action" — was
+real and current.
+
+**Fix**: both functions now call `ensureActiveSelectionRound` directly,
+immediately after creating the vacancy — `resolveStageRoundAction` when
+any seat resolves `decisive-replace`, `resolveSeatClosingAction`
+unconditionally after its existing `syncPublishPermission` call. This
+collapses the multi-hop chain into the single call that already resolves
+the boundary. It is deliberately **not** a second, competing selection
+path: it calls the exact same idempotent, atomically-row-locked
+`ensureActiveSelectionRound`/`reserve_speaker_candidates_for_seats`
+function the reactive hook already called — that function's own row
+locking is what already makes concurrent callers safe, so calling it
+from the authoritative moment *in addition to* reactively-afterward
+cannot introduce a new race. `useSpeakerSelectionReconciliation` itself
+is completely unchanged and remains exactly what it already was: a
+bounded backstop for a missed Realtime delta or a resolution triggered
+by a since-disconnected client.
+
+**A real bug surfaced while implementing the fix**: the obvious first
+attempt called the existing `listActiveSpeakers` (request-scoped, reads
+cookies via `createClient()`) from inside `resolveStageRoundAction`,
+which threw `cookies was called outside a request scope` the moment it
+ran from a bare test script — and, architecturally, would have been
+fragile even in production, since nothing about *resolving a round
+boundary* is naturally scoped to any one caller's own session. Fixed by
+adding `listActiveSpeakersAuthoritative` to `event-speakers.ts` —
+service-client-based, same pattern `resolveStageRound`/
+`resolveSeatClosing` themselves already use, reading the identical
+`event_speakers_active` view so "which seats are open" is never a
+second, differently-derived answer.
+
+**Deliberately not extended to `checkAndEvictInactiveSpeaker`/
+`leaveSpeakerSeat`**: reading both confirmed they have the exact same
+gap (vacancy created, no direct selection trigger) — but this pass's own
+instruction repeatedly and specifically scoped the investigation to "the
+shared round boundary," and explicitly said not to start unrelated
+work. Left as a candidate for a future pass, not treated as a
+consequential ambiguity needing a decision here (the scope itself
+already answers it).
+
+**Proof**: a real-database test (not mocked) ran 10 consecutive
+replacement cycles in one continuously-running test event, no reset
+between cycles, each with a fresh, freshly-randomized pair of RTS
+candidates — asserting for every cycle that the actual highest-voted
+candidate was already reserved by the time `resolveStageRoundAction`
+itself returned, with real measured boundary→reservation latency of
+719-824ms (avg 747ms), and that the untouched seat was never disturbed
+and no cycle's history affected the next. A second real-database test
+confirmed the tie-break rule with an actual ~50ms `created_at` gap
+between two equally-voted candidates. Both corroborated live in a real
+browser: two forced round-boundary replacements each showed the correct
+top-ranked RTS candidate promoted, with the client observing the
+reservation in 548-559ms.
+
+**Reason**: this is the minimal, root-cause fix — it removes the
+architectural gap (no direct trigger) rather than adding a workaround
+(a shorter poll interval, a client-side "stuck" timeout) on top of it,
+both of which this pass's own instructions explicitly forbade.
+
+**Tradeoffs**: none against any previously-established invariant —
+deterministic RTS ranking, the atomic dual-seat reservation, the 3-second
+Going Live countdown, server-authoritative claiming, and the shared
+single-round model are all unchanged; the full existing test suite
+(real-database tests included) still passes.
+
 ## 2026-08-30 — Eighth corrective pass: next-speaker latency traced to four independent, real bugs — stale client Realtime state, a simulator-only promotion gap, an under-budgeted retry, and a stuck server-side round (issue #21)
 
 **Context**: a real iPhone still showed "Selecting next speaker…" for an

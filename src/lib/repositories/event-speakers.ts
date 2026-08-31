@@ -119,6 +119,32 @@ export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[
 }
 
 /**
+ * Issue #21, ninth corrective pass: the service-client equivalent of
+ * `listActiveSpeakers` above, for a caller that has no real user session
+ * to read cookies from at all — `resolveStageRoundAction`/
+ * `resolveSeatClosingAction` (room/actions.ts) call this immediately
+ * after authoritatively resolving the round/closing-period boundary, so
+ * "any connected client, always safe to call early/late/repeatedly" (the
+ * same trust model `resolveStageRound`/`resolveSeatClosing` themselves
+ * already use, both service-client-based) extends to the selection
+ * trigger that follows in the same call — never gated on *that specific
+ * caller's* own session, and callable directly from a bare test script
+ * (no Next.js request context) the same way those two functions already
+ * are. Reads the identical `event_speakers_active` view as
+ * `listActiveSpeakers`, so "which seats are open" is never a second,
+ * differently-derived answer — only the client used to ask differs.
+ */
+export async function listActiveSpeakersAuthoritative(eventId: string): Promise<EventSpeaker[]> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from("event_speakers_active")
+    .select("*")
+    .eq("event_id", eventId)
+    .order("seat_number", { ascending: true });
+  return (data ?? []) as EventSpeaker[];
+}
+
+/**
  * Which of the given events currently have at least one active speaker —
  * used by the landing page's "Join Live Audience" fast path (issue #26)
  * to prefer a room that's actually live over one that's merely joinable.

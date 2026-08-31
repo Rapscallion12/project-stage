@@ -10,6 +10,7 @@ import {
   leaveSpeakerSeat as leaveSpeakerSeatRow,
   leaveSpeakerSeatAsGuest,
   listActiveSpeakers,
+  listActiveSpeakersAuthoritative,
   markSpeakerMediaActive,
   markSpeakerMediaInactive,
   releaseExpiredInactiveSpeaker,
@@ -762,11 +763,36 @@ export async function voteOnSpeakerRound(
  * immediately revokes that departing speaker's LiveKit publish rights —
  * the same "instant revoke, not left to their next token request"
  * discipline every other eviction path in this app already follows
- * (`checkAndEvictInactiveSpeaker`). Does *not* separately trigger Phase
- * 1 candidate selection: the seat becoming open is picked up by the
- * existing `ensureActiveSelectionRound` the next time any client polls
- * `checkPromotionEligibility` — no second seat-opening signal needed,
- * per explicit instruction not to build a second selection path.
+ * (`checkAndEvictInactiveSpeaker`).
+ *
+ * **Issue #21, ninth corrective pass: also directly triggers candidate
+ * selection for the seat(s) it just vacated, in this same call.** A
+ * real-device pass found "Selecting next speaker…" taking noticeably
+ * longer than intentional at exactly the round boundary; tracing found
+ * this action had never itself called `ensureActiveSelectionRound` at
+ * all — the old doc comment here (see git history) described the seat
+ * becoming open as "picked up... the next time any client polls
+ * `checkPromotionEligibility`," which undersold even what was true by
+ * the fifth pass: `useSpeakerSelectionReconciliation` reactively
+ * re-triggers selection in every connected client once *their own*
+ * `speakers` state reflects the new vacancy — but reaching that point
+ * still requires a full Realtime round trip (this write → every
+ * client's own `event_speakers` subscription delivering it → a React
+ * effect firing → a *second*, separate Server Action call) before
+ * selection is even attempted, on top of whatever the reservation
+ * itself then takes. Calling `ensureActiveSelectionRound` here, in the
+ * same request that authoritatively knows the seat just vacated, closes
+ * that entire chain — reservation for a round-boundary replacement no
+ * longer waits on any client's own Realtime subscription or React
+ * effect to get started. `useSpeakerSelectionReconciliation` is
+ * unchanged and remains exactly what it already was: the bounded
+ * backstop for a missed Realtime delta or a resolution triggered by a
+ * since-disconnected client, not the primary trigger. Never a second,
+ * competing selection *path* — this calls the exact same idempotent,
+ * atomically-locked function reconciliation already calls; doing so
+ * from the authoritative moment instead of only reactively-afterward
+ * cannot introduce a new race, since the underlying RPC's own
+ * row-locking is what already makes concurrent callers safe.
  */
 export async function resolveStageRoundAction(eventId: string): Promise<Array<{ eventSpeakersId: string; outcome: SeatResolutionOutcome }>> {
   const results = await resolveStageRound(eventId);
@@ -774,6 +800,9 @@ export async function resolveStageRoundAction(eventId: string): Promise<Array<{ 
     if (result.outcome === "decisive-replace") {
       await syncPublishPermission({ eventId, identity: result.identity, canPublish: false });
     }
+  }
+  if (results.some((r) => r.outcome === "decisive-replace")) {
+    await ensureActiveSelectionRound(eventId, await listActiveSpeakersAuthoritative(eventId));
   }
   return results.map((r) => ({ eventSpeakersId: r.eventSpeakersId, outcome: r.outcome }));
 }
@@ -788,11 +817,17 @@ export async function resolveStageRoundAction(eventId: string): Promise<Array<{ 
  * whether it did (`false` for the ordinary no-op case: not yet expired,
  * or no such closing seat) — used by the Session Simulator's "Force
  * Replace Now" to report accurate feedback without a second fetch.
+ *
+ * **Issue #21, ninth corrective pass**: same direct-selection-trigger
+ * fix as `resolveStageRoundAction` above, for the Final-30/closing-
+ * period boundary specifically — see that function's own doc comment
+ * for the full reasoning.
  */
 export async function resolveSeatClosingAction(eventSpeakersId: string): Promise<boolean> {
   const result = await resolveSeatClosing(eventSpeakersId);
   if (result) {
     await syncPublishPermission({ eventId: result.eventId, identity: result.identity, canPublish: false });
+    await ensureActiveSelectionRound(result.eventId, await listActiveSpeakersAuthoritative(result.eventId));
   }
   return result !== null;
 }
