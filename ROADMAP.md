@@ -1103,6 +1103,38 @@ different dependencies. Current order:
       `leaveSpeakerSeat` (same gap exists there, left for a future pass —
       this pass's own instructions scoped it to the round boundary
       specifically). See DECISIONS.md and SESSION_LOG.md's Session 50.
+
+      **Tenth corrective pass (2026-08-30, same branch)**: the deferred
+      extension happened this pass, plus more — a full trigger-matrix
+      audit found the identical gap in `leaveSpeakerSeat`,
+      `checkAndEvictInactiveSpeaker`, `requestToSpeak`,
+      `withdrawSpeakerRequest`, and `claimOpenSeat`'s failed-claim path;
+      all five now call the same reconciliation mechanism via a new
+      failure-swallowing `bestEffortReconcileSelection` helper. A
+      genuinely new mechanism (migration 00000000000039,
+      `release_failed_speaker_claim`) releases and advances past a
+      candidate whose authorized claim itself failed — previously left
+      stuck forever — deliberately without permanently disqualifying
+      them (a real design decision, flagged and proven with a real-
+      database test showing the same candidate winning a later
+      independent round). Dual-replacement/fallback chains (two seats,
+      three ranked candidates; a winner cancelling advances the fallback
+      without disturbing the other seat's valid reservation) proved with
+      real-database tests, not just asserted unchanged. Separately: a
+      real-device report of active-session diagnostics showing no sense
+      of "who's next" turned out to be a genuine diagnostics-clarity gap,
+      not a selection bug (`ensureActiveSelectionRound` already correctly
+      refuses to reserve early) — fixed by adding a "Live Replacement
+      Queue"/"Established mode"/"Selected-Reserved" summary to Selection
+      Forensics. A real Reset Session bug was traced to an actual
+      ordering race (a scheduled background write landing in the
+      database *after* Reset's own DELETE already ran, not a wrong
+      guest-id list or stale client rendering) and fixed with a delayed
+      follow-up sweep. New preview-only "Copy Debug Snapshot" tool for
+      pasting real-device state directly into a future session —
+      deliberately scoped down from the full requested spec (no
+      persisted rolling event-history subsystem this pass; flagged as
+      deferred). See DECISIONS.md and SESSION_LOG.md's Session 51.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

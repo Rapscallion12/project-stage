@@ -386,6 +386,26 @@ export async function setCurrentSpeakerCandidate(roundId: string, requestId: str
 }
 
 /**
+ * Issue #21, tenth corrective pass, Section 13: an authorized candidate's
+ * seat claim itself failed (a genuine race, not a withdrawal) — releases
+ * their reservation and atomically advances the next-ranked eligible
+ * candidate into it, server-side, under this round's own row lock. See
+ * migration 00000000000039's own doc comment for the full reasoning,
+ * including why this deliberately does *not* set `selection_failed`
+ * (unlike withdrawal) — a claim failure is presumptively transient, not
+ * a permanent disqualification. Trusted-server-only; a safe no-op if the
+ * request has already changed underneath the caller (claimed, withdrawn,
+ * or released by a concurrent caller).
+ */
+export async function releaseFailedSpeakerClaim(requestId: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("release_failed_speaker_claim", { p_request_id: requestId });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
  * Issue #21, Phase 1, Section E: the authoritative, race-safe candidate-
  * pool reset — called once, immediately after a successful claim/grant.
  * See migration 00000000000019's `reset_speaker_candidate_pool` for the

@@ -3,6 +3,157 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-30 — Tenth corrective pass: a full selection-trigger-matrix audit, dual-replacement/fallback proof, a live-replacement-queue diagnostics model, a real Reset race condition, and a real-device debug-snapshot tool (issue #21)
+
+**Context**: real-device evidence during an *active* session (two occupied
+seats, two eligible RTS requesters, already correctly ordered by vote
+count) showed the selection diagnostics giving no sense of who was
+"next" — `rank —` in Candidates, "No candidate selection in progress" in
+Next Speaker — even though the ordering itself was visibly correct
+elsewhere on screen. Separately, a post-Reset screenshot showed a
+simulator-generated comment/request still visible despite SIM reporting
+"Round 0 · awaiting pairing / No seats occupied." The user's prompt
+explicitly separated these two observations and asked for three things:
+(1) a live replacement-queue model, distinct from reservation, exposed in
+diagnostics; (2) a full audit of every state transition that can produce
+"vacant fillable seat + eligible RTS + no valid reservation," proving
+each one reconciles immediately, including dual-replacement/fallback
+chains; (3) the real root cause of the Reset artifact, fixed without
+weakening Reset's one-tap behavior or its real-data safety.
+
+**Finding 1 — the diagnostics gap was real, the selection logic
+underneath it was not**: read `ensureActiveSelectionRound`
+(`room/actions.ts`) directly — it already refuses to freeze/reserve
+anything while `findOpenSeats(activeSpeakers).length === 0`, exactly the
+"do not reserve early" invariant the prompt asked to preserve. During an
+active session with both seats full, `frozen_rank` is correctly `null`
+on every pending request (nothing has been frozen), which is what made
+Candidates show `rank —` and Next Speaker show nothing — accurate for
+*reservation*, but the SIM never separately exposed the one thing that
+*is* already live and correct at that moment: `pendingRequests`' own
+vote-count ordering (`useActiveSpeakerRequests`' sort, identical to
+`freeze_speaker_candidates`' SQL order). Fixed by adding a "Live
+Replacement Queue" to Selection Forensics — the same already-correct
+ordering, explicitly labeled and shown once (not duplicated per seat),
+plus "Established mode" and a "Selected / Reserved" summary distinct
+from it. No selection behavior changed — only what the diagnostics
+choose to show.
+
+**Finding 2 — a real, previously-unclosed trigger gap, five instances of
+it**: the ninth pass closed the gap for the round boundary specifically
+(`resolveStageRoundAction`/`resolveSeatClosingAction`). Reading every
+other vacancy/eligibility-creating function found the identical gap in
+five more places: `leaveSpeakerSeat` (voluntary leave),
+`checkAndEvictInactiveSpeaker` (inactivity eviction), `requestToSpeak`
+(a request arriving after a vacancy already exists), `withdrawSpeakerRequest`
+(a round left exhausted, needing a fresh freeze), and `claimOpenSeat`'s
+failed-claim path (see Finding 3). Each now calls a new private
+`bestEffortReconcileSelection` helper — a thin, failure-swallowing
+wrapper around the same `ensureActiveSelectionRound` every other
+reconciliation path already calls (never a fourth, differently-behaved
+mechanism), fed by the service-client `listActiveSpeakersAuthoritative`
+(the ninth pass's own fix) rather than the request-scoped
+`listActiveSpeakers` — same reasoning as that fix: "which seats are
+open" has no reason to be scoped to any one caller's session, and every
+caller here already resolved its own identity earlier in the same
+request for an unrelated reason. **Deliberately best-effort**: a
+leave/request/withdrawal that itself fully succeeded must never be
+reported as an error merely because this *follow-up* reconciliation hit
+a transient problem — the reactive client hook remains the backstop for
+that case, unchanged.
+
+**Finding 3 — a genuine, previously-nonexistent mechanism needed for
+"claim fails"**: reading `claimOpenSeat`'s catch block found it simply
+returned an error on a failed claim, leaving that candidate's own
+`is_current_candidate`/`reserved_seat_number` exactly as they were —
+authoritatively "reserved" for a seat they will never occupy, with
+nothing else ever re-evaluating it. New migration `00000000000039`
+(`release_failed_speaker_claim`) mirrors `withdraw_speaker_request`'s own
+next-candidate-advancement branch (migration 38) as closely as possible,
+under the same round-scoped row lock. **A genuine design decision, made
+and flagged, not left implicit**: this deliberately does *not* set
+`selection_failed = true` the way withdrawal does — a claim failure is
+presumptively transient (a race, not a deliberate "I don't want this"
+signal), and `selection_failed` has no per-round scope in the schema; it
+would follow a request's row into a later, completely independent fresh
+round (`freeze_speaker_candidates` doesn't reset it when re-freezing an
+already-pending row), permanently disqualifying an otherwise-legitimate
+candidate over what might have been one bad race. Proven directly: a
+real-database test confirms the failed candidate's row survives with
+`selection_failed = false` and can win a later, independent round on the
+merits. **A real, related interaction surfaced in the process, not
+fixed here**: `reset_speaker_candidate_pool`'s bulk-expire is event-wide,
+not round-scoped (already an open question from the eighth pass) — a
+released-but-still-`pending` failed-claim candidate can get swept into
+`expired` as a side effect of a *different* seat's own claim completing
+shortly after. Not a regression this pass introduced and not resolved
+here; noted as a sharper, now-demonstrated instance of the same
+already-open question.
+
+**Dual-replacement and fallback chains — proven, not just claimed**: the
+fifth pass's own atomic `reserve_speaker_candidates_for_seats` already
+handles reserving two seats to two distinct candidates in one
+transaction; this pass didn't touch it, only proved it still holds
+across every new trigger path. A real-database test (two empty seats,
+three ranked candidates) confirms both top-ranked candidates reserved
+distinctly, the third remaining an ordered, undisturbed fallback; a
+follow-up in the same test confirms the seat-1 winner cancelling
+advances the fallback into their seat while the seat-2 winner's own
+reservation is completely untouched. A second test proves the same for
+an authorized candidate whose claim genuinely fails (Finding 3).
+
+**Reset root cause — found by reading the actual mechanism, not
+guessing**: every scheduled background action (`schedule`, in
+`session-simulator-panel.tsx`) already re-checks `runningRef.current`
+immediately before firing — necessary, but not sufficient. The gap it
+can't close: a timer can fire and pass that check, dispatching its
+`simulateComment`/`simulateRequestToSpeak`/etc. call, an instant *before*
+a same-tick Reset flips `runningRef.current` false and runs its own
+DELETE — the dispatched call is already in flight by then, and its
+INSERT can land in the database *after* Reset's own DELETE already ran
+(ordinary network latency is enough of a window; comments alone schedule
+every 3-8s). This is genuinely **Case A** (the row really is in the
+database) caused by a real ordering race — not the guest-id list being
+wrong (every activity-generating control already draws from the same
+registered pool), and not stale client rendering (every DELETE this
+row's own table performs is already reactively reflected client-side via
+migration 00000000000023's `REPLICA IDENTITY FULL` + each hook's own
+DELETE handler). **Fix**: a second, delayed sweep — the exact same
+`resetSimulatorSession` call, same captured guest-id snapshot, ~2s
+later, fire-and-forget, silent unless it actually finds something. Never
+blocks the UI and never re-confirms anything — Reset stays one tap,
+immediate; the sweep's own timer is cleared on unmount so it can never
+fire against a gone panel.
+
+**Copy Debug Snapshot — built, deliberately scoped down from the full
+request**: a preview-only button performing a fresh, read-only
+authoritative fetch (`fetchDebugSnapshotState`, service-client, plain
+`select`s only — verified no mutation path exists) combined with the
+current tab's own client state, explicitly diffed, formatted as
+human-readable text, copied to the clipboard. **Deliberately deferred,
+not silently dropped**: the full spec's persisted 30-50-entry rolling
+event history with dedicated event names threaded through every server
+action is a genuinely separate logging subsystem — significant new
+instrumentation across every mutation path, not a small addition to this
+already-large pass. The snapshot instead points at this panel's own
+existing activity log (already timestamped, already showing meaningful
+transitions) as the practical equivalent for now. Flagged in this pass's
+own handoff QUESTIONS section, not decided unilaterally.
+
+**Reason**: every fix here follows the same discipline the ninth pass
+established — read the actual code before concluding something is
+broken (the diagnostics gap turned out to be a labeling problem, not a
+selection bug), reuse the existing atomic/idempotent mechanisms rather
+than inventing parallel ones, and flag a genuine design choice
+(selection_failed on claim-failure) rather than deciding it silently.
+
+**Tradeoffs**: none against any previously-established invariant —
+deterministic RTS ranking, the atomic dual-seat reservation, the
+3-second Going Live countdown, server-authoritative claiming, the shared
+single-round model, and Reset's one-tap/real-data-safe behavior are all
+unchanged; the full existing test suite (real-database tests included)
+still passes.
+
 ## 2026-08-30 — Ninth corrective pass: the round boundary itself never triggered selection — it depended on a separate, reactive client round trip (issue #21)
 
 **Context**: explicit instruction to discard the prior ("Bold Falcon")

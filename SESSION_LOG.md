@@ -4,6 +4,103 @@ Newest entry first.
 
 ---
 
+## 2026-08-30 — Session 51: Tenth corrective pass — full selection-trigger-matrix audit, dual-replacement/fallback proof, a live-replacement-queue diagnostics model, a real Reset race condition fixed, and a real-device debug-snapshot tool (issue #21)
+
+**Goal**: real-device evidence during an *active* session (two occupied
+seats, two eligible RTS requesters, already correctly vote-ordered)
+showed selection diagnostics with no sense of who was next; a separate
+post-Reset screenshot showed a leftover simulator comment despite SIM
+reporting a clean slate. Explicit ask: a live replacement-queue model
+distinct from reservation; a full trigger-matrix audit proving every
+"vacant seat + eligible RTS + no reservation" transition reconciles
+immediately, including dual-replacement/fallback chains; the real Reset
+root cause; and a preview-only "Copy Debug Snapshot" tool for future
+real-device reports.
+
+**Diagnostics gap, not a selection bug**: `ensureActiveSelectionRound`
+already refuses to freeze/reserve while no seat is open — exactly the
+"don't reserve early" invariant this pass was told to preserve. During
+an active session, `frozen_rank` is correctly `null` on every pending
+request (nothing frozen yet), which is what made Candidates show
+`rank —` — accurate for reservation, but the SIM never separately
+surfaced what *is* already live and correct: the vote-count ordering
+itself. Added a "Live Replacement Queue" to Selection Forensics — the
+same already-correct ordering, shown once and explicitly labeled — plus
+"Established mode" and a "Selected / Reserved" summary. No selection
+logic changed.
+
+**Trigger-matrix audit — five more real gaps, same shape as the ninth
+pass's round-boundary fix**: `leaveSpeakerSeat`, `checkAndEvictInactiveSpeaker`,
+`requestToSpeak`, `withdrawSpeakerRequest`, and `claimOpenSeat`'s
+failed-claim path all had the identical gap — a vacancy/eligibility
+change with nothing calling `ensureActiveSelectionRound` directly, left
+entirely to the reactive client hook. Each now calls a new
+`bestEffortReconcileSelection` helper (failure-swallowing, so a
+successful primary action is never reported as failed over a transient
+reconciliation problem), using the same service-client
+`listActiveSpeakersAuthoritative` the ninth pass introduced.
+
+**A genuinely new mechanism for failed claims**: nothing previously
+released a candidate whose authorized claim itself failed — their
+reservation just sat there, stuck, forever. New migration
+00000000000039 (`release_failed_speaker_claim`) mirrors withdrawal's own
+next-candidate advancement. Deliberately does *not* set
+`selection_failed` (unlike withdrawal) — a claim failure is
+presumptively transient, and that flag has no per-round scope, so it
+would permanently disqualify the candidate from any later, independent
+round. Flagged explicitly as a design decision, proven directly with a
+real-database test showing the same candidate winning a later fresh
+round on the merits. A real, related interaction surfaced along the
+way: `reset_speaker_candidate_pool`'s bulk-expire being event-wide (not
+round-scoped) — already an open question from the eighth pass — can
+sweep a released-but-still-pending failed candidate into `expired` as a
+side effect of a *different* seat's claim completing. Not fixed here;
+sharper evidence for an already-open question.
+
+**Dual-replacement/fallback — proven, not just claimed unchanged**: a
+real-database test (two empty seats, three ranked candidates) confirms
+the top two reserved distinctly, the third an undisturbed fallback; the
+seat-1 winner cancelling correctly advances the fallback into their seat
+while the seat-2 winner is untouched. A second test proves the same for
+a genuinely failed claim.
+
+**Reset root cause — a real ordering race, found by reading the actual
+mechanism**: every scheduled SIM action already checks `runningRef.current`
+right before firing, but a timer that fires an instant *before* Reset
+flips that flag dispatches its write anyway — the in-flight call's
+INSERT can land in the database *after* Reset's own DELETE already ran.
+Genuinely Case A (the row really is in the database), not a stale guest-
+id list (every control already draws from the same registered pool) and
+not stale client rendering (DELETE reconciliation for these tables was
+already fixed, migration 23). Fixed with a second, delayed sweep — same
+call, same id snapshot, ~2s later, silent unless it finds something;
+Reset itself stays one tap and immediate.
+
+**Copy Debug Snapshot**: a preview-only button doing a fresh, read-only
+authoritative fetch combined with current client state, diffed, copied
+as human-readable text. Deliberately scoped down from the full request's
+persisted 30-50-entry rolling event-history subsystem — flagged as
+deferred, not silently dropped; points at the SIM's own existing
+activity log instead for now.
+
+**Verification**: full suite (1070 tests, 80 files — up from 1055/79),
+lint, tsc, build all clean. New real-database test file
+(`replacement-queue-and-triggers.test.ts`) covers the trigger matrix
+items testable without a live request context (failed claim, dual/multi-
+candidate reservation, cancel-fallback chains, tie-breaking, request-
+after-vacancy and vacancy-after-request) — the five newly-fixed Server
+Actions themselves wrap `resolveIdentity()` (real cookies) and so were
+verified by direct code reading plus real-browser testing instead, the
+same constraint the ninth pass's own test file worked around. Live
+browser: reproduced the exact active-session diagnostics finding and
+confirmed the fix; multiple live replacement cycles with reservation
+observed in 27ms-2s; Copy Debug Snapshot confirmed copying in a real
+browser; Reset follow-up sweep verified deterministically with fake
+timers (a real-timing live-browser race is inherently non-deterministic
+to force on demand). Not merged to `main`; fresh preview deployed.
+
+---
+
 ## 2026-08-30 — Session 50: Ninth corrective pass — the round boundary never triggered selection itself; it depended on a separate reactive client round trip (issue #21)
 
 **Goal**: a focused re-scope after discarding a prior investigation

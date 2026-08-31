@@ -5,7 +5,7 @@ import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
-import type { ResetSimulatorSessionResult } from "@/app/events/[id]/room/simulator-actions";
+import type { ResetSimulatorSessionResult, DebugSnapshotState } from "@/app/events/[id]/room/simulator-actions";
 import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
 
 /**
@@ -37,6 +37,7 @@ const {
   forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
+  fetchDebugSnapshotState,
   reconcileStageRoundAction,
   supabaseFrom,
   stageRoundRow,
@@ -114,6 +115,12 @@ const {
       };
     }),
     simulateAdvanceSelection,
+    fetchDebugSnapshotState: vi.fn<(...args: unknown[]) => Promise<DebugSnapshotState>>(async () => ({
+      fetchedAt: new Date().toISOString(),
+      round: null,
+      seats: [],
+      pendingRequests: [],
+    })),
     reconcileStageRoundAction: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     supabaseFrom,
     stageRoundRow,
@@ -136,6 +143,7 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
+  fetchDebugSnapshotState,
 }));
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
@@ -1203,13 +1211,20 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByTestId("sim-forensics-1")).toBeInTheDocument();
     });
 
-    it("shows the ranking at the selection boundary (frozen) separately from the current live ranking, and names the expected winner from the boundary ranking specifically", () => {
+    it("shows the ranking at the selection boundary (frozen) per seat, the live replacement queue once at the top, and names the expected winner from the boundary ranking specifically", () => {
       render(
         <SessionSimulatorPanel
           {...baseProps}
+          // Issue #21, tenth corrective pass: the Live Replacement Queue
+          // trusts caller order the same way Top Speaker Requests
+          // already does — in production `useActiveSpeakerRequests`
+          // delivers `pendingRequests` pre-sorted by live voteCount, so
+          // this fixture supplies that same already-sorted order
+          // directly (Later Riser first — 9 votes, gained *after* the
+          // boundary — ahead of Boundary Winner's 5).
           pendingRequests={[
+            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 2, voteCount: 9 }),
             request({ id: "r1", guest_id: "g1", message_id: "m1", frozen_rank: 1, frozen_vote_count: 5, voteCount: 5 }),
-            request({ id: "r2", guest_id: "g2", message_id: "m2", frozen_rank: 2, frozen_vote_count: 2, voteCount: 9 }), // gained votes *after* the boundary
           ]}
           messages={
             [
@@ -1223,11 +1238,28 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       const seat1 = screen.getByTestId("sim-forensics-1");
       expect(seat1).toHaveTextContent("RTS ranking at boundary:");
       expect(seat1).toHaveTextContent("#1 Boundary Winner — 5");
-      expect(seat1).toHaveTextContent("Current RTS ranking");
-      // Later Riser now outranks Boundary Winner live, but the boundary
-      // ranking (what actually decided the winner) is unaffected by it.
-      expect(seat1).toHaveTextContent("#2 Later Riser — 2");
       expect(screen.getByTestId("sim-forensics-expected-1")).toHaveTextContent("Boundary Winner");
+
+      // The live replacement queue — shown once, not duplicated per
+      // seat — reflects the *current* order (voteCount), which can
+      // differ from the frozen boundary ranking above it.
+      const queueRows = screen.getAllByTestId("sim-queue-row");
+      expect(queueRows[0]).toHaveTextContent("#1 Later Riser — 9");
+      expect(queueRows[1]).toHaveTextContent("#2 Boundary Winner — 5");
+    });
+
+    it("shows Established mode and Selected/Reserved per seat", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageRound={stageRoundFixture({ round_number: 2, phase: "active" })}
+          pendingRequests={[request({ id: "r1", guest_id: "g1", frozen_rank: 1, frozen_vote_count: 5, is_current_candidate: true, reserved_seat_number: 1 })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-forensics-toggle"));
+      expect(screen.getByTestId("sim-established-mode")).toHaveTextContent("yes");
+      expect(screen.getByTestId("sim-selected-reserved-1")).not.toHaveTextContent("none");
+      expect(screen.getByTestId("sim-selected-reserved-2")).toHaveTextContent("none");
     });
 
     it("flags when the reserved candidate differs from the expected boundary winner", () => {
@@ -1449,6 +1481,60 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(secondRunIds.some((id) => firstRunIds.includes(id))).toBe(false);
     });
 
+    // Issue #21, tenth corrective pass, Sections 26-27: a real-device
+    // report found a simulator-generated comment/request still visible
+    // after Reset — traced to a real ordering race (a scheduled
+    // background write already in flight, landing in the database
+    // *after* Reset's own DELETE already ran), not the guest-id list
+    // being wrong. Fixed with a second, delayed sweep — same call, same
+    // id snapshot, ~2s later, silent unless it actually finds something.
+    it("a delayed follow-up sweep catches a straggler write that lands after the first Reset pass, and reports it in the log", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      resetSimulatorSession.mockResolvedValueOnce({
+        messagesDeleted: 0,
+        reactionsDeleted: 0,
+        speakersDeleted: 0,
+        requestVotesDeleted: 0,
+        roundVotesDeleted: 0,
+      });
+      resetSimulatorSession.mockResolvedValueOnce({
+        messagesDeleted: 1,
+        reactionsDeleted: 0,
+        speakersDeleted: 0,
+        requestVotesDeleted: 0,
+        roundVotesDeleted: 0,
+      });
+
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("sim-log")).not.toHaveTextContent("follow-up");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
+      // Same captured guest-id snapshot both times.
+      expect(resetSimulatorSession.mock.calls[1][1]).toEqual(resetSimulatorSession.mock.calls[0][1]);
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("follow-up");
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("caught 1 straggler row(s)");
+    });
+
+    it("the delayed follow-up sweep stays silent when it finds nothing (the ordinary, no-race case)", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(1));
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
+      expect(screen.getByTestId("sim-log")).not.toHaveTextContent("follow-up");
+    });
+
     it("starting again after reset seeds a clean 2-speaker stage again — auto-seeding is not a one-time-per-mount thing", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
@@ -1623,6 +1709,114 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
 
       Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1024 });
       Object.defineProperty(window, "innerHeight", { writable: true, configurable: true, value: 768 });
+    });
+  });
+
+  // Issue #21, tenth corrective pass, Sections 1-25: "Copy Debug
+  // Snapshot" — a fresh authoritative read combined with this tab's own
+  // client state, copied as human-readable text, read-only.
+  describe("Copy Debug Snapshot (issue #21, tenth corrective pass)", () => {
+    function mockClipboard() {
+      const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      return writeText;
+    }
+
+    it("performs a fresh authoritative read and copies a human-readable snapshot, showing brief confirmation", async () => {
+      const writeText = mockClipboard();
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "s1", seat_number: 1 })]}
+          pendingRequests={[request({ id: "r1", guest_id: "g1" })]}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+
+      await waitFor(() => expect(fetchDebugSnapshotState).toHaveBeenCalledWith(baseProps.eventId));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("VIRTUAL STAGE DEBUG SNAPSHOT");
+      expect(copied).toContain("ROOM");
+      expect(copied).toContain("AUTHORITATIVE SEATS");
+      expect(copied).toContain("LIVE RTS RANKING");
+      expect(copied).toContain("SELECTED / RESERVED");
+      expect(copied).toContain("STATE MISMATCHES");
+      expect(copied).toContain("RESET / SIMULATOR OWNERSHIP");
+
+      await waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("Copied ✓"));
+    });
+
+    it("flags a client/authoritative seat-occupancy mismatch", async () => {
+      const writeText = mockClipboard();
+      fetchDebugSnapshotState.mockResolvedValueOnce({
+        fetchedAt: new Date().toISOString(),
+        round: null,
+        seats: [], // authoritative: nothing occupied
+        pendingRequests: [],
+      });
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 1 })]} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("Seat 1: client says occupied, database says vacant");
+    });
+
+    it("reports no mismatches when client and authoritative state agree", async () => {
+      const writeText = mockClipboard();
+      fetchDebugSnapshotState.mockResolvedValueOnce({
+        fetchedAt: new Date().toISOString(),
+        round: null,
+        seats: [{ seat_number: 1, display_name: "Someone", identity_kind: "guest", disconnected: false }],
+        pendingRequests: [],
+      });
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 1 })]} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      expect(writeText.mock.calls[0][0]).toContain("none detected");
+    });
+
+    it("still copies a local-only snapshot, clearly marked, when the authoritative fetch fails", async () => {
+      const writeText = mockClipboard();
+      fetchDebugSnapshotState.mockRejectedValueOnce(new Error("network blip"));
+      render(<SessionSimulatorPanel {...baseProps} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("FETCH FAILED — network blip");
+      expect(copied).not.toContain("undefined");
+    });
+
+    it("shows a failure state (never a silent no-op) when the clipboard write itself fails", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(async () => {
+        throw new Error("clipboard permission denied");
+      });
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("Copy failed"));
+    });
+
+    it("is read-only — never triggers selection, claims, votes, or Reset as a side effect", async () => {
+      const writeText = mockClipboard();
+      render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1" })]} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      expect(simulateAdvanceSelection).not.toHaveBeenCalled();
+      expect(resetSimulatorSession).not.toHaveBeenCalled();
+      expect(simulateRoundVote).not.toHaveBeenCalled();
+      expect(simulateRequestVote).not.toHaveBeenCalled();
     });
   });
 });

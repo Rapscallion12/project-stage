@@ -13,6 +13,43 @@ merged to `main`.
 
 ### Changed
 
+- **Selection now reconciles immediately from five more state changes
+  that used to depend entirely on a reactive client round trip**
+  (issue #21, tenth corrective pass) — voluntary speaker leave,
+  inactivity eviction, a Request-to-Speak arriving after a vacancy
+  already exists, a withdrawal leaving a round exhausted, and an
+  authorized candidate's claim itself failing. The last of these is new
+  behavior, not just a faster trigger: an authorized candidate whose
+  claim failed previously stayed stuck "reserved" for a seat they'd
+  never occupy, with the next-ranked eligible candidate never
+  advancing — now released and advanced automatically, without
+  disturbing any other seat's own valid reservation, and without
+  permanently disqualifying the failed candidate from a later,
+  independent round. Proven with real-database tests, including
+  dual-replacement and cancel/fallback chains. See DECISIONS.md.
+- **Session Simulator's diagnostics now show a live "Replacement Queue"
+  during an active round, distinct from reservation** (issue #21, tenth
+  corrective pass) — a real-device report found the diagnostics giving
+  no sense of who was "next" during an active session even though the
+  underlying vote ordering was already correct; this was a diagnostics-
+  clarity gap, not a selection bug (nothing is ever reserved before a
+  replacement is actually decided). Also adds "Established mode" and a
+  "Selected / Reserved" summary. See DECISIONS.md.
+- **Fixed a real Session Simulator Reset Session bug**: a simulator-
+  generated comment or request could remain visible after Reset,
+  despite Reset itself reporting success (issue #21, tenth corrective
+  pass) — traced to a genuine ordering race (a scheduled background
+  write already in flight when Reset ran, landing in the database just
+  after Reset's own cleanup), not a wrong guest-id list or stale client
+  rendering. Fixed with a silent, delayed follow-up cleanup pass; Reset
+  remains one tap and immediate. See DECISIONS.md.
+- **Added a preview-only "Copy Debug Snapshot" tool to Session
+  Simulator** (issue #21, tenth corrective pass) — one tap copies a
+  fresh, read-only, human-readable snapshot of authoritative and local
+  client state (seats, live RTS ranking/queue, reservations, and any
+  detected client/database mismatches) to the clipboard, for pasting
+  directly into a future debugging session from a real device. See
+  DECISIONS.md.
 - **The highest-voted eligible Request-to-Speak candidate is now
   reserved immediately when the shared round boundary resolves, in the
   same call — not seconds later, after a separate client notices the

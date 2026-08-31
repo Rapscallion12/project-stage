@@ -14,6 +14,7 @@ import {
   forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
+  fetchDebugSnapshotState,
 } from "@/app/events/[id]/room/simulator-actions";
 import { reconcileStageRoundAction } from "@/app/events/[id]/room/actions";
 import { createClient } from "@/lib/supabase/client";
@@ -319,6 +320,9 @@ export function SessionSimulatorPanel({
   // demand instead, same discipline the panel-minimize control already
   // established for the whole panel.
   const [forensicsExpanded, setForensicsExpanded] = useState(false);
+  // Issue #21, tenth corrective pass, Sections 1-25: "Copy Debug
+  // Snapshot" — see `copyDebugSnapshot`'s own doc comment below.
+  const [snapshotStatus, setSnapshotStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   // Issue #21, eighth corrective pass, Section 29: a short, preview-only
@@ -362,6 +366,19 @@ export function SessionSimulatorPanel({
   // `resetSimulatorSession`'s own doc comment for why an exact in-memory
   // id list is the safe mechanism here, not a new schema column.
   const allSimulatedGuestIdsRef = useRef<Set<string>>(new Set());
+  // Issue #21, tenth corrective pass, Section 27: guards the delayed
+  // Reset follow-up sweep's own log update (see `handleReset`) against
+  // firing after this panel has unmounted — the sweep's actual DB
+  // cleanup runs regardless (harmless even with nobody listening), only
+  // the `setLog` call needs this.
+  const mountedRef = useRef(true);
+  // The follow-up sweep's own timer handle — cleared on unmount (see the
+  // cleanup effect below) so a real, still-pending sweep can never fire
+  // *after* this panel is gone and call `resetSimulatorSession` a second
+  // time nobody asked for (harmless in a real browser tab, which rarely
+  // "unmounts" mid-session — but real hygiene, and avoids a stray real
+  // timer bleeding a second mock call into an unrelated later test).
+  const resetFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Display names for every guest id above — kept alongside the id set
   // rather than re-derived, since `simulateAdvanceSelection` needs a
   // display name for whichever simulated identity gets promoted, and the
@@ -859,6 +876,47 @@ export function SessionSimulatorPanel({
    * the same "don't just trust the incremental delta arrived" discipline
    * `useActiveSpeakers`' own SUBSCRIBED-triggers-full-refetch already
    * uses elsewhere in this room.
+   *
+   * **Issue #21, tenth corrective pass, Sections 26-27: a real-device
+   * report found a simulator-generated comment/request still visible
+   * after Reset**, with SIM already showing "Round 0 · awaiting
+   * pairing / No seats occupied." Reproduced by reading the actual
+   * mechanism (never assumed): every scheduled background action
+   * (`schedule`, above) already re-checks `runningRef.current`
+   * immediately before firing — necessary, but not sufficient. The gap
+   * it can't close: a timer can fire and pass that check, dispatching
+   * its `simulateComment`/`simulateRequestToSpeak`/etc. call, an instant
+   * *before* a same-tick Reset flips `runningRef.current` false and
+   * runs its own DELETE — the dispatched call is already in flight by
+   * then, uncatchable by any guard checked before it started, and its
+   * INSERT can land in the database *after* Reset's DELETE already ran
+   * (ordinary network latency is enough of a window; comments alone
+   * schedule every 3-8s, so some in-flight call at any given instant is
+   * common, not rare). This is genuinely **Case A** (the row really is
+   * in the database — not stale client rendering; every DELETE this
+   * row's own table performs is already reactively reflected client-side
+   * via each hook's existing Realtime DELETE handler, migration
+   * 00000000000023) caused by a real ordering race, not by the guest-id
+   * list itself being wrong (every button that generates simulated
+   * activity draws from `audienceRef.current`, already fully registered
+   * in `allSimulatedGuestIdsRef` at Start).
+   *
+   * **Fix**: a second, delayed sweep — the exact same
+   * `resetSimulatorSession` call, same captured `guestIds` snapshot,
+   * fire-and-forget ~2s after the first pass. By then any write that was
+   * merely in flight at the moment of the first pass has long since
+   * landed, so the second pass's own DELETE catches it. Never blocks the
+   * UI and never re-confirms anything (Section 29: Reset stays one tap,
+   * immediate) — the button's own "executing" state still resolves after
+   * the *first* pass; the sweep runs silently afterward and only adds a
+   * log line if it actually found something, so the ordinary (no race)
+   * case is invisible. Re-running the same deletion against ids that are
+   * already gone is a safe no-op (`resetSimulatorSession` itself is
+   * idempotent — `count: 0` on every table, same as calling Reset twice
+   * in a row already was). Cannot delete a *new* run's own data even if
+   * one starts within that 2s window: guest ids are always freshly
+   * generated (`crypto.randomUUID()`), so an old run's captured id list
+   * can never collide with a new run's.
    */
   async function handleReset() {
     startupTokenRef.current++; // see `startupTokenRef`'s own doc comment
@@ -884,9 +942,36 @@ export function SessionSimulatorPanel({
       `${new Date().toLocaleTimeString()} — Reset — cleared ${result.messagesDeleted} comments, ${result.reactionsDeleted} likes, ${result.speakersDeleted} speaker seats, ${result.requestVotesDeleted} request votes, ${result.roundVotesDeleted} round votes`,
     ]);
     onSimulatorReset?.();
+
+    if (guestIds.length > 0) {
+      resetFollowUpTimerRef.current = setTimeout(() => {
+        resetFollowUpTimerRef.current = null;
+        void resetSimulatorSession(eventId, guestIds).then((followUp) => {
+          const strayTotal =
+            followUp.messagesDeleted +
+            followUp.reactionsDeleted +
+            followUp.speakersDeleted +
+            followUp.requestVotesDeleted +
+            followUp.roundVotesDeleted;
+          if (strayTotal === 0 || !mountedRef.current) return;
+          setLog((prev) =>
+            [
+              `${new Date().toLocaleTimeString()} — Reset follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight when Reset ran`,
+              ...prev,
+            ].slice(0, 30),
+          );
+        });
+      }, 2000);
+    }
   }
 
-  useEffect(() => stopAllTimers, []);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      stopAllTimers();
+      if (resetFollowUpTimerRef.current !== null) clearTimeout(resetFollowUpTimerRef.current);
+    };
+  }, []);
 
   function requireAudience(): SimulatedIdentity[] | null {
     if (audienceRef.current.length === 0) {
@@ -1257,6 +1342,145 @@ export function SessionSimulatorPanel({
     return "eligible candidate detection — no eligible request observed yet";
   }
 
+  /**
+   * Issue #21, tenth corrective pass, Sections 1-25: "Copy Debug
+   * Snapshot" — preview-only. The user's own real-device reports have
+   * repeatedly found problems automated/browser testing didn't catch;
+   * this exists so a real-device failure can be pasted directly back
+   * into a Claude Code session instead of relied on describing from a
+   * screenshot. Deliberately scoped down from the full spec this pass
+   * was asked to build toward (no persisted 30-50 event rolling
+   * history threaded through every server action — a genuinely separate
+   * logging subsystem, flagged as deferred in this pass's own handoff
+   * QUESTIONS section) — this instead combines a **fresh, read-only
+   * authoritative fetch** (`fetchDebugSnapshotState`, never this tab's
+   * own possibly-stale props) with this tab's own current client state,
+   * explicitly diffs the two, and points at the activity log already
+   * visible in this panel for recent selection-relevant events, rather
+   * than duplicating that history a second time.
+   *
+   * **Read-only, always** — `fetchDebugSnapshotState` performs plain
+   * `select`s only (verified in its own doc comment); nothing this
+   * function does can trigger selection, reserve a candidate, alter a
+   * vote, or change seat ownership.
+   *
+   * **No secrets**: only display names, vote counts, seat numbers, and
+   * round/phase state — no tokens, cookies, or raw ids beyond what's
+   * already visible elsewhere in this preview-only panel.
+   */
+  async function copyDebugSnapshot() {
+    setSnapshotStatus("copying");
+    const lines: string[] = [];
+    const push = (line = "") => lines.push(line);
+
+    push("VIRTUAL STAGE DEBUG SNAPSHOT");
+    push(`Captured: ${new Date().toISOString()}`);
+    push(`Event: ${eventId}`);
+    push("");
+
+    let authoritative: Awaited<ReturnType<typeof fetchDebugSnapshotState>> | null = null;
+    let authoritativeError: string | null = null;
+    try {
+      authoritative = await fetchDebugSnapshotState(eventId);
+    } catch (err) {
+      authoritativeError = err instanceof Error ? err.message : "unknown error";
+    }
+
+    const established = stageRound !== null && stageRound.round_number >= 1;
+    push("ROOM");
+    push(`Established mode: ${established ? "yes" : "no"}`);
+    push(`Simulator running: ${running ? "yes" : "no"}`);
+    push(`Client round: #${stageRound?.round_number ?? "—"} ${stageRound?.phase ?? "none"}${sharedRemaining !== null ? ` (${sharedRemaining}s remaining)` : ""}`);
+    if (authoritative) {
+      push(
+        `Authoritative round: #${authoritative.round?.round_number ?? "—"} ${authoritative.round?.phase ?? "none"}`,
+      );
+    } else {
+      push(`Authoritative round: FETCH FAILED — ${authoritativeError}`);
+    }
+    push("");
+
+    push("AUTHORITATIVE SEATS");
+    if (authoritative) {
+      if (authoritative.seats.length === 0) push("  (none occupied)");
+      for (const seat of authoritative.seats) {
+        push(`  Seat ${seat.seat_number}: ${seat.display_name} (${seat.identity_kind})${seat.disconnected ? " — disconnected" : ""}`);
+      }
+    } else {
+      push(`  FETCH FAILED — ${authoritativeError}`);
+    }
+    push("");
+
+    push("LIVE RTS RANKING (authoritative)");
+    if (authoritative) {
+      if (authoritative.pendingRequests.length === 0) push("  (none pending)");
+      const ranked = [...authoritative.pendingRequests].sort((a, b) => b.vote_count - a.vote_count);
+      ranked.forEach((r, i) => {
+        push(
+          `  #${i + 1} ${r.display_name} — ${r.vote_count} votes${r.selection_failed ? " (not eligible — previously failed)" : ""}${
+            r.is_current_candidate ? ` — RESERVED (Seat ${r.reserved_seat_number})` : ""
+          }`,
+        );
+      });
+    } else {
+      push(`  FETCH FAILED — ${authoritativeError}`);
+    }
+    push("");
+
+    push("SELECTED / RESERVED");
+    for (const seatNumber of [1, 2] as const) {
+      const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
+      push(`  Seat ${seatNumber}: ${reserved ? candidateName(reserved) : "none"}`);
+    }
+    push("");
+
+    push("CLIENT STATE (this tab)");
+    push(`  Seats occupied: ${speakers.map((s) => `${s.seat_number}:${s.display_name}`).join(", ") || "(none)"}`);
+    push(`  Pending requests: ${pendingRequests.length}`);
+    push("");
+
+    push("STATE MISMATCHES");
+    const mismatches: string[] = [];
+    if (authoritative) {
+      const authSeatNums = new Set(authoritative.seats.map((s) => s.seat_number));
+      const clientSeatNums = new Set(speakers.map((s) => s.seat_number));
+      for (const n of [1, 2] as const) {
+        if (authSeatNums.has(n) !== clientSeatNums.has(n)) {
+          mismatches.push(`Seat ${n}: client says ${clientSeatNums.has(n) ? "occupied" : "vacant"}, database says ${authSeatNums.has(n) ? "occupied" : "vacant"}`);
+        }
+      }
+      if (authoritative.pendingRequests.length !== pendingRequests.length) {
+        mismatches.push(`Pending request count: client=${pendingRequests.length}, database=${authoritative.pendingRequests.length}`);
+      }
+      if ((authoritative.round?.round_number ?? null) !== (stageRound?.round_number ?? null)) {
+        mismatches.push(`Round number: client=${stageRound?.round_number ?? "none"}, database=${authoritative.round?.round_number ?? "none"}`);
+      }
+    }
+    if (mismatches.length === 0) {
+      push(authoritative ? "  none detected" : "  unknown — authoritative fetch failed, see ROOM above");
+    } else {
+      for (const m of mismatches) push(`  - ${m}`);
+    }
+    push("");
+
+    push("RESET / SIMULATOR OWNERSHIP");
+    push(`  Guest ids tracked this run: ${allSimulatedGuestIdsRef.current.size}`);
+    push("");
+
+    push("RECENT ACTIVITY (see this panel's own log — most recent first)");
+    for (const line of log.slice(0, 15)) push(`  ${line}`);
+
+    const text = lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setSnapshotStatus("copied");
+      setTimeout(() => setSnapshotStatus("idle"), 2000);
+    } catch {
+      setSnapshotStatus("error");
+      setTimeout(() => setSnapshotStatus("idle"), 3000);
+    }
+  }
+
   return (
     <div
       ref={panelRef}
@@ -1333,6 +1557,16 @@ export function SessionSimulatorPanel({
         </SimButton>
         <SimButton data-testid="sim-resolve-round" onClick={resolveRoundNow} className="rounded bg-indigo-600 px-2 py-1 font-medium">
           Resolve Round Now
+        </SimButton>
+        {/*
+          Issue #21, tenth corrective pass, Sections 1, 25: a real-device
+          bug report is far more useful as pasteable text than a
+          screenshot — see `copyDebugSnapshot`'s own doc comment. Kept in
+          the same compact button row (not a separate modal) so the panel
+          stays usable one-handed on a phone.
+        */}
+        <SimButton data-testid="sim-copy-debug-snapshot" onClick={copyDebugSnapshot} className="rounded bg-teal-700 px-2 py-1 font-medium">
+          {snapshotStatus === "copied" ? "Copied ✓" : snapshotStatus === "error" ? "Copy failed" : "Copy Debug Snapshot"}
         </SimButton>
       </div>
 
@@ -1530,66 +1764,96 @@ export function SessionSimulatorPanel({
         >
           Selection Forensics {forensicsExpanded ? "▾" : "▸"}
         </button>
-        {forensicsExpanded &&
-          ([1, 2] as const).map((seatNumber) => {
-            const vacant = !seatIsOccupied(seatNumber);
-            // RANKING AT BOUNDARY: frozen_rank/frozen_vote_count — set
-            // once, by the real freeze RPC, never recomputed here.
-            const atBoundary = pendingRequests
-              .filter((r) => r.frozen_rank !== null)
-              .sort((a, b) => (a.frozen_rank ?? 0) - (b.frozen_rank ?? 0));
-            // CURRENT RTS ranking: live voteCount — the same order
-            // `pendingRequests` already arrives in (see
-            // useActiveSpeakerRequests' own doc comment), shown
-            // separately so a diverging vote count after the boundary is
-            // visible without being mistaken for what actually decided
-            // the winner.
-            const current = pendingRequests;
-            const expectedWinner = atBoundary[0] ?? null;
-            const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber) ?? null;
-            return (
-              <div key={seatNumber} data-testid={`sim-forensics-${seatNumber}`} className="mt-1 rounded bg-white/5 p-1.5">
-                <p className="font-medium text-white/80">Seat {seatNumber}</p>
-                <p className="text-white/70">Vacant: {vacant ? "yes" : "no"}</p>
-                <p className="text-white/70">Round: #{stageRound?.round_number ?? "—"}</p>
-                <p className="mt-1 text-white/50">RTS ranking at boundary:</p>
-                {atBoundary.length === 0 ? (
-                  <p className="pl-2 text-white/40">none frozen yet</p>
-                ) : (
-                  atBoundary.map((r) => (
-                    <p key={r.id} className="pl-2 text-white/70">
-                      #{r.frozen_rank} {candidateName(r)} — {r.frozen_vote_count}
-                    </p>
-                  ))
-                )}
-                <p className="mt-1 text-white/50">Current RTS ranking (live — may differ from boundary):</p>
-                {current.length === 0 ? (
-                  <p className="pl-2 text-white/40">none</p>
-                ) : (
-                  current.map((r, i) => (
-                    <p key={r.id} className="pl-2 text-white/70">
-                      #{i + 1} {candidateName(r)} — {r.voteCount}
-                    </p>
-                  ))
-                )}
-                <p className="mt-1 text-white/70" data-testid={`sim-forensics-expected-${seatNumber}`}>
-                  Expected winner: {expectedWinner ? candidateName(expectedWinner) : "none"}
+        {forensicsExpanded && (
+          <>
+            {/*
+              Issue #21, tenth corrective pass, Sections 1-6, 32: "during
+              an active round, the system already knows who's requesting,
+              who's eligible, and their current vote ordering — the
+              diagnostics just never labeled that ordering as anything."
+              This IS the live replacement queue Section 4 asks to expose
+              — not new selection logic (nothing here is reserved by
+              being shown here; see `computeWaitingReason`'s own "do not
+              reserve early" invariant, unchanged), just the same
+              already-live `pendingRequests` ordering (most votes, tie →
+              earliest active request — `useActiveSpeakerRequests`' own
+              sort, identical to `freeze_speaker_candidates`' SQL order)
+              under an explicit label, shown once here rather than
+              silently re-derived and duplicated inside every seat's own
+              block below the way an earlier cut of this section did.
+            */}
+            <p className="mt-1 text-white/70" data-testid="sim-established-mode">
+              Established mode: {stageRound !== null && stageRound.round_number >= 1 ? "yes" : "no"}
+            </p>
+            <p className="mt-1 text-white/50">Live Replacement Queue (not a reservation — current order only):</p>
+            {pendingRequests.length === 0 ? (
+              <p className="pl-2 text-white/40">none</p>
+            ) : (
+              pendingRequests.map((r, i) => (
+                <p key={r.id} data-testid="sim-queue-row" className="pl-2 text-white/70">
+                  #{i + 1} {candidateName(r)} — {r.voteCount}
+                  {r.selection_failed && <span className="text-white/40"> (not eligible)</span>}
                 </p>
-                <p className="text-white/70" data-testid={`sim-forensics-reserved-${seatNumber}`}>
-                  Reserved: {reserved ? candidateName(reserved) : "none"}
-                  {reserved && expectedWinner && reserved.id !== expectedWinner.id && (
-                    <span className="font-semibold text-red-400"> — different from expected winner</span>
+              ))
+            )}
+            <p className="mt-1 text-white/50">Selected / Reserved:</p>
+            {([1, 2] as const).map((seatNumber) => {
+              const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber) ?? null;
+              return (
+                <p key={seatNumber} className="pl-2 text-white/70" data-testid={`sim-selected-reserved-${seatNumber}`}>
+                  Seat {seatNumber}: {reserved ? candidateName(reserved) : "none"}
+                </p>
+              );
+            })}
+            {([1, 2] as const).map((seatNumber) => {
+              const vacant = !seatIsOccupied(seatNumber);
+              // RANKING AT BOUNDARY: frozen_rank/frozen_vote_count — set
+              // once, by the real freeze RPC, never recomputed here.
+              // Deliberately still shown per seat (unlike the queue
+              // above, now shown once): the boundary ranking is a
+              // one-time historical snapshot, not the live queue, so
+              // it's the thing worth comparing seat-by-seat against
+              // "what actually got reserved."
+              const atBoundary = pendingRequests
+                .filter((r) => r.frozen_rank !== null)
+                .sort((a, b) => (a.frozen_rank ?? 0) - (b.frozen_rank ?? 0));
+              const expectedWinner = atBoundary[0] ?? null;
+              const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber) ?? null;
+              return (
+                <div key={seatNumber} data-testid={`sim-forensics-${seatNumber}`} className="mt-1 rounded bg-white/5 p-1.5">
+                  <p className="font-medium text-white/80">Seat {seatNumber}</p>
+                  <p className="text-white/70">Vacant: {vacant ? "yes" : "no"}</p>
+                  <p className="text-white/70">Round: #{stageRound?.round_number ?? "—"}</p>
+                  <p className="mt-1 text-white/50">RTS ranking at boundary:</p>
+                  {atBoundary.length === 0 ? (
+                    <p className="pl-2 text-white/40">none frozen yet</p>
+                  ) : (
+                    atBoundary.map((r) => (
+                      <p key={r.id} className="pl-2 text-white/70">
+                        #{r.frozen_rank} {candidateName(r)} — {r.frozen_vote_count}
+                      </p>
+                    ))
                   )}
-                </p>
-                <p className="text-white/70">Occupied: {vacant ? "no" : "yes"}</p>
-                {vacant && (
-                  <p data-testid={`sim-forensics-blocked-${seatNumber}`} className="font-semibold text-amber-400">
-                    WAITING AT / BLOCKED BECAUSE: {computeWaitingReason(seatNumber)}
+                  <p className="mt-1 text-white/70" data-testid={`sim-forensics-expected-${seatNumber}`}>
+                    Expected winner: {expectedWinner ? candidateName(expectedWinner) : "none"}
                   </p>
-                )}
-              </div>
-            );
-          })}
+                  <p className="text-white/70" data-testid={`sim-forensics-reserved-${seatNumber}`}>
+                    Reserved: {reserved ? candidateName(reserved) : "none"}
+                    {reserved && expectedWinner && reserved.id !== expectedWinner.id && (
+                      <span className="font-semibold text-red-400"> — different from expected winner</span>
+                    )}
+                  </p>
+                  <p className="text-white/70">Occupied: {vacant ? "no" : "yes"}</p>
+                  {vacant && (
+                    <p data-testid={`sim-forensics-blocked-${seatNumber}`} className="font-semibold text-amber-400">
+                      WAITING AT / BLOCKED BECAUSE: {computeWaitingReason(seatNumber)}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
         {/*
           Issue #21, fifth corrective pass, Section 16: per-seat
           candidate/authorization/occupancy — up to two reservations can

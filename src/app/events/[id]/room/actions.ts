@@ -33,6 +33,7 @@ import {
   freezeSpeakerCandidates,
   reserveSpeakerCandidatesForSeats,
   resetSpeakerCandidatePool,
+  releaseFailedSpeakerClaim,
 } from "@/lib/repositories/speaker-requests";
 import { mintLiveKitToken } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
@@ -82,6 +83,13 @@ export type LeaveSpeakerSeatResult = { ok: true } | { error: string };
  * guest id already resolved server-side, never client input). Best-
  * effort pushes `canPublish: false` to the already-connected LiveKit
  * participant either way, so the change is visible immediately.
+ *
+ * **Issue #21, tenth corrective pass**: also directly reconciles
+ * selection for the vacancy this just created, same as
+ * `resolveStageRoundAction`/`resolveSeatClosingAction` (ninth pass) —
+ * see the trigger-matrix audit in this pass's own handoff (Section D:
+ * voluntary leave) for why this path had the identical gap those did. A
+ * plain no-op when no eligible request exists.
  */
 export async function leaveSpeakerSeat(eventId: string): Promise<LeaveSpeakerSeatResult> {
   const identity = await resolveIdentity();
@@ -92,6 +100,7 @@ export async function leaveSpeakerSeat(eventId: string): Promise<LeaveSpeakerSea
       await leaveSpeakerSeatAsGuest(eventId, identity.id);
     }
     await syncPublishPermission({ eventId, identity, canPublish: false });
+    await bestEffortReconcileSelection(eventId);
     return { ok: true };
   } catch {
     return { error: "Couldn't leave the stage. Try again." };
@@ -116,6 +125,14 @@ export type SpeakerRequestActionResult = { ok: true } | { error: string };
  * rather than duplicating the same guards in TypeScript (which would
  * just be a second place for them to drift out of sync with the actual,
  * authoritative check).
+ *
+ * **Issue #21, tenth corrective pass**: also directly reconciles
+ * selection immediately after creating the request — covers the case a
+ * fillable vacant seat *already existed* the instant this request
+ * arrived (trigger-matrix Section B), which nothing previously
+ * triggered synchronously; before this, a request arriving after a
+ * vacancy relied entirely on the reactive client hook eventually
+ * noticing. A plain no-op when no seat is currently open.
  */
 export async function requestToSpeak(eventId: string, body: string): Promise<SpeakerRequestActionResult> {
   const identity = await resolveIdentity();
@@ -134,6 +151,7 @@ export async function requestToSpeak(eventId: string, body: string): Promise<Spe
     } else {
       await requestToSpeakAsGuest(eventId, identity.id, identity.displayName, trimmed);
     }
+    await bestEffortReconcileSelection(eventId);
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -168,6 +186,14 @@ export async function withdrawSpeakerRequest(eventId: string): Promise<SpeakerRe
     } else {
       await withdrawSpeakerRequestAsGuest(eventId, identity.id);
     }
+    // Issue #21, tenth corrective pass: the RPC itself already advances
+    // the next-ranked candidate within the *same* round when the
+    // withdrawer was the reserved one (migration 00000000000038) — this
+    // is a backstop for the case that leaves: the round ending up
+    // exhausted (no candidate left to advance to, no other seat still
+    // reserved), which needs a *fresh* freeze from the current live
+    // pool. Nothing previously triggered that freeze synchronously.
+    await bestEffortReconcileSelection(eventId);
     return { ok: true };
   } catch {
     return { error: "Couldn't withdraw your request. Try again." };
@@ -398,6 +424,25 @@ export async function claimOpenSeat(eventId: string): Promise<SpeakerRequestActi
   try {
     await claimSpeakerSeat(eventId, identity, decision.seatNumber, identity.displayName);
   } catch {
+    // Issue #21, tenth corrective pass, Section 13: an authorized
+    // candidate's own claim failing (a genuine race — the target seat
+    // was taken by something else between the eligibility check and the
+    // claim itself) previously just returned an error and left this
+    // candidate's own reservation exactly as it was: authoritatively
+    // "reserved" for a seat they will never occupy, with nothing else
+    // ever re-evaluating it. Releases that reservation and atomically
+    // advances the next-ranked eligible candidate (see migration
+    // 00000000000039), then reconciles in case the round is now
+    // exhausted and a fresh freeze is needed. Best-effort: this cleanup
+    // failing must never mask the real, already-reported claim failure.
+    if (myRequestId) {
+      try {
+        await releaseFailedSpeakerClaim(myRequestId);
+        await bestEffortReconcileSelection(eventId);
+      } catch {
+        // Swallow — see comment above.
+      }
+    }
     return { error: "That seat was just taken — try again." };
   }
 
@@ -667,6 +712,15 @@ export async function checkAndEvictInactiveSpeaker(
     // migration 00000000000018) already makes their *next* token request
     // self-correct to canPublish: false regardless.
     await syncPublishPermission({ eventId, identity: seatIdentity, canPublish: false });
+    // Issue #21, tenth corrective pass: trigger-matrix Section E
+    // (inactive/disconnected eviction) had the identical gap
+    // `resolveStageRoundAction`/`resolveSeatClosingAction` (ninth pass)
+    // and `leaveSpeakerSeat` (this pass) already closed — a vacancy this
+    // path creates previously relied entirely on the reactive client
+    // hook eventually noticing. Best-effort: a transient reconciliation
+    // failure here must never turn a real, successful eviction into a
+    // reported failure.
+    await bestEffortReconcileSelection(eventId);
   }
   return { evicted: released !== null };
 }
@@ -876,4 +930,45 @@ export async function reconcileSpeakerSelectionAction(eventId: string): Promise<
   const activeSpeakers = await listActiveSpeakers(eventId);
   if (findOpenSeats(activeSpeakers).length === 0) return;
   await ensureActiveSelectionRound(eventId, activeSpeakers);
+}
+
+/**
+ * Issue #21, tenth corrective pass: the trigger-matrix audit (this
+ * pass's own handoff) found several more state transitions — voluntary
+ * leave, inactivity eviction, a request arriving after a vacancy already
+ * exists, withdrawal leaving a round exhausted — with the identical gap
+ * the ninth pass closed for the round boundary specifically: nothing
+ * called `ensureActiveSelectionRound` directly from the same request
+ * that created the "vacant fillable seat + eligible RTS + no valid
+ * reservation" condition, leaving it entirely to
+ * `useSpeakerSelectionReconciliation`'s own reactive client round trip.
+ * This is the one call each of those paths now makes — a thin wrapper
+ * around the same idempotent, row-locked `ensureActiveSelectionRound`
+ * every other reconciliation path already calls (not a fourth,
+ * differently-behaved mechanism) that swallows a failure rather than
+ * letting it masquerade as failure of the primary action it's attached
+ * to (a leave/request/withdrawal that itself fully succeeded must never
+ * be reported as an error merely because this *best-effort* follow-up
+ * reconciliation hit a transient problem) — the reactive client hook
+ * remains the backstop for exactly that case, same as it already is for
+ * the round-boundary paths.
+ *
+ * Uses `listActiveSpeakersAuthoritative` (service-client), not
+ * `reconcileSpeakerSelectionAction`'s own request-scoped
+ * `listActiveSpeakers` — same reasoning as the ninth pass's fix to
+ * `resolveStageRoundAction`: "which seats are open" has no reason to be
+ * scoped to any one caller's own session, every caller here already
+ * resolved *their own* identity earlier in the same request for an
+ * unrelated reason (the primary action itself), and this keeps the
+ * mechanism callable and real-database-testable outside a Next.js
+ * request context too, exactly like `resolveStageRoundAction`'s own
+ * fix.
+ */
+async function bestEffortReconcileSelection(eventId: string): Promise<void> {
+  try {
+    await ensureActiveSelectionRound(eventId, await listActiveSpeakersAuthoritative(eventId));
+  } catch {
+    // Swallow — see this function's own doc comment. The reactive client
+    // hook (`useSpeakerSelectionReconciliation`) remains the backstop.
+  }
 }

@@ -57,6 +57,7 @@ import {
   freezeSpeakerCandidates,
   markSpeakerRequestGranted,
   resetSpeakerCandidatePool,
+  releaseFailedSpeakerClaim,
 } from "@/lib/repositories/speaker-requests";
 import { claimSpeakerSeat, endSpeakerSeat, castSpeakerRoundVoteAsGuest } from "@/lib/repositories/event-speakers";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -379,6 +380,103 @@ export async function resetSimulatorSession(eventId: string, guestIds: string[])
   };
 }
 
+export type DebugSnapshotState = {
+  fetchedAt: string;
+  round: { round_number: number; phase: string; ends_at: string } | null;
+  seats: Array<{
+    seat_number: 1 | 2;
+    display_name: string;
+    identity_kind: "profile" | "guest";
+    disconnected: boolean;
+  }>;
+  pendingRequests: Array<{
+    id: string;
+    display_name: string;
+    identity_kind: "profile" | "guest";
+    vote_count: number;
+    is_current_candidate: boolean;
+    reserved_seat_number: 1 | 2 | null;
+    frozen_rank: number | null;
+    selection_failed: boolean;
+  }>;
+};
+
+/**
+ * Issue #21, tenth corrective pass, Sections 1-25: the authoritative
+ * (never client-cached) read behind the Session Simulator's "Copy Debug
+ * Snapshot" — see `SessionSimulatorPanel`'s own doc comment on that
+ * button for the full reasoning. A **read-only** query, deliberately:
+ * no `ensureActiveSelectionRound`, no freeze, no claim, nothing that
+ * could change what a subsequent real reproduction attempt would see —
+ * "capture what's true right now," never "make something true first."
+ * Runs a fresh service-client read on every call rather than reusing any
+ * already-fetched props, so a snapshot taken at the exact moment of a
+ * suspected bug reflects the database's own current state, not
+ * whatever this tab's own Realtime subscription happened to have
+ * received by then — the caller (the panel) separately compares this
+ * against its own current props to surface exactly that kind of
+ * client/authoritative divergence.
+ */
+export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSnapshotState> {
+  assertSimulatorAvailable();
+  const supabase = createServiceClient();
+
+  const [{ data: roundRow }, { data: seatRows }, { data: requestRows }, { data: voteRows }] = await Promise.all([
+    supabase.from("stage_rounds").select("round_number, phase, ends_at").eq("event_id", eventId).maybeSingle(),
+    supabase
+      .from("event_speakers_active")
+      .select("seat_number, display_name, profile_id, guest_id, disconnected_at")
+      .eq("event_id", eventId)
+      .order("seat_number", { ascending: true }),
+    supabase
+      .from("speaker_requests")
+      .select("id, message_id, profile_id, guest_id, is_current_candidate, reserved_seat_number, frozen_rank, selection_failed")
+      .eq("event_id", eventId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: true }),
+    supabase.from("speaker_request_votes").select("request_id").eq("event_id", eventId),
+  ]);
+
+  const requestIds = (requestRows ?? []).map((r) => r.id);
+  const { data: messageRows } =
+    requestIds.length > 0
+      ? await supabase
+          .from("event_chat_messages")
+          .select("id, author_display_name")
+          .in(
+            "id",
+            (requestRows ?? []).map((r) => r.message_id),
+          )
+      : { data: [] as { id: string; author_display_name: string }[] };
+  const nameByMessageId = new Map((messageRows ?? []).map((m) => [m.id, m.author_display_name]));
+
+  const voteCountByRequestId = new Map<string, number>();
+  for (const vote of voteRows ?? []) {
+    voteCountByRequestId.set(vote.request_id, (voteCountByRequestId.get(vote.request_id) ?? 0) + 1);
+  }
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    round: roundRow ? { round_number: roundRow.round_number, phase: roundRow.phase, ends_at: roundRow.ends_at } : null,
+    seats: (seatRows ?? []).map((s) => ({
+      seat_number: s.seat_number as 1 | 2,
+      display_name: s.display_name ?? "(unknown)",
+      identity_kind: s.profile_id ? "profile" : ("guest" as const),
+      disconnected: s.disconnected_at !== null,
+    })),
+    pendingRequests: (requestRows ?? []).map((r) => ({
+      id: r.id,
+      display_name: nameByMessageId.get(r.message_id) ?? "(unknown)",
+      identity_kind: r.profile_id ? "profile" : "guest",
+      vote_count: voteCountByRequestId.get(r.id) ?? 0,
+      is_current_candidate: r.is_current_candidate,
+      reserved_seat_number: r.reserved_seat_number as 1 | 2 | null,
+      frozen_rank: r.frozen_rank,
+      selection_failed: r.selection_failed,
+    })),
+  };
+}
+
 export type AdvanceSelectionResult =
   | { claimed: false }
   | { claimed: true; guestId: string; seatNumber: 1 | 2 };
@@ -452,6 +550,21 @@ export async function simulateAdvanceSelection(
   } catch {
     // Same "someone else just took it" tolerance claimOpenSeat has —
     // another poll (real or simulated) can legitimately win the race.
+    //
+    // Issue #21, tenth corrective pass, Section 40: the simulator uses
+    // the exact same authoritative failure-recovery the real claim path
+    // now does (see room/actions.ts' claimOpenSeat and migration
+    // 00000000000039) — releasing this winner's reservation and
+    // advancing the next-ranked eligible candidate, rather than a
+    // simulator-only "just try again" that would leave the seat's
+    // reservation stuck on a candidate who will never claim it.
+    try {
+      await releaseFailedSpeakerClaim(winner.request_id);
+      await ensureActiveSelectionRound(eventId, await listActiveSpeakersForSimulator(eventId));
+    } catch {
+      // Best-effort — a failed cleanup here must never be reported as
+      // if the (already-reported) claim failure were something worse.
+    }
     return { claimed: false };
   }
   await markSpeakerRequestGranted(winner.request_id);

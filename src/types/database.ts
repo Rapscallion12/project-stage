@@ -942,6 +942,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      release_failed_speaker_claim: {
+        Args: { p_request_id: string }
+        Returns: undefined
+      }
       release_if_expired: {
         Args: { p_event_id: string; p_guest_id: string; p_profile_id: string }
         Returns: undefined
