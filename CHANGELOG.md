@@ -13,6 +13,24 @@ merged to `main`.
 
 ### Changed
 
+- **Session Simulator now shows a prominent "Next Speaker Candidate"
+  during an active round — the live #1-ranked eligible RTS requester,
+  reactive to vote changes, with no vacancy or reservation required to
+  see it** (issue #21, eleventh corrective pass) — the previous "Next
+  Speaker" section only ever answered a different question (who has
+  already been frozen/reserved at a real vacancy, correctly empty
+  otherwise), renamed to "Selected / Committed" to make the distinction
+  explicit. Nothing is reserved by being displayed. See DECISIONS.md.
+- **Copy Debug Snapshot rebuilt as a two-phase capture** (issue #21,
+  eleventh corrective pass) — a real-device report that it "did not give
+  an immediate usable result" was traced to the client-state section
+  being needlessly delayed behind the authoritative database read, and
+  the eventual clipboard write starting well after the tap's own user
+  gesture (a shape some mobile browsers silently refuse). Client state
+  is now captured synchronously the instant the button is tapped; the
+  database read and the clipboard write are both time-bounded, and a
+  failed or hung clipboard write now opens a visible, selectable text
+  panel automatically instead of losing the capture. See DECISIONS.md.
 - **Selection now reconciles immediately from five more state changes
   that used to depend entirely on a reactive client round trip**
   (issue #21, tenth corrective pass) — voluntary speaker leave,

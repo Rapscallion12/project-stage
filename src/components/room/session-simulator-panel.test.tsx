@@ -1715,7 +1715,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
   // Issue #21, tenth corrective pass, Sections 1-25: "Copy Debug
   // Snapshot" — a fresh authoritative read combined with this tab's own
   // client state, copied as human-readable text, read-only.
-  describe("Copy Debug Snapshot (issue #21, tenth corrective pass)", () => {
+  describe("Copy Debug Snapshot (issue #21, tenth/eleventh corrective passes — two-phase T0/T1 capture)", () => {
     function mockClipboard() {
       const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
       Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -1739,14 +1739,103 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
 
       const copied = writeText.mock.calls[0][0];
       expect(copied).toContain("VIRTUAL STAGE DEBUG SNAPSHOT");
-      expect(copied).toContain("ROOM");
-      expect(copied).toContain("AUTHORITATIVE SEATS");
-      expect(copied).toContain("LIVE RTS RANKING");
-      expect(copied).toContain("SELECTED / RESERVED");
+      expect(copied).toContain("Capture tap time (T0):");
+      expect(copied).toContain("CLIENT STATE AT TAP (T0)");
+      expect(copied).toContain("AUTHORITATIVE STATE AT READ (T1)");
+      expect(copied).toContain("Authoritative fetch latency (T1 - T0):");
+      expect(copied).toContain("STATE CHANGED DURING CAPTURE:");
+      expect(copied).toContain("Authoritative seats:");
+      expect(copied).toContain("Live RTS ranking (authoritative):");
+      expect(copied).toContain("Selected / Reserved (client-observed):");
       expect(copied).toContain("STATE MISMATCHES");
       expect(copied).toContain("RESET / SIMULATOR OWNERSHIP");
 
       await waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("Copied ✓"));
+    });
+
+    it("captures the prospective next/second candidate in the T0 client section", async () => {
+      const writeText = mockClipboard();
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", voteCount: 3 }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", voteCount: 1 }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Candidate A", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Candidate B", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("Prospective next: Candidate A — 3 votes (not reserved)");
+      expect(copied).toContain("Prospective second: Candidate B — 1 votes");
+    });
+
+    it("shows immediate 'Capturing…' feedback the instant the tap registers, before the authoritative fetch resolves", async () => {
+      const writeText = mockClipboard();
+      let resolveFetch!: (v: Awaited<ReturnType<typeof fetchDebugSnapshotState>>) => void;
+      fetchDebugSnapshotState.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+      render(<SessionSimulatorPanel {...baseProps} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("Capturing…"));
+
+      resolveFetch({ fetchedAt: new Date().toISOString(), round: null, seats: [], pendingRequests: [] });
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    });
+
+    it("a second tap while a capture is already in flight is a no-op, not a second overlapping capture", async () => {
+      const writeText = mockClipboard();
+      let resolveFetch!: (v: Awaited<ReturnType<typeof fetchDebugSnapshotState>>) => void;
+      fetchDebugSnapshotState.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+      render(<SessionSimulatorPanel {...baseProps} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot")); // ignored — a capture is already in flight
+      resolveFetch({ fetchedAt: new Date().toISOString(), round: null, seats: [], pendingRequests: [] });
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      expect(fetchDebugSnapshotState).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports STATE CHANGED DURING CAPTURE when props change while the authoritative fetch is in flight", async () => {
+      const writeText = mockClipboard();
+      let resolveFetch!: (v: Awaited<ReturnType<typeof fetchDebugSnapshotState>>) => void;
+      fetchDebugSnapshotState.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+      const { rerender } = render(<SessionSimulatorPanel {...baseProps} speakers={[]} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      // A seat becomes occupied while the fetch is still in flight — the
+      // T0 client section must not reflect this; the report must flag it.
+      rerender(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 1 })]} />);
+      resolveFetch({ fetchedAt: new Date().toISOString(), round: null, seats: [], pendingRequests: [] });
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("Seats occupied: (none)"); // T0 — unchanged by the later rerender
+      expect(copied).toContain("STATE CHANGED DURING CAPTURE: yes");
     });
 
     it("flags a client/authoritative seat-occupancy mismatch", async () => {
@@ -1782,7 +1871,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(writeText.mock.calls[0][0]).toContain("none detected");
     });
 
-    it("still copies a local-only snapshot, clearly marked, when the authoritative fetch fails", async () => {
+    it("still copies the T0 client snapshot, clearly marked, when the authoritative fetch fails", async () => {
       const writeText = mockClipboard();
       fetchDebugSnapshotState.mockRejectedValueOnce(new Error("network blip"));
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -1791,11 +1880,27 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 
       const copied = writeText.mock.calls[0][0];
-      expect(copied).toContain("FETCH FAILED — network blip");
+      expect(copied).toContain("AUTHORITATIVE FETCH: FAILED — network blip");
+      expect(copied).toContain("CLIENT STATE AT TAP (T0)"); // never lost, even though T1 failed
       expect(copied).not.toContain("undefined");
     });
 
-    it("shows a failure state (never a silent no-op) when the clipboard write itself fails", async () => {
+    it("still copies the T0 client snapshot when the authoritative fetch times out, and says so explicitly", async () => {
+      const writeText = mockClipboard();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      fetchDebugSnapshotState.mockImplementationOnce(() => new Promise(() => {})); // never resolves
+      render(<SessionSimulatorPanel {...baseProps} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await vi.advanceTimersByTimeAsync(4500);
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain("AUTHORITATIVE FETCH: TIMED OUT");
+      expect(copied).toContain("CLIENT STATE AT TAP (T0)");
+    });
+
+    it("falls back to a visible, selectable text panel — never a silent no-op — when the clipboard write itself fails, without losing the capture", async () => {
       const writeText = vi.fn<(text: string) => Promise<void>>(async () => {
         throw new Error("clipboard permission denied");
       });
@@ -1803,7 +1908,30 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       render(<SessionSimulatorPanel {...baseProps} />);
 
       fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
-      await waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("Copy failed"));
+      await waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("See below to copy"));
+
+      // The fallback panel opens automatically — the capture is not lost.
+      const fallback = screen.getByTestId("sim-snapshot-text") as HTMLTextAreaElement;
+      expect(fallback.value).toContain("VIRTUAL STAGE DEBUG SNAPSHOT");
+    });
+
+    it("a hung clipboard write (bounded timeout) still surfaces the fallback panel instead of staying stuck", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => new Promise(() => {})); // never resolves
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await vi.advanceTimersByTimeAsync(3500);
+      await vi.waitFor(() => expect(screen.getByTestId("sim-copy-debug-snapshot")).toHaveTextContent("See below to copy"));
+    });
+
+    it("logs a DEBUG CAPTURE TAP marker immediately, for temporal ordering against later transitions", async () => {
+      const writeText = mockClipboard();
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("DEBUG CAPTURE TAP");
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     });
 
     it("is read-only — never triggers selection, claims, votes, or Reset as a side effect", async () => {
@@ -1817,6 +1945,104 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(resetSimulatorSession).not.toHaveBeenCalled();
       expect(simulateRoundVote).not.toHaveBeenCalled();
       expect(simulateRequestVote).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #21, eleventh corrective pass, Sections 1-6: "Next Speaker
+  // Candidate" — the PROSPECTIVE #1-ranked eligible RTS requester,
+  // reactive to live vote changes, visible without any vacancy or
+  // reservation.
+  describe("Next Speaker Candidate (issue #21, eleventh corrective pass)", () => {
+    it("shows no eligible candidates when the RTS pool is empty", () => {
+      render(<SessionSimulatorPanel {...baseProps} pendingRequests={[]} />);
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("No eligible RTS candidates");
+    });
+
+    it("shows the live #1/#2 ranking as prospective — not reserved — even with both seats occupied and nothing frozen", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "s1", seat_number: 1 }), speaker({ id: "s2", seat_number: 2 })]}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", voteCount: 3 }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", voteCount: 2 }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Candidate A", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Candidate B", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("Candidate A — 3 votes");
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("prospective — not reserved");
+      expect(screen.getByTestId("sim-prospective-second")).toHaveTextContent("Candidate B — 2 votes");
+      expect(screen.getByTestId("sim-prospective-both")).toHaveTextContent("Candidate A + Candidate B");
+      // Nothing was reserved merely by being displayed here.
+      expect(screen.getByTestId("sim-selection-status-1")).toHaveTextContent("occupied");
+    });
+
+    it("reactively reorders when live votes change — the #1 candidate changes, nothing is reserved", () => {
+      const { rerender } = render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", voteCount: 3 }),
+            request({ id: "r2", guest_id: "g2", message_id: "m2", voteCount: 2 }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Candidate A", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Candidate B", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("Candidate A");
+
+      // B overtakes A — the live ranking (already sorted the way
+      // useActiveSpeakerRequests delivers it) reflects the new order.
+      rerender(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r2", guest_id: "g2", message_id: "m2", voteCount: 4 }),
+            request({ id: "r1", guest_id: "g1", message_id: "m1", voteCount: 3 }),
+          ]}
+          messages={
+            [
+              { id: "m1", author_display_name: "Candidate A", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true },
+              { id: "m2", author_display_name: "Candidate B", author_profile_id: null, author_guest_id: "g2", body: "", created_at: "", is_speaker_request: true },
+            ] as LobbyMessage[]
+          }
+        />,
+      );
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("Candidate B — 4 votes");
+      expect(screen.getByTestId("sim-prospective-second")).toHaveTextContent("Candidate A — 3 votes");
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("prospective — not reserved");
+    });
+
+    it("shows 'reserved' rather than 'prospective' when the #1 candidate is already authoritatively reserved for a real vacancy", () => {
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          pendingRequests={[
+            request({ id: "r1", guest_id: "g1", message_id: "m1", voteCount: 3, is_current_candidate: true, reserved_seat_number: 1 }),
+          ]}
+          messages={
+            [{ id: "m1", author_display_name: "Candidate A", author_profile_id: null, author_guest_id: "g1", body: "", created_at: "", is_speaker_request: true }] as LobbyMessage[]
+          }
+        />,
+      );
+      expect(screen.getByTestId("sim-prospective-next")).toHaveTextContent("reserved (Seat 1)");
+      expect(screen.getByTestId("sim-prospective-next")).not.toHaveTextContent("prospective — not reserved");
+    });
+
+    it("does not show 'if both replaced' with only one eligible candidate", () => {
+      render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1" })]} />);
+      expect(screen.queryByTestId("sim-prospective-both")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("sim-prospective-second")).not.toBeInTheDocument();
     });
   });
 });

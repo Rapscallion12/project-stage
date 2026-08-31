@@ -3,6 +3,109 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-31 — Eleventh corrective pass: "Next Speaker" redefined as the prospective #1 live candidate (not a reservation), a two-phase T0/T1 debug-snapshot capture, and a live-reproduction audit of a delayed-snapshot vacancy report (issue #21)
+
+**Context**: the user clarified that "Next Speaker" in this project's own
+usage (and the tenth pass's own diagnostics) had been answering a
+different question than they meant — they want to see, at a glance
+during an *active* round, who is currently #1 in line by live RTS vote
+count, with no vacancy or reservation required to see it. Separately,
+they reported that Copy Debug Snapshot (tenth pass) "did not give an
+immediate usable result" during a real-device session, requiring them to
+wait, force another transition, and stop the simulator before finally
+getting a snapshot — and that snapshot, being delayed, showed one seat
+vacant with two eligible RTS candidates but no reservation, which they
+explicitly warned not to over-interpret given the capture's own timing
+uncertainty.
+
+**"Next Speaker Candidate" — a genuine terminology/display gap, not a
+selection bug**: the tenth pass's own "Next Speaker" section only ever
+read from `frozenCandidates` (populated by `frozen_rank`, set once by
+`freeze_speaker_candidates` — which only ever runs once a seat is
+actually open, per `ensureActiveSelectionRound`'s unchanged "don't
+reserve early" behavior). During an active round with both seats full,
+that's correctly empty — but nothing else showed the live #1 from
+`pendingRequests`' own already-correct ordering. Renamed the old section
+to "Selected / Committed" (what has actually been frozen/reserved at a
+real boundary) and added a new, prominent "Next Speaker Candidate"
+section above it — the live #1 (and #2) eligible RTS requester, reactive
+to vote changes, explicitly labeled "prospective — not reserved" unless
+a real vacancy has already reserved them (in which case both facts show
+together, since they aren't mutually exclusive). Nothing about this
+reserves anything by being displayed.
+
+**Debug snapshot — redesigned as two-phase capture (T0/T1), addressing a
+real, previously-unhandled failure mode**: reading `copyDebugSnapshot`'s
+own tenth-pass implementation found it awaited the authoritative fetch
+*before* building anything, including the client-only section that
+needs no `await` at all — meaning a slow/hung fetch delayed everything,
+and (the more consequential finding) meant the eventual
+`navigator.clipboard.writeText` call only ever started well after the
+tap's own user gesture, which is exactly the shape of call several
+mobile browsers (notably Safari) can silently refuse or hang on without
+an unbroken gesture chain — a highly plausible, code-supported
+explanation for "did not give an immediate usable result." Rewritten to
+capture the client state *synchronously* at tap time (T0, no `await`
+anywhere in that step), run the authoritative fetch under a 4s bounded
+timeout, and — critically — treat a failed/hung clipboard write
+(bounded at 3s) as a *fallback trigger*, not a dead end: the full
+captured text is always stored and shown in a visible, selectable
+`<textarea>` that opens automatically when the automatic copy didn't
+land, so the capture is never lost regardless of what the clipboard API
+does on a given device. Also reports `STATE CHANGED DURING CAPTURE`
+(compared against `speakersRef`/`pendingRequestsRef`, already
+live-mirrored for other callers) so a reader can tell whether anything
+moved between the tap and the authoritative read, and guards against a
+duplicate concurrent capture.
+
+**The delayed vacancy snapshot — investigated live, not resolved from
+the snapshot alone, exactly as instructed**: read `simulateOpenSeat`
+(the SIM's own vacancy-creating action) and confirmed it does **not**
+call any direct selection-reconciliation trigger — unlike the ninth/
+tenth passes' fixes to the five *production* vacancy paths, this one was
+deliberately left untouched in both prior passes (noted at the time as
+scope, never revisited). It depends entirely on `useSpeakerSelectionReconciliation`,
+a production hook mounted unconditionally in `EventRoom` regardless of
+the Session Simulator's own `running` state. Reproduced the user's exact
+sequence live, repeatedly: opened a seat with eligible RTS candidates
+present, both while the simulator was running and with a Stop pressed
+immediately afterward. In every reproduction, **reservation happened
+correctly and near-instantly** (confirmed via real, observed timestamps
+— reservation observed in 0ms in one run), **regardless of whether the
+simulator was running or stopped** — confirming Section 12's own
+expectation that Stop must not (and does not) block authoritative
+reconciliation. A real, separate, and now explicitly confirmed
+distinction: **claim** *completion* for a simulated identity specifically
+(not reservation) is gated on `runningRef.current`, since
+`simulateAdvanceSelection` is SIM-only machinery with no real browser
+tab behind a fake identity — reproduced directly: opening a seat with
+Stop pressed immediately after left a real, correct reservation
+genuinely stuck at "reserved, not yet occupied" indefinitely, exactly as
+Section 12 anticipated. This is a legitimate design distinction ("Stop"
+halts fake-person behavior including a fake claim, never a real
+production mechanism), not a bug, but was not previously reproduced or
+documented as clearly. **Could not reproduce the user's own "Reserved:
+none" (not "stuck reserved") state** through diligent live testing
+covering the plausible mechanisms — the evidence is most consistent with
+the delayed snapshot's own capture-timing uncertainty (exactly what the
+user's own Section 10 warned against over-reading), not a reproducible
+selection bug. Reported honestly as unresolved rather than closed either
+direction.
+
+**Reason**: every finding here follows from reading the actual code and
+reproducing live before concluding anything — the "Next Speaker" issue
+turned out to be a real but different kind of problem (terminology/
+display, not selection logic) than initially assumed, and the vacancy
+snapshot's own ambiguity was investigated as far as live reproduction
+could take it without inventing a conclusion the evidence doesn't
+support.
+
+**Tradeoffs**: none against any previously-established invariant —
+deterministic RTS ranking, "don't reserve early," the atomic dual-seat
+reservation, Reset's one-tap/real-data-safe behavior, and every prior
+pass's own fixes are unchanged; the full existing test suite (real-
+database tests included) still passes.
+
 ## 2026-08-30 — Tenth corrective pass: a full selection-trigger-matrix audit, dual-replacement/fallback proof, a live-replacement-queue diagnostics model, a real Reset race condition, and a real-device debug-snapshot tool (issue #21)
 
 **Context**: real-device evidence during an *active* session (two occupied

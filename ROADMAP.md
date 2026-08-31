@@ -1135,6 +1135,42 @@ different dependencies. Current order:
       deliberately scoped down from the full requested spec (no
       persisted rolling event-history subsystem this pass; flagged as
       deferred). See DECISIONS.md and SESSION_LOG.md's Session 51.
+
+      **Eleventh corrective pass (2026-08-31, same branch)**: the user
+      clarified "Next Speaker" had been answering a different question
+      than intended — a prospective #1 live RTS candidate, not a
+      reservation. Renamed the old frozen-only section to "Selected /
+      Committed" and added a new, prominent "Next Speaker Candidate"
+      section reading the same already-correct live vote ordering,
+      reactive, never reserving anything by being shown. Copy Debug
+      Snapshot (tenth pass) rebuilt as a two-phase T0/T1 capture after a
+      real-device report that it "did not give an immediate usable
+      result" — traced to the client section being needlessly delayed
+      behind an authoritative fetch, and (more consequentially) the
+      clipboard write only starting well after the tap's own user
+      gesture, a shape several mobile browsers can silently refuse.
+      Client state now captures synchronously at T0; both the
+      authoritative fetch and the clipboard write are bounded, and a
+      failed/hung clipboard write opens a visible, selectable fallback
+      text panel automatically rather than losing the capture. A
+      delayed real-device snapshot showing a vacant seat with eligible
+      candidates but no reservation was investigated by live
+      reproduction (not concluded from the snapshot alone, per the
+      user's own explicit instruction): found `simulateOpenSeat` (the
+      SIM's own vacancy action, distinct from the five production paths
+      the ninth/tenth passes fixed) has the same missing-direct-trigger
+      gap, relying entirely on the reactive
+      `useSpeakerSelectionReconciliation` hook — reproduced live that
+      reservation itself happens correctly regardless of simulator
+      running/stopped state, and separately confirmed that *claim
+      completion* for a simulated identity specifically (not
+      reservation) is intentionally gated on the simulator running,
+      since it's SIM-only machinery with no real browser tab behind a
+      fake identity. Could not reproduce the user's own exact "no
+      reservation at all" state through live testing — reported as
+      unresolved, most consistent with the delayed snapshot's own
+      capture-timing uncertainty, rather than concluded either way. See
+      DECISIONS.md and SESSION_LOG.md's Session 52.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -4,6 +4,73 @@ Newest entry first.
 
 ---
 
+## 2026-08-31 — Session 52: Eleventh corrective pass — "Next Speaker" redefined as the prospective #1 live candidate, a two-phase T0/T1 debug-snapshot capture, and a live-reproduction audit of a delayed-snapshot vacancy report (issue #21)
+
+**Goal**: the user clarified "Next Speaker" had been answering the wrong
+question — they want the prospective #1 live RTS candidate visible
+during an active round, with no vacancy or reservation required. They
+also reported Copy Debug Snapshot "did not give an immediate usable
+result" on a real device, and separately supplied a delayed snapshot
+showing a vacant seat with eligible candidates but no reservation —
+explicitly warning not to over-interpret it given the capture's own
+timing uncertainty.
+
+**"Next Speaker Candidate"**: renamed the old frozen-only section to
+"Selected / Committed" and added a new, prominent section above it
+showing the live #1/#2 eligible RTS requester (from `pendingRequests`'
+own already-correct ordering — most votes, tie → earliest active
+request), reactive to vote changes, labeled "prospective — not reserved"
+unless a real vacancy has already reserved them. No selection logic
+changed — this was a display gap, confirmed by reading
+`ensureActiveSelectionRound`'s own unchanged "don't reserve early"
+behavior.
+
+**Debug snapshot — two-phase T0/T1 redesign**: the tenth pass's own
+version awaited the authoritative fetch before building anything,
+including the client-only section that needs no `await` — and meant the
+clipboard write only started well after the tap's own user gesture,
+exactly the shape several mobile browsers can silently refuse or hang
+on. Rewritten: client state captured synchronously at T0 (no await),
+authoritative fetch under a 4s bounded timeout, clipboard write under a
+3s bounded timeout with a visible, selectable fallback `<textarea>` that
+opens automatically when the automatic copy doesn't land — the capture
+is never lost regardless of clipboard behavior. Also reports `STATE
+CHANGED DURING CAPTURE` and guards against duplicate concurrent
+captures.
+
+**Delayed vacancy snapshot — investigated live**: found `simulateOpenSeat`
+(the SIM's own vacancy action) never calls a direct reconciliation
+trigger — deliberately left out of scope in the ninth and tenth passes
+— relying entirely on the production `useSpeakerSelectionReconciliation`
+hook, mounted unconditionally in `EventRoom` regardless of SIM `running`
+state. Reproduced the user's exact sequence live, repeatedly: reservation
+happened correctly and near-instantly (0ms observed in one run) whether
+the simulator was running or freshly stopped, confirming Stop does not
+block authoritative reconciliation. Found and confirmed a real, distinct
+mechanism: *claim completion* for a simulated identity specifically is
+gated on `runningRef.current` (SIM-only machinery, no real browser tab
+behind a fake identity) — reproduced directly, a reservation made right
+before Stop stays legitimately "reserved, not occupied" indefinitely.
+This is intended behavior (Stop halts fake-person actions including a
+fake claim), not a bug, but wasn't previously documented this precisely.
+**Could not reproduce the user's own "Reserved: none" state** through
+diligent live testing — most consistent with the delayed snapshot's own
+capture-timing uncertainty, reported honestly as unresolved rather than
+concluded either way.
+
+**Verification**: full suite (1082 tests, 80 files — up from 1070/80),
+lint, tsc, build all clean. One pre-existing, unrelated test flake hit
+again during this pass (the shared permanent test room polluted by this
+session's own manual real-browser testing, same root cause as the tenth
+pass) — cleared via `npm run dev:harness -- clear-sandbox`, not a
+regression. Live browser: reproduced the exact "Next Speaker Candidate"
+display fix, confirmed the two-phase capture's T0/T1 timing and content
+in a real browser (376ms authoritative-fetch latency observed), and
+conducted the vacancy-reproduction testing above. Not merged to `main`;
+fresh preview deployed.
+
+---
+
 ## 2026-08-30 — Session 51: Tenth corrective pass — full selection-trigger-matrix audit, dual-replacement/fallback proof, a live-replacement-queue diagnostics model, a real Reset race condition fixed, and a real-device debug-snapshot tool (issue #21)
 
 **Goal**: real-device evidence during an *active* session (two occupied

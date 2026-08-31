@@ -320,9 +320,19 @@ export function SessionSimulatorPanel({
   // demand instead, same discipline the panel-minimize control already
   // established for the whole panel.
   const [forensicsExpanded, setForensicsExpanded] = useState(false);
-  // Issue #21, tenth corrective pass, Sections 1-25: "Copy Debug
-  // Snapshot" — see `copyDebugSnapshot`'s own doc comment below.
-  const [snapshotStatus, setSnapshotStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  // Issue #21, tenth/eleventh corrective passes: "Copy Debug Snapshot" —
+  // see `copyDebugSnapshot`'s own doc comment below. `"manual-copy-needed"`
+  // (eleventh pass) is distinct from a hard failure — the snapshot text
+  // itself was still captured successfully; only the *automatic* clipboard
+  // write didn't land, so the fallback panel (`snapshotVisible`) opens
+  // instead of losing the capture.
+  const [snapshotStatus, setSnapshotStatus] = useState<"idle" | "capturing" | "copied" | "manual-copy-needed">("idle");
+  // The full text of the most recent capture — always populated once a
+  // capture completes, regardless of whether the automatic clipboard
+  // write succeeded, so the fallback panel below always has something
+  // real to show.
+  const [snapshotText, setSnapshotText] = useState<string | null>(null);
+  const [snapshotVisible, setSnapshotVisible] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   // Issue #21, eighth corrective pass, Section 29: a short, preview-only
@@ -379,6 +389,11 @@ export function SessionSimulatorPanel({
   // "unmounts" mid-session — but real hygiene, and avoids a stray real
   // timer bleeding a second mock call into an unrelated later test).
   const resetFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Issue #21, eleventh corrective pass, Section 16: guards
+  // `copyDebugSnapshot` against a duplicate concurrent capture — a
+  // second tap while one is already in flight is a no-op, not a second
+  // overlapping capture.
+  const capturingSnapshotRef = useRef(false);
   // Display names for every guest id above — kept alongside the id set
   // rather than re-derived, since `simulateAdvanceSelection` needs a
   // display name for whichever simulated identity gets promoted, and the
@@ -1343,76 +1358,123 @@ export function SessionSimulatorPanel({
   }
 
   /**
-   * Issue #21, tenth corrective pass, Sections 1-25: "Copy Debug
-   * Snapshot" — preview-only. The user's own real-device reports have
-   * repeatedly found problems automated/browser testing didn't catch;
-   * this exists so a real-device failure can be pasted directly back
-   * into a Claude Code session instead of relied on describing from a
-   * screenshot. Deliberately scoped down from the full spec this pass
-   * was asked to build toward (no persisted 30-50 event rolling
-   * history threaded through every server action — a genuinely separate
-   * logging subsystem, flagged as deferred in this pass's own handoff
-   * QUESTIONS section) — this instead combines a **fresh, read-only
-   * authoritative fetch** (`fetchDebugSnapshotState`, never this tab's
-   * own possibly-stale props) with this tab's own current client state,
-   * explicitly diffs the two, and points at the activity log already
-   * visible in this panel for recent selection-relevant events, rather
-   * than duplicating that history a second time.
+   * Issue #21, eleventh corrective pass, Sections 9, 13-16: two-phase
+   * capture — **CAPTURE FIRST, ENRICH SECOND**. The tenth pass's own
+   * version awaited the authoritative fetch *before* building the
+   * client-state section at all, meaning a slow/hung fetch delayed
+   * everything, including the one thing that's always instantly
+   * available: this tab's own already-live props. A real-device report
+   * confirmed exactly this — the copy "did not give an immediate usable
+   * result," and the user had to wait, force another transition, and
+   * stop the simulator before a usable snapshot finally came through,
+   * which this pass's own instructions explicitly say must never be
+   * required again.
    *
-   * **Read-only, always** — `fetchDebugSnapshotState` performs plain
-   * `select`s only (verified in its own doc comment); nothing this
-   * function does can trigger selection, reserve a candidate, alter a
-   * vote, or change seat ownership.
-   *
-   * **No secrets**: only display names, vote counts, seat numbers, and
-   * round/phase state — no tokens, cookies, or raw ids beyond what's
-   * already visible elsewhere in this preview-only panel.
+   * T0 (this function's own entry, synchronous): the client section is
+   * built immediately from already-live closure state (`speakers`,
+   * `pendingRequests`, `stageRound`, `running` — no `await` anywhere in
+   * this step), and a "DEBUG CAPTURE TAP" marker is appended to this
+   * panel's own activity log so a later reader can see exactly what
+   * else happened immediately before/after the tap. T1: the bounded
+   * (4s) authoritative fetch resolves, times out, or fails — the client
+   * section from T0 is never rewritten by anything that happens after
+   * it, including a state change mid-capture (detected via
+   * `speakersRef`/`pendingRequestsRef`, mirrored live by a separate
+   * effect, and reported explicitly as its own line).
    */
+  const AUTHORITATIVE_FETCH_TIMEOUT_MS = 4000;
+  const CLIPBOARD_WRITE_TIMEOUT_MS = 3000;
+
   async function copyDebugSnapshot() {
-    setSnapshotStatus("copying");
-    const lines: string[] = [];
-    const push = (line = "") => lines.push(line);
+    if (capturingSnapshotRef.current) return; // Section 16: no duplicate concurrent captures
+    capturingSnapshotRef.current = true;
+    setSnapshotStatus("capturing");
 
-    push("VIRTUAL STAGE DEBUG SNAPSHOT");
-    push(`Captured: ${new Date().toISOString()}`);
-    push(`Event: ${eventId}`);
-    push("");
+    // --- T0: synchronous, from already-live props. Never delayed by
+    // anything below, and never rewritten once captured.
+    const t0 = Date.now();
+    const t0OccupancyKey = speakers.map((s) => s.id).sort().join(",");
+    const t0PendingKey = pendingRequests.map((r) => r.id).sort().join(",");
+    const established = stageRound !== null && stageRound.round_number >= 1;
+    const clientLines: string[] = [];
+    const pushClient = (line = "") => clientLines.push(line);
+    pushClient("CLIENT STATE AT TAP (T0)");
+    pushClient(`Established mode: ${established ? "yes" : "no"}`);
+    pushClient(`Simulator running: ${running ? "yes" : "no"}`);
+    pushClient(
+      `Client round: #${stageRound?.round_number ?? "—"} ${stageRound?.phase ?? "none"}${sharedRemaining !== null ? ` (${sharedRemaining}s remaining)` : ""}`,
+    );
+    pushClient(`Seats occupied: ${speakers.map((s) => `${s.seat_number}:${s.display_name}`).join(", ") || "(none)"}`);
+    pushClient(`Pending requests: ${pendingRequests.length}`);
+    if (pendingRequests.length > 0) {
+      const top = pendingRequests[0];
+      pushClient(
+        `Prospective next: ${candidateName(top)} — ${top.voteCount} votes${
+          top.is_current_candidate && top.reserved_seat_number !== null ? ` (reserved Seat ${top.reserved_seat_number})` : " (not reserved)"
+        }`,
+      );
+      if (pendingRequests[1]) pushClient(`Prospective second: ${candidateName(pendingRequests[1])} — ${pendingRequests[1].voteCount} votes`);
+    }
+    pushClient("Selected / Reserved (client-observed):");
+    for (const seatNumber of [1, 2] as const) {
+      const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
+      pushClient(`  Seat ${seatNumber}: ${reserved ? candidateName(reserved) : "none"}`);
+    }
+    appendLog("DEBUG CAPTURE TAP");
 
+    // --- T1: bounded authoritative fetch — never lets a slow/hung read
+    // lose the T0 capture above.
     let authoritative: Awaited<ReturnType<typeof fetchDebugSnapshotState>> | null = null;
     let authoritativeError: string | null = null;
+    let timedOut = false;
     try {
-      authoritative = await fetchDebugSnapshotState(eventId);
+      authoritative = await Promise.race([
+        fetchDebugSnapshotState(eventId),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("__snapshot_timeout__")), AUTHORITATIVE_FETCH_TIMEOUT_MS);
+        }),
+      ]);
     } catch (err) {
-      authoritativeError = err instanceof Error ? err.message : "unknown error";
+      if (err instanceof Error && err.message === "__snapshot_timeout__") {
+        timedOut = true;
+      } else {
+        authoritativeError = err instanceof Error ? err.message : "unknown error";
+      }
     }
+    const t1 = Date.now();
 
-    const established = stageRound !== null && stageRound.round_number >= 1;
-    push("ROOM");
-    push(`Established mode: ${established ? "yes" : "no"}`);
-    push(`Simulator running: ${running ? "yes" : "no"}`);
-    push(`Client round: #${stageRound?.round_number ?? "—"} ${stageRound?.phase ?? "none"}${sharedRemaining !== null ? ` (${sharedRemaining}s remaining)` : ""}`);
-    if (authoritative) {
-      push(
-        `Authoritative round: #${authoritative.round?.round_number ?? "—"} ${authoritative.round?.phase ?? "none"}`,
-      );
-    } else {
-      push(`Authoritative round: FETCH FAILED — ${authoritativeError}`);
-    }
+    // Section 15: later changes must not rewrite T0 — this only *reports*
+    // whether one happened, via the live-mirrored refs (updated by a
+    // separate effect regardless of this function), never mutates
+    // `clientLines` above.
+    const stateChangedDuringCapture =
+      speakersRef.current.map((s) => s.id).sort().join(",") !== t0OccupancyKey ||
+      pendingRequestsRef.current.map((r) => r.id).sort().join(",") !== t0PendingKey;
+
+    const lines: string[] = [];
+    const push = (line = "") => lines.push(line);
+    push("VIRTUAL STAGE DEBUG SNAPSHOT");
+    push(`Capture tap time (T0): ${new Date(t0).toISOString()}`);
+    push(`Event: ${eventId}`);
+    push("");
+    lines.push(...clientLines);
     push("");
 
-    push("AUTHORITATIVE SEATS");
-    if (authoritative) {
+    push("AUTHORITATIVE STATE AT READ (T1)");
+    push(`Read completed: ${new Date(t1).toISOString()}`);
+    push(`Authoritative fetch latency (T1 - T0): ${t1 - t0}ms`);
+    if (timedOut) {
+      push("AUTHORITATIVE FETCH: TIMED OUT");
+    } else if (authoritativeError) {
+      push(`AUTHORITATIVE FETCH: FAILED — ${authoritativeError}`);
+    } else if (authoritative) {
+      push(`Authoritative round: #${authoritative.round?.round_number ?? "—"} ${authoritative.round?.phase ?? "none"}`);
+      push("Authoritative seats:");
       if (authoritative.seats.length === 0) push("  (none occupied)");
       for (const seat of authoritative.seats) {
         push(`  Seat ${seat.seat_number}: ${seat.display_name} (${seat.identity_kind})${seat.disconnected ? " — disconnected" : ""}`);
       }
-    } else {
-      push(`  FETCH FAILED — ${authoritativeError}`);
-    }
-    push("");
-
-    push("LIVE RTS RANKING (authoritative)");
-    if (authoritative) {
+      push("Live RTS ranking (authoritative):");
       if (authoritative.pendingRequests.length === 0) push("  (none pending)");
       const ranked = [...authoritative.pendingRequests].sort((a, b) => b.vote_count - a.vote_count);
       ranked.forEach((r, i) => {
@@ -1422,21 +1484,9 @@ export function SessionSimulatorPanel({
           }`,
         );
       });
-    } else {
-      push(`  FETCH FAILED — ${authoritativeError}`);
     }
     push("");
-
-    push("SELECTED / RESERVED");
-    for (const seatNumber of [1, 2] as const) {
-      const reserved = pendingRequests.find((r) => r.is_current_candidate && r.reserved_seat_number === seatNumber);
-      push(`  Seat ${seatNumber}: ${reserved ? candidateName(reserved) : "none"}`);
-    }
-    push("");
-
-    push("CLIENT STATE (this tab)");
-    push(`  Seats occupied: ${speakers.map((s) => `${s.seat_number}:${s.display_name}`).join(", ") || "(none)"}`);
-    push(`  Pending requests: ${pendingRequests.length}`);
+    push(`STATE CHANGED DURING CAPTURE: ${stateChangedDuringCapture ? "yes" : "no"}`);
     push("");
 
     push("STATE MISMATCHES");
@@ -1457,7 +1507,7 @@ export function SessionSimulatorPanel({
       }
     }
     if (mismatches.length === 0) {
-      push(authoritative ? "  none detected" : "  unknown — authoritative fetch failed, see ROOM above");
+      push(authoritative ? "  none detected" : "  unknown — authoritative fetch did not succeed, see above");
     } else {
       for (const m of mismatches) push(`  - ${m}`);
     }
@@ -1471,13 +1521,31 @@ export function SessionSimulatorPanel({
     for (const line of log.slice(0, 15)) push(`  ${line}`);
 
     const text = lines.join("\n");
+    setSnapshotText(text);
+
+    // Section 16: bounded — a hung clipboard permission prompt (a real,
+    // previously-observed failure mode) must not leave this stuck
+    // "Capturing…" forever. On any failure or timeout, the text is
+    // still available via the fallback panel below (Section 16: "do not
+    // lose the T0 capture just because ... slow") — this is not merely
+    // a courtesy, it's the actual fix for "did not give an immediate
+    // usable result": a clipboard write that only starts *after* an
+    // async gap since the tap's own user gesture is exactly the kind of
+    // write real mobile browsers can silently refuse or hang on.
     try {
-      await navigator.clipboard.writeText(text);
+      await Promise.race([
+        navigator.clipboard.writeText(text),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("__clipboard_timeout__")), CLIPBOARD_WRITE_TIMEOUT_MS);
+        }),
+      ]);
       setSnapshotStatus("copied");
       setTimeout(() => setSnapshotStatus("idle"), 2000);
     } catch {
-      setSnapshotStatus("error");
-      setTimeout(() => setSnapshotStatus("idle"), 3000);
+      setSnapshotStatus("manual-copy-needed");
+      setSnapshotVisible(true);
+    } finally {
+      capturingSnapshotRef.current = false;
     }
   }
 
@@ -1566,7 +1634,13 @@ export function SessionSimulatorPanel({
           stays usable one-handed on a phone.
         */}
         <SimButton data-testid="sim-copy-debug-snapshot" onClick={copyDebugSnapshot} className="rounded bg-teal-700 px-2 py-1 font-medium">
-          {snapshotStatus === "copied" ? "Copied ✓" : snapshotStatus === "error" ? "Copy failed" : "Copy Debug Snapshot"}
+          {snapshotStatus === "capturing"
+            ? "Capturing…"
+            : snapshotStatus === "copied"
+              ? "Copied ✓"
+              : snapshotStatus === "manual-copy-needed"
+                ? "See below to copy"
+                : "Copy Debug Snapshot"}
         </SimButton>
       </div>
 
@@ -1675,14 +1749,72 @@ export function SessionSimulatorPanel({
         ))}
 
         {/*
+          Issue #21, eleventh corrective pass, Sections 1-4: "Next Speaker
+          Candidate" — the PROSPECTIVE #1-ranked eligible RTS requester,
+          reactive to live vote changes, visible during an active round
+          with nothing reserved. A real-device report found the prior
+          "Next Speaker" section only ever answering this from
+          `frozenCandidates` (which stays empty — correctly — for as long
+          as both seats are occupied, since freezing only ever happens
+          once a seat is actually open, see `ensureActiveSelectionRound`'s
+          own doc comment), leaving no way to see "who's currently first
+          in line" without an actual vacancy. This section answers that
+          directly from the same live `pendingRequests` ordering
+          `useActiveSpeakerRequests` already sorts by (most votes, tie →
+          earliest active request) — never a second, differently-derived
+          ranking, and never a reservation: nothing here freezes or
+          reserves anything by being displayed (see `ensureActiveSelectionRound`'s
+          own "do not reserve early" behavior, unchanged). When the #1
+          candidate genuinely *is* already reserved (a real vacancy exists
+          and reconciliation has run), that fact is shown alongside it
+          rather than hidden — "prospective" and "reserved" are not
+          mutually exclusive, only "reserved" is authoritative.
+        */}
+        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Next Speaker Candidate</div>
+        {pendingRequests.length === 0 ? (
+          <p className="text-white/40" data-testid="sim-prospective-next">
+            No eligible RTS candidates
+          </p>
+        ) : (
+          <>
+            <p data-testid="sim-prospective-next" className="font-medium text-emerald-300">
+              {candidateName(pendingRequests[0])} — {pendingRequests[0].voteCount} votes
+              {pendingRequests[0].is_current_candidate && pendingRequests[0].reserved_seat_number !== null ? (
+                <span className="text-white/60"> · reserved (Seat {pendingRequests[0].reserved_seat_number})</span>
+              ) : (
+                <span className="text-white/60"> · prospective — not reserved</span>
+              )}
+            </p>
+            {pendingRequests[1] && (
+              <p data-testid="sim-prospective-second" className="text-white/60">
+                Second in line: {candidateName(pendingRequests[1])} — {pendingRequests[1].voteCount} votes
+              </p>
+            )}
+            {pendingRequests[1] && (
+              <p data-testid="sim-prospective-both" className="text-white/50">
+                If both replaced: {candidateName(pendingRequests[0])} + {candidateName(pendingRequests[1])}
+              </p>
+            )}
+          </>
+        )}
+
+        {/*
           Issue #21, third corrective pass: makes deterministic selection
           legible — "did #1 legitimately not win, or did something
           actually fail" is answerable from the same frozen ranking the
           real resolver used. See `frozenCandidates`' own doc comment
           above. No weighted odds anymore — highest votes wins, ties
           break on earliest request.
+
+          Issue #21, eleventh corrective pass: renamed from "Next
+          Speaker" (now the prospective section's own name, above) to
+          "Selected / Committed" — this section only ever answers "what
+          has actually been frozen/reserved at a real replacement
+          boundary," a *different* question from "who's currently next,"
+          and conflating the two under one ambiguous header was Section
+          1's own explicit complaint.
         */}
-        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Next Speaker</div>
+        <div className="border-t border-white/10 pt-1 font-semibold text-white/70">Selected / Committed</div>
         {frozenCandidates.length === 0 ? (
           <p className="text-white/40">No candidate selection in progress</p>
         ) : (
@@ -1958,6 +2090,42 @@ export function SessionSimulatorPanel({
           <p data-testid="sim-pool-reset-count">pool resets observed: {poolResetCount}</p>
           <p>simulated audience: {audience.length}</p>
         </div>
+
+        {/*
+          Issue #21, eleventh corrective pass, Section 16: the fallback
+          for "did not give me a usable result" — a mobile browser's
+          clipboard write can silently fail or hang (a real, previously-
+          observed failure mode; see `copyDebugSnapshot`'s own doc
+          comment), so the captured text is *always* available here too,
+          not just via the clipboard. Opens automatically when the
+          automatic copy didn't land; otherwise stays collapsed, same
+          "don't dump raw text into the main panel unconditionally"
+          discipline Selection Forensics already established.
+        */}
+        {snapshotText && (
+          <div className="border-t border-white/10 pt-1">
+            <button
+              type="button"
+              data-testid="sim-snapshot-toggle"
+              onClick={() => setSnapshotVisible((v) => !v)}
+              className="w-full text-left font-semibold text-white/70"
+            >
+              Last Debug Snapshot {snapshotVisible ? "▾" : "▸"}
+              {snapshotStatus === "manual-copy-needed" && (
+                <span className="ml-1 font-normal text-amber-400">— automatic copy didn&apos;t land, select text below</span>
+              )}
+            </button>
+            {snapshotVisible && (
+              <textarea
+                data-testid="sim-snapshot-text"
+                readOnly
+                value={snapshotText}
+                onFocus={(e) => e.currentTarget.select()}
+                className="mt-1 h-32 w-full rounded bg-white/5 p-1.5 font-mono text-[10px] text-white/80"
+              />
+            )}
+          </div>
+        )}
       </div>
 
       <div data-testid="sim-log" className="flex flex-col gap-0.5 text-[10px] text-white/50">
