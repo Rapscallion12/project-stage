@@ -1274,6 +1274,42 @@ different dependencies. Current order:
       concurrent-claim race, the `reconcileStageRound` fix both ways, and
       a 20-cycle Reset→Start stress test at 20/20 first-attempt
       successes. See DECISIONS.md and SESSION_LOG.md's Session 55.
+
+      **Fifteenth corrective pass (2026-08-31, same branch)**: even
+      after the fourteenth pass, the simulator still needed repeated
+      Reset→Start on an already-established room — a new snapshot
+      showed startup submitting real Request-to-Speak requests for its
+      own bootstrap candidates and timing out, because a *stale* request
+      from an earlier, superseded generation won the deterministic
+      tie-break instead. Confirmed the diagnosis: the fourth pass's own
+      "Case B" (established stage seeds via real Request-to-Speak +
+      bounded selection wait, deliberately never bypassing production
+      authorization) asks the real competitive system to eventually pick
+      two specific identities it has no obligation to pick — correctly
+      exercising the real system, but never suited to be a bootstrap
+      mechanism. Retired that path for bootstrap: every seat now uses
+      the same authoritative bypass-claim-and-self-heal mechanism the
+      fourteenth pass already proved for a fresh stage, regardless of
+      established mode — not a new capability (`claim_speaker_seat`'s
+      own bypass flag was always documented for exactly this; migration
+      24's "never steal an occupied seat" guard is unconditional and
+      untouched), only a retired client-side self-restriction. Added
+      stale-generation cleanup (withdraws any pending simulator-owned
+      Request-to-Speak from an earlier generation before every bootstrap
+      attempt, via the real "Cancel Request" pathway) so repeated Start
+      presses stop accumulating candidates that can silently win a
+      future tie-break. A partial bootstrap failure (one seat succeeds,
+      the other blocked by a real participant) is left as-is rather than
+      rolled back — the next attempt's own self-heal recovers cleanly,
+      no Reset required. Debug Snapshot's per-seat fields are now frozen
+      at bootstrap time (`Initial bootstrap Seat N`) instead of
+      re-fetched live, closing a second real-device confusion (a real
+      later replacement was reading as "startup drift"). New
+      real-database coverage proved bootstrap success on an established
+      stage, real-participant protection, the full partial-failure→
+      recovery sequence, and that a real post-bootstrap vacancy still
+      flows entirely through the unmodified real RTS pipeline. See
+      DECISIONS.md and SESSION_LOG.md's Session 56.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

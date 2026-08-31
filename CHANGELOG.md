@@ -13,6 +13,21 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed the Session Simulator still needing repeated Reset → Start
+  attempts specifically on a room that had already been used before**
+  (issue #21, fifteenth corrective pass, preview/dev tooling only) — on
+  such a room, Start was submitting real speaking requests for its own
+  two starting speakers and then waiting for the normal competitive
+  selection system to eventually pick them, which it had no obligation
+  to do (and a leftover request from an earlier attempt could win
+  instead). Start now establishes its own known-good starting pair
+  directly and reliably, the same way it already did for a brand-new
+  room, and automatically clears out any leftover requests from an
+  earlier attempt first. It still never touches a seat held by an actual
+  person. Once the starting pair is in place, everything afterward — a
+  round ending, someone new joining, being picked, being seated — still
+  goes through the exact same real, competitive selection system as
+  before; only the very first setup step changed. See DECISIONS.md.
 - **Fixed the Session Simulator sometimes needing two or three Reset →
   Start attempts before producing a genuinely running session**
   (issue #21, fourteenth corrective pass, preview/dev tooling only) — a

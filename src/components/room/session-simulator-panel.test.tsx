@@ -30,6 +30,7 @@ const {
   simulateLike,
   simulateRequestToSpeak,
   simulateRequestVote,
+  simulateWithdrawRequest,
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
@@ -131,6 +132,7 @@ const {
     simulateLike: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     simulateRequestToSpeak: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     simulateRequestVote: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+    simulateWithdrawRequest: vi.fn<(...args: unknown[]) => Promise<null>>(async () => null),
     simulateRoundVote: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     simulateSeedSpeaker,
     simulateOpenSeat,
@@ -176,6 +178,7 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   simulateLike,
   simulateRequestToSpeak,
   simulateRequestVote,
+  simulateWithdrawRequest,
   simulateRoundVote,
   simulateSeedSpeaker,
   simulateOpenSeat,
@@ -461,43 +464,25 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
   });
 
   describe("Seed 2 Speakers (Part 5 — deterministic, stable identities)", () => {
-    it("Seed 2 Speakers reuses Start's own two stable identities when there is still work to do (e.g. right after an Open Seat)", async () => {
+    it("Seed 2 Speakers on an already-fully-seeded stage is an authoritative no-op — issue #21, fifteenth corrective pass: the idempotency fast-path reports success immediately, never a redundant claim or an RTS wait", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
-      const fromStart = simulateSeedSpeaker.mock.calls.map((call) => call[1]);
 
-      // The stage is now established (Start's own seeding just achieved
-      // the initial pairing) and both seats are occupied — issue #21,
-      // fourth corrective pass: a manual re-seed at this point correctly
-      // goes through Case B (authorized Request-to-Speak), not another
-      // direct bypass, and correctly finds no open seat to claim. This
-      // mirrors an event where one seat has genuinely opened again: only
-      // *that* identity's request would find a real open seat.
+      // Both seats are now authoritatively occupied by Start's own two
+      // stable identities — a manual re-seed at this point recognizes
+      // both via the authoritative pre-check and reports "nothing to do"
+      // without attempting a second, redundant claim for either.
       simulateSeedSpeaker.mockClear();
       fireEvent.click(screen.getByTestId("sim-seed-speakers"));
-      // seat 2's request only fires after seat 1's own bounded claim-retry
-      // budget is exhausted (sequential establishment) — a longer timeout
-      // than the default is needed here, not a sign of anything wrong.
-      // Issue #21, eighth corrective pass: the budget itself grew (a
-      // real-device pass found the previous one too tight — see
-      // MAX_CLAIM_ATTEMPTS' own doc comment), so this real-time wait
-      // grew with it.
-      await waitFor(() => expect(simulateRequestToSpeak).toHaveBeenCalledTimes(2), { timeout: 13_000 });
-      const namesRequested = simulateRequestToSpeak.mock.calls.map((call) => call[1]);
-      // Same two stable identities Start generated — never re-randomized.
-      expect(namesRequested.sort()).toEqual(fromStart.sort());
-      expect(simulateSeedSpeaker).not.toHaveBeenCalled();
 
-      // The bounded claim-retry loop still has to finish (both seats,
-      // no open seat ever found) before this test hands control back —
-      // otherwise its still-pending timers could bleed into the next
-      // test.
-      await waitFor(
-        () => expect(screen.getByTestId("sim-log")).toHaveTextContent("did not result in an authorized claim"),
-        { timeout: 13_000 },
-      );
-    }, 30_000);
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("nothing to do"));
+      expect(simulateSeedSpeaker).not.toHaveBeenCalled();
+      // The old Case B pipeline (real Request-to-Speak + a bounded RTS
+      // wait) is never reached — bootstrap's own authoritative pre-check
+      // resolves this before any mutation is even attempted.
+      expect(simulateRequestToSpeak).not.toHaveBeenCalled();
+    });
 
     it("assigns seat 1 and seat 2 explicitly", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -647,77 +632,82 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByTestId("sim-stop")).toBeDisabled();
     });
 
-    describe("Case B — an already-established stage (issue #21, fourth corrective pass, Section 5)", () => {
-      it("seeds both seats via authorized Request-to-Speak selection, never a direct bypass, when the stage was already established before Start", async () => {
+    describe("Bootstrap on an already-established stage (issue #21, fifteenth corrective pass — the Case B real-RTS-wait path is retired for bootstrap)", () => {
+      it("seeds both seats via the same authoritative bypass path as a fresh stage — never waits on real RTS selection — when the stage was already established before Start", async () => {
         stageRoundRow.current = { round_number: 11, phase: "awaiting_pairing" };
-        // The mock can't know which physical seat is "open" the way
-        // the real findOpenSeat/event_speakers_active query would — seat
-        // number only matters for the log line here, not for the
-        // assertions below, so a fixed value keeps the mock simple.
-        simulateAdvanceSelection.mockImplementation(async (...args: unknown[]) => {
-          const [, guestIds] = args as [string, string[]];
-          noteSeatClaimed();
-          return { claimed: true, guestId: guestIds[0], seatNumber: 1 };
-        });
 
         render(<SessionSimulatorPanel {...baseProps} />);
         fireEvent.click(screen.getByTestId("sim-start"));
 
-        // Generous timeouts throughout this block, not the default —
-        // these are real (not fake) timer/wall-clock waits, and under a
-        // full-suite run's accumulated system load a nominally-fast
-        // microtask chain can occasionally take longer than the
-        // default 1000ms to be observed, with no bearing on correctness.
-        await waitFor(() => expect(simulateRequestToSpeak).toHaveBeenCalledTimes(2), { timeout: 5000 });
-        expect(simulateSeedSpeaker).not.toHaveBeenCalled();
-        await waitFor(() => expect(simulateAdvanceSelection).toHaveBeenCalledTimes(2), { timeout: 5000 });
+        await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2), { timeout: 5000 });
+        // The old Case B pipeline — real Request-to-Speak submission plus
+        // a bounded-retried simulateAdvanceSelection wait — is never
+        // invoked for bootstrap now, established stage or not.
+        expect(simulateRequestToSpeak).not.toHaveBeenCalled();
+        expect(simulateAdvanceSelection).not.toHaveBeenCalled();
 
         await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled(), { timeout: 5000 });
-        expect(screen.getByTestId("sim-log")).toHaveTextContent("authorized Request-to-Speak selection");
+        expect(screen.getByTestId("sim-log")).toHaveTextContent("Existing stage established: yes");
       });
 
-      it("bounded-retries the claim (never a blind sleep) when the freeze hasn't picked up the just-submitted request yet, then succeeds", async () => {
-        stageRoundRow.current = { round_number: 4, phase: "awaiting_pairing" };
-        let calls = 0;
-        simulateAdvanceSelection.mockImplementation(async (...args: unknown[]) => {
-          calls++;
-          const [, guestIds] = args as [string, string[]];
-          // Fails the *first* attempt for every seat (simulating
-          // selection not having frozen the request yet), succeeds the
-          // second — proves this is a real bounded retry against fresh
-          // server state, not a single fire-and-forget attempt.
-          if (calls % 2 === 1) return { claimed: false };
-          noteSeatClaimed();
-          return { claimed: true, guestId: guestIds[0], seatNumber: 1 };
+      it("a non-simulator occupant on an already-established stage blocks bootstrap for that seat — never evicted, never waited-on via RTS", async () => {
+        stageRoundRow.current = { round_number: 11, phase: "awaiting_pairing" };
+        simulateSeedSpeaker.mockImplementationOnce(async () => {
+          seatOccupants.current[1] = { guest_id: "real-participant-guest", profile_id: null, display_name: "Real Person" };
+          throw new Error("seat 1 in event e1 is already occupied");
         });
 
         render(<SessionSimulatorPanel {...baseProps} />);
         fireEvent.click(screen.getByTestId("sim-start"));
 
-        // Stop is clickable throughout the whole startup sequence now
-        // (issue #21, fourth corrective pass — see its own doc comment),
-        // so "not disabled" alone no longer signals full completion the
-        // way it used to; wait for the phase to actually reach Running.
-        await waitFor(() => expect(screen.queryByTestId("sim-startup")).not.toBeInTheDocument(), { timeout: 6000 });
-        expect(simulateAdvanceSelection.mock.calls.length).toBeGreaterThanOrEqual(4);
+        await waitFor(() => expect(screen.getByTestId("sim-startup-phase")).toHaveTextContent("Failed"), { timeout: 5000 });
+        expect(simulateOpenSeat).not.toHaveBeenCalled();
+        expect(simulateRequestToSpeak).not.toHaveBeenCalled();
+        expect(screen.getByTestId("sim-log")).toHaveTextContent("not simulator-owned");
+      });
+    });
+
+    describe("Stale-generation cleanup before bootstrap (issue #21, fifteenth corrective pass)", () => {
+      it("withdraws a stale, simulator-owned pending request from an earlier generation before seeding the new baseline — real-device evidence: a real snapshot showed a fresh generation's own candidates losing a deterministic tie-break to an uncleared stale request", async () => {
+        let capturedIds: string[] = [];
+        const { rerender } = render(
+          <SessionSimulatorPanel {...baseProps} onSimulatedIdentitiesCreated={(ids) => (capturedIds = ids)} />,
+        );
+        fireEvent.click(screen.getByTestId("sim-start"));
+        await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId("sim-stop"));
+        stageRoundRow.current = { round_number: 0, phase: "awaiting_pairing" };
+        resetSeedTracking();
+
+        // A stale pending request from that same (now-stopped) generation
+        // — one of its own audience ids, exactly the shape a leftover
+        // Case-B-style RTS submission or an ordinary natural-activity
+        // Request-to-Speak would leave behind.
+        const staleGuestId = capturedIds[0];
+        rerender(
+          <SessionSimulatorPanel
+            {...baseProps}
+            pendingRequests={[request({ id: "stale-r1", guest_id: staleGuestId, message_id: "stale-m1", voteCount: 0 })]}
+            onSimulatedIdentitiesCreated={(ids) => (capturedIds = ids)}
+          />,
+        );
+
+        fireEvent.click(screen.getByTestId("sim-start"));
+        await waitFor(() => expect(simulateWithdrawRequest).toHaveBeenCalledWith("e1", staleGuestId));
+        await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Cleared 1 stale simulator RTS request"));
       });
 
-      it("reports failure — never a bypass — when an established stage's seat can't be authorized within the bounded retry budget", async () => {
-        stageRoundRow.current = { round_number: 4, phase: "active" };
-        // Default simulateAdvanceSelection mock already resolves
-        // {claimed:false} forever — never picks up an open seat.
-        render(<SessionSimulatorPanel {...baseProps} />);
+      it("never withdraws a real (non-simulator) participant's own pending request", async () => {
+        render(
+          <SessionSimulatorPanel
+            {...baseProps}
+            pendingRequests={[request({ id: "real-r1", guest_id: "real-participant-guest", message_id: "real-m1", voteCount: 2 })]}
+          />,
+        );
         fireEvent.click(screen.getByTestId("sim-start"));
-
-        // Issue #21, eighth corrective pass: both seats now exhaust the
-        // (widened) bounded retry budget sequentially before startup
-        // gives up — see MAX_CLAIM_ATTEMPTS' own doc comment for why it
-        // grew.
-        await waitFor(() => expect(screen.getByTestId("sim-startup-phase")).toHaveTextContent("Failed"), { timeout: 13_000 });
-        expect(screen.getByTestId("sim-log")).toHaveTextContent("did not result in an authorized claim");
-        expect(simulateSeedSpeaker).not.toHaveBeenCalled();
-        expect(screen.getByTestId("sim-stop")).toBeDisabled();
-      }, 20_000);
+        await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+        expect(simulateWithdrawRequest).not.toHaveBeenCalledWith("e1", "real-participant-guest");
+      });
     });
   });
 
@@ -850,7 +840,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(startButton).not.toBeDisabled());
     });
 
-    it("the debug snapshot's SIMULATOR STARTUP block reports run/generation id, reset state, and per-seat intended vs. authoritative occupant", async () => {
+    it("the debug snapshot's SIMULATOR STARTUP block reports bootstrap generation, reset state, and frozen per-seat bootstrap intended vs. authoritative occupant", async () => {
       const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
       Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
       fetchDebugSnapshotState.mockResolvedValueOnce({
@@ -868,16 +858,47 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       const copied = writeText.mock.calls[0][0];
       expect(copied).toContain("SIMULATOR STARTUP");
       expect(copied).toContain("State: ready");
-      expect(copied).toContain("Run/generation ID:");
+      expect(copied).toContain("Bootstrap mode: simulator-authoritative bypass");
+      expect(copied).toContain("Bootstrap generation:");
       expect(copied).toContain("Reset in progress: no");
       expect(copied).toContain("Reset generation:");
       expect(copied).toContain("Startup attempt:");
-      expect(copied).toContain("Seat 1 intended:");
-      expect(copied).toContain("Seat 1 authoritative:");
-      expect(copied).toContain("Seat 2 intended:");
-      expect(copied).toContain("Seat 2 authoritative:");
+      expect(copied).toContain("Existing stage established:");
+      expect(copied).toContain("Initial bootstrap Seat 1 intended:");
+      expect(copied).toContain("Initial bootstrap Seat 1 authoritative:");
+      expect(copied).toContain("Initial bootstrap Seat 2 intended:");
+      expect(copied).toContain("Initial bootstrap Seat 2 authoritative:");
+      expect(copied).toContain("Stale simulator generations detected: no");
+      expect(copied).toContain("Stale simulator RTS requests cleaned: 0");
+      expect(copied).toContain("Non-simulator occupant blocker: none");
+      expect(copied).toContain("Bootstrap result: ready");
       expect(copied).toContain("Last startup error: none");
       expect(copied).toContain("Pending cleanup from previous generation:");
+    });
+
+    it("labels a real later replacement as current live state, never as bootstrap drift — the frozen bootstrap fields stay exactly what bootstrap itself produced", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
+      const seat1Name = simulateSeedSpeaker.mock.calls.find((call) => call[3] === 1)?.[2] as string;
+
+      // A real later replacement swaps the *live* authoritative occupant
+      // for someone bootstrap never intended — the frozen bootstrap
+      // fields must not be re-derived from this.
+      fetchDebugSnapshotState.mockResolvedValueOnce({
+        fetchedAt: new Date().toISOString(),
+        round: { round_number: 2, phase: "active", ends_at: new Date().toISOString() },
+        seats: [{ seat_number: 1, display_name: "Someone Else Entirely", identity_kind: "guest", disconnected: false }],
+        pendingRequests: [],
+      });
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      const copied = writeText.mock.calls[0][0];
+      expect(copied).toContain(`Initial bootstrap Seat 1 authoritative: ${seat1Name}`);
+      expect(copied).toContain("Seat 1: Someone Else Entirely (guest)"); // the unrelated, always-live section
     });
   });
 

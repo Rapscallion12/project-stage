@@ -3,6 +3,146 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-31 — Fifteenth corrective pass: retired the real-RTS-wait bootstrap path for an already-established stage; bootstrap is now one unified, authoritative bypass mechanism with stale-generation cleanup (issue #21)
+
+**Context**: even after the fourteenth pass's idempotent/self-healing
+fixes, the simulator still needed repeated Reset→Start attempts on an
+*already-established* room. A new real-device snapshot showed the exact
+shape: startup logged "Stage already established — seeding via
+authorized Request-to-Speak selection," submitted two fresh Request-to-
+Speak requests for its own two bootstrap candidates, then exhausted its
+full 20-attempt claim-retry budget waiting for the real deterministic
+RTS system to select them — it never did. The same snapshot's own live
+RTS ranking showed why: three zero-vote candidates were tied, and the
+tie-break winner (`created_at asc`) was "Calm Wolf" — a *stale* request
+left over from an earlier, superseded Start generation — not either of
+the current attempt's own fresh candidates ("Nimble Rabbit"/"Quiet
+Falcon"). Explicit instruction: prove or disprove the diagnosis that
+bootstrap and real-replacement-testing are two different jobs being
+incorrectly conflated, and if so, separate them with a preview/simulator-
+only bootstrap bypass — never weakening `claim_speaker_seat` itself,
+never evicting a real participant, always idempotent and race-safe.
+
+**Diagnosis confirmed, traced through actual code, not assumed.** The
+fourth corrective pass's own "Case B" (an already-established stage
+seeds via a real Request-to-Speak submission plus a bounded-retried
+`simulateAdvanceSelection` wait, deliberately never bypassing
+production's authorization model — see that pass's own DECISIONS.md
+entry) asks the real, competitive, deterministic RTS/replacement system
+to eventually choose two *specific* identities, but that system has no
+obligation to ever do so: a vacancy may not exist yet, the shared round
+may still be fully active, and other eligible candidates — including
+stale ones from earlier failed generations that were never cleaned up —
+can legitimately, correctly outrank the current attempt's own fresh
+candidates. Case B was exercising the real system correctly; it was
+simply never suited to be a *bootstrap* mechanism, which needs a
+deterministic outcome bootstrap itself controls.
+
+**Decision — bootstrap and replacement-testing are separated
+explicitly, per the user's own product distinction.** Every seat now
+goes through the *same* authoritative bypass-claim-and-self-heal
+mechanism the fourteenth pass already built and proved for a fresh
+stage (`establishSeat`), regardless of whether the stage has ever been
+established. This is **not a new capability and not a loosened RPC**:
+`claim_speaker_seat`'s own `p_bypass_selection_authorization` flag
+(migration 00000000000029) was always documented as "reserved for the
+Session Simulator's own `simulateSeedSpeaker` bootstrapping adapter,"
+with no qualifier restricting it to a stage's first-ever pairing — only
+this component's own client-side branching declined to use it once
+`round_number >= 1`. Removing that self-imposed restriction is the
+entire fix; migration 24's guard (a bypass claim can never steal an
+already-occupied seat) is unconditional and untouched, so this closes
+no authorization hole a real user could ever reach — see "SECURITY /
+GUARD" below. `establishSeat` gained one addition beyond the fourteenth
+pass's own mechanism: an authoritative pre-check before attempting any
+mutation at all, so a redundant "Seed 2 Speakers" press (or a bootstrap
+continuing from an interruption) recognizes an already-correct seat
+immediately, with zero mutation attempts.
+
+**Decision — stale-generation cleanup runs before every bootstrap
+attempt, not on request.** The user's own explicit preference: "ONE-TAP
+START SHOULD BE USEFUL... do not make me repeatedly Reset manually."
+`cleanupStaleSimulatorRequests` withdraws every currently-pending
+Request-to-Speak whose guest id belongs to this tab's own historical
+simulator-generated set (`allSimulatedGuestIdsRef` — accumulated across
+every Start since the last Reset, the same ownership boundary Reset
+itself already relies on) via the real `withdrawSpeakerRequestAsGuest`
+pathway — never a raw delete, and structurally incapable of touching a
+real participant's own request (a real request's guest id can never
+appear in that set). Run unconditionally at the top of every bootstrap
+attempt; a no-op when there's nothing stale (the ordinary, fresh-Reset
+case). This is what makes repeated Start presses genuinely non-
+accumulating: without it, a superseded generation's own leftover RTS
+requests could sit in the pool indefinitely and, when still eligible,
+silently win a real future tie-break the way "Calm Wolf" did.
+
+**Decision — never evict, never roll back, self-heal covers recovery.**
+The three-way authoritative classification the fourteenth pass already
+built (own-identity-already-seated → success; leftover-simulator-owned
+occupant → clear and retry; anyone else → refuse, report a precise
+blocker) is unchanged and now applies uniformly. For a genuine partial
+bootstrap failure (one seat succeeds, the other is blocked by a real
+participant), the successfully-claimed seat is deliberately **left as-
+is, never rolled back** — rolling it back could itself disrupt what
+`ensure_stage_round`'s own side effect may have already turned into a
+real, legitimate pairing the instant the real participant's own seat
+and the bootstrap seat both became occupied. Recovery instead comes
+from the *same* self-heal mechanism: the next bootstrap attempt (no
+Reset required) recognizes the leftover seat as its own, clears it, and
+reclaims — proven end-to-end, real-database, real participant leaving
+mid-sequence, in `simulator-startup.test.ts`.
+
+**Debug snapshot — bootstrap-time facts frozen, never re-derived.** A
+second real-device confusion this pass closed: the fourteenth pass's own
+"Seat N authoritative" fields were re-fetched live on every snapshot
+capture, so once a real, healthy later replacement swapped the
+bootstrap occupant for someone else, the snapshot made that look like
+startup drift rather than expected product behavior (the exact
+"Curious Rabbit → Restless Owl" ambiguity flagged this pass). Fixed by
+capturing `bootstrapResultRef` once, at the moment each seat's own
+establishment terminates, and labeling those fields explicitly `Initial
+bootstrap Seat N` — the pre-existing, always-live `Authoritative seats`
+section is untouched and remains the source for current state. Added:
+bootstrap mode (now always the unified path), whether the stage was
+already established going in (informational only, no longer a branch),
+stale-generation/stale-request cleanup counts, and an explicit
+non-simulator-occupant blocker line.
+
+**SECURITY / GUARD**: no server-side change was made this pass — no
+migration, no new RPC, no widened grant. The bypass claim's only two
+callers remain `simulateSeedSpeaker`/`simulateOpenSeat`
+(`simulator-actions.ts`), both gated by `assertSimulatorAvailable()` —
+which re-checks `isPreviewOrDevBuild()` server-side, independent of the
+client, on *every* invocation, the same enforcement every other
+simulator action already relies on (proven by this codebase's own
+existing "refuse to run on production" test suite, unmodified and still
+green). The real production claim paths (`claimOpenSeat`, `joinOpenSeat`,
+`simulateAdvanceSelection`'s own claim step) are untouched and continue
+to pass `bypassSelectionAuthorization: false` unconditionally — nothing
+in this pass changes what a real, non-preview user's own browser tab can
+ever reach.
+
+**Verification**: full suite (1122 tests, 82 files, up from 1118/82),
+lint, tsc, build all clean. New real-database coverage
+(`simulator-startup.test.ts`): a bypass claim succeeding on an
+already-established stage; a real participant blocking bootstrap for
+exactly one seat while the other bootstraps normally; the full partial-
+failure → real-participant-leaves → next-attempt-recovers-cleanly
+sequence with no Reset; and a real post-bootstrap vacancy proven to flow
+through the unmodified real production RTS pipeline (`requestToSpeakAsGuest`
++ `ensureActiveSelectionRound` + a real, non-bypass `claimSpeakerSeat`),
+never the bootstrap bypass. Live-browser verification (fresh dev server,
+real demo event): started once (fresh stage, succeeded), stopped,
+started again *without Reset* on the now-established stage — the exact
+previously-broken sequence — and watched it self-heal both seats' own
+leftover occupants automatically within the same Start press, reaching
+Running with the new "Existing stage established: yes" /
+"Bootstrap result: ready" diagnostics confirmed live in a real Copy
+Debug Snapshot capture. The replacement/vacancy architecture (ninth-
+twelfth passes), RTS vote-drift/weighted-selection work (thirteenth
+pass), and the Reset/re-entrancy/React-#441 mechanisms (fourteenth pass)
+are unchanged — confirmed by diff scope.
+
 ## 2026-08-31 — Fourteenth corrective pass: simulator startup made idempotent and self-healing (React #441 grounded to a real, redacted RPC error; a genuine Reset-follow-up race closed) — replacement/RTS work untouched (issue #21)
 
 **Context**: with the major vacancy/replacement bug and the RTS vote-

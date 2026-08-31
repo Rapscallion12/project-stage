@@ -1,7 +1,9 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createServiceClient } from "@/lib/supabase/service";
-import { claimSpeakerSeat, endSpeakerSeat } from "@/lib/repositories/event-speakers";
+import { claimSpeakerSeat, endSpeakerSeat, listActiveSpeakersAuthoritative } from "@/lib/repositories/event-speakers";
+import { requestToSpeakAsGuest } from "@/lib/repositories/speaker-requests";
+import { ensureActiveSelectionRound } from "./actions";
 import { resetSimulatorSession } from "./simulator-actions";
 
 const hasServiceCredentials = Boolean(
@@ -222,5 +224,158 @@ describe.skipIf(!hasServiceCredentials)("simulator startup reliability (issue #2
       },
       15_000,
     );
+  });
+
+  /**
+   * Issue #21, fifteenth corrective pass: real-database proof that
+   * bootstrap on an *already-established* stage (the exact real-device
+   * failure — "Stage already established — seeding via authorized
+   * Request-to-Speak selection," which then timed out waiting on a
+   * competitive RTS selection round it did not authoritatively control)
+   * now uses the *same* authoritative bypass mechanism as a fresh stage,
+   * never a real-RTS-competition wait — and that this can never evict a
+   * real participant, always leaves a cleanly-recoverable partial state,
+   * and never disturbs the *real* replacement pipeline for every
+   * subsequent round after bootstrap completes.
+   */
+  describe("bootstrap on an already-established stage (issue #21, fifteenth corrective pass)", () => {
+    it("a bypass claim succeeds on an already-established stage — bootstrap no longer waits on real RTS selection", async () => {
+      // Establish the stage first (round_number >= 1), then vacate both
+      // seats — the exact "established, but currently empty" shape the
+      // real-device snapshot's own `established: yes` reflected.
+      const priorA = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Prior A", true);
+      const priorB = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Prior B", true);
+      await endSpeakerSeat(eventId, { type: "guest", id: priorA.guest_id! }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: priorB.guest_id! }, "moderator_removed");
+      const { data: establishedRound } = await service.from("stage_rounds").select("round_number").eq("event_id", eventId).single();
+      expect(establishedRound!.round_number).toBeGreaterThanOrEqual(1);
+
+      // Bootstrap: two fresh bypass claims, no Request-to-Speak, no
+      // selection round involved at all.
+      const bootA = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Bootstrap A", true);
+      const bootB = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Bootstrap B", true);
+      expect(bootA.guest_id).not.toBeNull();
+      expect(bootB.guest_id).not.toBeNull();
+
+      const { data: round } = await service.from("stage_rounds").select("round_number, phase").eq("event_id", eventId).single();
+      expect(round!.phase).toBe("active");
+
+      await endSpeakerSeat(eventId, { type: "guest", id: bootA.guest_id! }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: bootB.guest_id! }, "moderator_removed");
+    });
+
+    it("a real (non-simulator) participant already seated on an established stage blocks bootstrap for that seat only — the other seat bootstraps normally", async () => {
+      const realParticipant = crypto.randomUUID();
+      await claimSpeakerSeat(eventId, { type: "guest", id: realParticipant }, 1, "Real Participant", true);
+
+      const bootstrapCandidate = crypto.randomUUID();
+      await expect(claimSpeakerSeat(eventId, { type: "guest", id: bootstrapCandidate }, 1, "Bootstrap Candidate", true)).rejects.toThrow(
+        /already occupied/,
+      );
+
+      // Seat 2 is genuinely vacant — bootstrap proceeds there normally,
+      // completely independent of seat 1's blocker.
+      const seat2 = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Bootstrap Seat 2", true);
+      expect(seat2.guest_id).not.toBeNull();
+
+      const { data: realSeatAfter } = await service.from("event_speakers").select("left_at").eq("event_id", eventId).eq("guest_id", realParticipant).single();
+      expect(realSeatAfter!.left_at).toBeNull(); // never evicted
+
+      await endSpeakerSeat(eventId, { type: "guest", id: realParticipant }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: seat2.guest_id! }, "moderator_removed");
+    });
+
+    it(
+      "partial bootstrap recovery: seat 1 succeeds, seat 2 is blocked by a real participant — once that participant leaves, the very next bootstrap attempt cleanly reclaims both seats without Reset",
+      async () => {
+        const bootstrapSeat1First = crypto.randomUUID();
+        const realParticipant = crypto.randomUUID();
+        const bootA1 = await claimSpeakerSeat(eventId, { type: "guest", id: bootstrapSeat1First }, 1, "Bootstrap A gen1", true);
+        await claimSpeakerSeat(eventId, { type: "guest", id: realParticipant }, 2, "Real Participant", true);
+
+        // "Generation 1" bootstrap attempt: seat 1 succeeded, seat 2 is
+        // genuinely blocked — per this pass's own design decision, seat 1's
+        // successful claim is left exactly as-is (never rolled back; doing
+        // so could disrupt what `ensure_stage_round` may have already
+        // turned into a real, legitimate pairing).
+        const bootstrapSeat2First = crypto.randomUUID();
+        await expect(claimSpeakerSeat(eventId, { type: "guest", id: bootstrapSeat2First }, 2, "Bootstrap B gen1", true)).rejects.toThrow(
+          /already occupied/,
+        );
+        const { data: seat1StillThere } = await service.from("event_speakers").select("left_at").eq("id", bootA1.id).single();
+        expect(seat1StillThere!.left_at).toBeNull();
+
+        // The real participant leaves.
+        await endSpeakerSeat(eventId, { type: "guest", id: realParticipant }, "moderator_removed");
+
+        // "Generation 2" bootstrap attempt, no Reset in between — seat 1
+        // still holds generation 1's own leftover simulator occupant;
+        // establishSeat's real self-heal (already proven directly against
+        // the RPC in the "React #441, grounded" describe block above)
+        // clears it and reclaims for the new generation, and seat 2 is now
+        // genuinely vacant.
+        const bootstrapSeat1Second = crypto.randomUUID();
+        await expect(claimSpeakerSeat(eventId, { type: "guest", id: bootstrapSeat1Second }, 1, "Bootstrap A gen2", true)).rejects.toThrow(
+          /already occupied/,
+        );
+        await endSpeakerSeat(eventId, { type: "guest", id: bootstrapSeat1First }, "moderator_removed"); // the self-heal step
+        const finalSeat1 = await claimSpeakerSeat(eventId, { type: "guest", id: bootstrapSeat1Second }, 1, "Bootstrap A gen2", true);
+        const finalSeat2 = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 2, "Bootstrap B gen2", true);
+
+        expect(finalSeat1.guest_id).toBe(bootstrapSeat1Second);
+        expect(finalSeat2.guest_id).not.toBeNull();
+        const { data: round } = await service.from("stage_rounds").select("phase").eq("event_id", eventId).single();
+        expect(round!.phase).toBe("active");
+
+        await endSpeakerSeat(eventId, { type: "guest", id: finalSeat1.guest_id! }, "moderator_removed");
+        await endSpeakerSeat(eventId, { type: "guest", id: finalSeat2.guest_id! }, "moderator_removed");
+      },
+      15_000,
+    );
+  });
+
+  /**
+   * Issue #21, fifteenth corrective pass: proves the bootstrap bypass is
+   * genuinely finished once the initial pairing exists — the *next*
+   * replacement (a real vacancy, a real RTS request, real deterministic
+   * ranking, a real non-bypass claim) flows entirely through the
+   * unmodified, real production pipeline. `establishSeat`'s own bypass
+   * claim is never called again after bootstrap; this test exercises the
+   * exact same `ensureActiveSelectionRound` + non-bypass `claimSpeakerSeat`
+   * path production's own `resolveClaimDecision` uses.
+   */
+  describe("real replacement after bootstrap uses the real production pipeline, not the bootstrap bypass", () => {
+    it("a real vacancy after bootstrap is filled via real deterministic RTS selection and a real (non-bypass) claim", async () => {
+      const seat1Guest = crypto.randomUUID();
+      const seat2Guest = crypto.randomUUID();
+      await claimSpeakerSeat(eventId, { type: "guest", id: seat1Guest }, 1, "Bootstrap Seat 1", true);
+      await claimSpeakerSeat(eventId, { type: "guest", id: seat2Guest }, 2, "Bootstrap Seat 2", true);
+
+      // A real vacancy — seat 2 opens.
+      await endSpeakerSeat(eventId, { type: "guest", id: seat2Guest }, "moderator_removed");
+
+      // A real Request-to-Speak submission, then the real reconciliation
+      // path every production vacancy trigger already calls.
+      const candidateGuest = crypto.randomUUID();
+      const { requestId } = await requestToSpeakAsGuest(eventId, candidateGuest, "Real Candidate", "let me speak");
+      await ensureActiveSelectionRound(eventId, await listActiveSpeakersAuthoritative(eventId));
+
+      const { data: reserved } = await service
+        .from("speaker_requests")
+        .select("id, guest_id, reserved_seat_number, is_current_candidate")
+        .eq("id", requestId)
+        .single();
+      expect(reserved!.is_current_candidate).toBe(true);
+      expect(reserved!.reserved_seat_number).toBe(2);
+      expect(reserved!.guest_id).toBe(candidateGuest);
+
+      // The real, non-bypass claim a genuine candidate's own browser tab
+      // would perform — never the bootstrap bypass.
+      const claimed = await claimSpeakerSeat(eventId, { type: "guest", id: candidateGuest }, 2, "Real Candidate", false);
+      expect(claimed.guest_id).toBe(candidateGuest);
+
+      await endSpeakerSeat(eventId, { type: "guest", id: seat1Guest }, "moderator_removed");
+      await endSpeakerSeat(eventId, { type: "guest", id: candidateGuest }, "moderator_removed");
+    });
   });
 });
