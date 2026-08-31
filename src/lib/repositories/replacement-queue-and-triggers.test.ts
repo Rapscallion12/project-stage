@@ -360,4 +360,145 @@ describe.skipIf(!hasServiceCredentials)("replacement queue and selection-trigger
     },
     30_000,
   );
+
+  // Issue #21, thirteenth corrective pass, Sections 9, 13: the "weighted
+  // selection" audit found no executable weighted/random logic anywhere
+  // (see DECISIONS.md) — these tests prove it directly, repeatedly,
+  // against the real database, rather than relying on that code-reading
+  // conclusion alone.
+  it(
+    "deterministic selection: the same vote arrangement produces the same winner every time across repeated, independent rounds — no random seed affects the result",
+    async () => {
+      // A stable filler on seat 1, kept occupied for the whole test, so
+      // exactly one seat (2) is ever open — with *both* seats open the
+      // atomic dual-seat reservation would correctly reserve the top
+      // *two* candidates for their own distinct seats simultaneously
+      // (proven elsewhere in this file), which isn't what this test is
+      // about; it needs a single, unambiguous winner per attempt.
+      const filler = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Filler", true);
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const aGuest = crypto.randomUUID();
+        const { messageId: aMsg } = await requestToSpeakAsGuest(eventId, aGuest, `A${attempt}`, "highest");
+        const bGuest = crypto.randomUUID();
+        const { messageId: bMsg } = await requestToSpeakAsGuest(eventId, bGuest, `B${attempt}`, "middle");
+        const cGuest = crypto.randomUUID();
+        await requestToSpeakAsGuest(eventId, cGuest, `C${attempt}`, "lowest");
+
+        for (let i = 0; i < 7; i++) await castSpeakerRequestVoteAsGuest(eventId, aMsg, crypto.randomUUID());
+        for (let i = 0; i < 3; i++) await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+
+        await reconcile();
+        const winner = await reservedCandidate(2);
+        expect(winner, `attempt ${attempt}: A (7 votes) must win`).not.toBeNull();
+        expect(winner!.guest_id, `attempt ${attempt}`).toBe(aGuest);
+
+        await claimSpeakerSeat(eventId, { type: "guest", id: aGuest }, 2, "cleanup", true);
+        await markSpeakerRequestGranted(winner!.id);
+        await resetSpeakerCandidatePool(eventId, winner!.id);
+        await endSpeakerSeat(eventId, { type: "guest", id: aGuest }, "moderator_removed");
+      }
+
+      await endSpeakerSeat(eventId, { type: "guest", id: filler.guest_id! }, "moderator_removed");
+    },
+    60_000,
+  );
+
+  it(
+    "deterministic tie-break: with equal vote counts, the earlier request wins every time across repeated rounds",
+    async () => {
+      // Same reasoning as the previous test: a stable filler on seat 1
+      // keeps exactly one seat open, so a genuine 2-candidate tie
+      // resolves to a single, unambiguous winner rather than both tied
+      // candidates each getting reserved for their own distinct seat.
+      const filler = await claimSpeakerSeat(eventId, { type: "guest", id: crypto.randomUUID() }, 1, "Filler", true);
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const aGuest = crypto.randomUUID();
+        const { messageId: aMsg } = await requestToSpeakAsGuest(eventId, aGuest, `Earlier${attempt}`, "first");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const bGuest = crypto.randomUUID();
+        const { messageId: bMsg } = await requestToSpeakAsGuest(eventId, bGuest, `Later${attempt}`, "second");
+
+        await castSpeakerRequestVoteAsGuest(eventId, aMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, aMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, aMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, aMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, aMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+        await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+
+        await reconcile();
+        const winner = await reservedCandidate(2);
+        expect(winner, `attempt ${attempt}: the earlier request (5-5 tie) must win`).not.toBeNull();
+        expect(winner!.guest_id, `attempt ${attempt}`).toBe(aGuest);
+
+        await claimSpeakerSeat(eventId, { type: "guest", id: aGuest }, 2, "cleanup", true);
+        await markSpeakerRequestGranted(winner!.id);
+        await resetSpeakerCandidatePool(eventId, winner!.id);
+        await endSpeakerSeat(eventId, { type: "guest", id: aGuest }, "moderator_removed");
+      }
+
+      await endSpeakerSeat(eventId, { type: "guest", id: filler.guest_id! }, "moderator_removed");
+    },
+    60_000,
+  );
+
+  it(
+    "prospective ranking matches authoritative ranking after a live vote transfer — the live queue a client would show agrees with the database, both before and after the transfer",
+    async () => {
+      const aGuest = crypto.randomUUID();
+      const { messageId: aMsg, requestId: aReq } = await requestToSpeakAsGuest(eventId, aGuest, "A", "first");
+      const bGuest = crypto.randomUUID();
+      const { messageId: bMsg, requestId: bReq } = await requestToSpeakAsGuest(eventId, bGuest, "B", "second");
+
+      const voterId = crypto.randomUUID();
+      await castSpeakerRequestVoteAsGuest(eventId, aMsg, voterId);
+      await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+      await castSpeakerRequestVoteAsGuest(eventId, bMsg, crypto.randomUUID());
+
+      // Before the transfer: B (2 votes) should rank #1, A (1 vote) #2 —
+      // read directly from speaker_requests + speaker_request_votes, the
+      // exact tables the client's own live projection is built from.
+      async function liveVoteCounts(): Promise<Record<string, number>> {
+        const { data } = await service.from("speaker_request_votes").select("request_id").eq("event_id", eventId);
+        const counts: Record<string, number> = { [aReq]: 0, [bReq]: 0 };
+        for (const row of data ?? []) {
+          if (row.request_id in counts) counts[row.request_id]++;
+        }
+        return counts;
+      }
+
+      let counts = await liveVoteCounts();
+      expect(counts[bReq]).toBe(2);
+      expect(counts[aReq]).toBe(1);
+      // Live ranking agrees with what freeze_speaker_candidates (the
+      // authoritative ranker) would compute at this instant.
+      const beforeFrozen = await service.rpc("freeze_speaker_candidates", { p_event_id: eventId });
+      expect(beforeFrozen.data?.[0]?.request_id).toBe(bReq); // #1 by frozen_rank ordering (already sorted)
+      await service.from("speaker_selection_rounds").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("event_id", eventId).eq("status", "active");
+      await service.from("speaker_requests").update({ selection_round_id: null, frozen_rank: null, frozen_vote_count: null }).eq("event_id", eventId).in("id", [aReq, bReq]);
+
+      // Real transfer: move one of B's own voters onto A — the exact
+      // "DELETE the old vote, INSERT the new one" the real RPC performs
+      // — to flip which candidate the live ranking should now favor.
+      const { data: bVotes } = await service.from("speaker_request_votes").select("voter_guest_id").eq("request_id", bReq).limit(1);
+      const transferringVoter = bVotes![0].voter_guest_id as string;
+      await castSpeakerRequestVoteAsGuest(eventId, aMsg, transferringVoter);
+
+      counts = await liveVoteCounts();
+      expect(counts[aReq]).toBe(2);
+      expect(counts[bReq]).toBe(1);
+      const afterFrozen = await service.rpc("freeze_speaker_candidates", { p_event_id: eventId });
+      expect(afterFrozen.data?.[0]?.request_id).toBe(aReq); // ranking flipped, live and authoritative agree
+
+      // Cleanup.
+      await service.from("speaker_selection_rounds").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("event_id", eventId).eq("status", "active");
+      await service.from("speaker_requests").update({ status: "withdrawn", resolved_at: new Date().toISOString() }).eq("event_id", eventId).in("id", [aReq, bReq]);
+    },
+    30_000,
+  );
 });

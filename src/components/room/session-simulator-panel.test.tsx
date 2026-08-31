@@ -2054,8 +2054,63 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 
         const copied = writeText.mock.calls[0][0];
-        expect(copied).toContain("RTS vote count for Dapper Rabbit: client=4, database=3");
-        expect(copied).not.toContain("none detected");
+        expect(copied).toContain("RTS COUNT MISMATCH");
+        expect(copied).toContain("Candidate: Dapper Rabbit");
+        expect(copied).toContain("Client votes: 4");
+        expect(copied).toContain("Database votes: 3");
+        expect(copied).toContain("Delta: +1");
+        expect(copied).toContain("Client rank: #1");
+        expect(copied).toContain("Database rank: #1");
+        expect(copied).not.toContain("RTS COUNT MISMATCH: none detected");
+      });
+
+      it("calls out a PROSPECTIVE RANKING MISMATCH when the client and authoritative rank for the same candidate disagree, not just the raw count", async () => {
+        const writeText = mockClipboard();
+        fetchDebugSnapshotState.mockResolvedValueOnce({
+          fetchedAt: new Date().toISOString(),
+          round: null,
+          seats: [],
+          pendingRequests: [
+            { id: "r1", display_name: "Candidate A", identity_kind: "guest", vote_count: 2, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+            { id: "r2", display_name: "Candidate B", identity_kind: "guest", vote_count: 1, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+          ],
+        });
+        // Client (stale) still ranks B above A — the authoritative read
+        // above has A #1, B #2, but the client's own accumulated counts
+        // put B first.
+        render(
+          <SessionSimulatorPanel
+            {...baseProps}
+            pendingRequests={[
+              request({ id: "r2", guest_id: "g2", voteCount: 3 }),
+              request({ id: "r1", guest_id: "g1", voteCount: 1 }),
+            ]}
+          />,
+        );
+
+        fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+        const copied = writeText.mock.calls[0][0];
+        expect(copied).toContain("PROSPECTIVE RANKING MISMATCH");
+      });
+
+      it("reports RTS COUNT MISMATCH: none detected when client and authoritative vote counts fully agree", async () => {
+        const writeText = mockClipboard();
+        fetchDebugSnapshotState.mockResolvedValueOnce({
+          fetchedAt: new Date().toISOString(),
+          round: null,
+          seats: [],
+          pendingRequests: [
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+          ],
+        });
+        render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1", voteCount: 3 })]} />);
+
+        fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+        await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+        expect(writeText.mock.calls[0][0]).toContain("RTS COUNT MISMATCH: none detected");
       });
     });
   });

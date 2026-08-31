@@ -1207,6 +1207,35 @@ different dependencies. Current order:
       authoritative disagreement. A 20-cycle real-database stress test
       measured avg 463ms/max 532ms vacancy→reservation latency. See
       DECISIONS.md and SESSION_LOG.md's Session 53.
+
+      **Thirteenth corrective pass (2026-08-31, same branch)**: a
+      narrow, diagnostic pass on two smaller issues surfaced by the
+      twelfth pass's own diagnostics, with the replacement architecture
+      itself untouched. RTS vote-count drift (client under-counting a
+      live authoritative count, caught twice on real-device captures)
+      traced through the full vote lifecycle — `cast_speaker_request_vote`'s
+      own DELETE-then-INSERT transfer is handled correctly by the client
+      hook, no logic bug found — to a real gap neither of the hook's two
+      existing resync triggers (on-SUBSCRIBED, visibility/focus) can
+      ever close: a single WAL message silently dropped in transit
+      without the connection itself closing, a known cellular-network
+      failure mode and exactly how both captures were taken. Fixed with
+      a bounded 20s backstop resync, explicitly secondary to the instant
+      Realtime path, matching `useAutomaticPromotion`'s own established
+      backstop-poll precedent. Separately audited "weighted selection"
+      wording appearing in the Session Simulator's activity log —
+      confirmed directly (codebase search, not assumption) that no
+      executable weighted/random selection logic exists anywhere
+      (`lib/speaker-selection.ts` is genuinely gone;
+      `freeze_speaker_candidates`' SQL ranking has no randomness); the
+      two live log strings were stale terminology only, renamed to
+      "deterministic RTS ranking — #1 by votes." Proved determinism
+      directly against the real database across 5 independent repeated
+      rounds each for both a clear-winner and a tied-vote scenario.
+      Debug Snapshot's RTS mismatch diagnostics expanded into a
+      dedicated per-candidate block (both counts, signed delta, both
+      ranks) with an explicit `PROSPECTIVE RANKING MISMATCH` call-out.
+      See DECISIONS.md and SESSION_LOG.md's Session 54.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

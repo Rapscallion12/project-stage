@@ -546,9 +546,9 @@ export type AdvanceSelectionResult =
  * promote one automatically, no matter how many votes their request
  * earned.
  *
- * The freeze/weighted-pick step itself (`ensureActiveSelectionRound`) is
- * identity-agnostic — it operates on the whole event's pending pool, not
- * on "the caller" — so it's reused directly, unmodified, exactly as
+ * The freeze/deterministic-pick step itself (`ensureActiveSelectionRound`)
+ * is identity-agnostic — it operates on the whole event's pending pool,
+ * not on "the caller" — so it's reused directly, unmodified, exactly as
  * production's own `resolveClaimDecision` calls it. Only the *claim* step
  * needs this adapter, and only for the specific case production has no
  * mechanism for at all.
@@ -558,8 +558,8 @@ export type AdvanceSelectionResult =
  * winner's `guest_id` is in the caller-supplied `simulatedGuestIds` list
  * — the exact same "ids the panel itself generated this run" ownership
  * mechanism `resetSimulatorSession` already uses. If a real user's
- * request organically wins the same weighted pick (entirely possible —
- * real and simulated requests share one pool), this returns
+ * request organically wins the same deterministic pick (entirely
+ * possible — real and simulated requests share one pool), this returns
  * `{claimed:false}` without touching anything, leaving that real user's
  * own `useAutomaticPromotion` to claim it for themselves exactly as
  * production always has. This function only ever completes a promotion

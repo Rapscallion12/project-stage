@@ -13,6 +13,23 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed a recurring drift between the live Request-to-Speak vote
+  count shown on a real device and the actual count in the database**
+  (issue #21, thirteenth corrective pass) — the underlying vote-transfer
+  logic was already correct; the real gap was that a Realtime update can
+  be silently dropped in transit on a real cellular connection without
+  the connection itself ever appearing to drop, which neither of the
+  existing resync mechanisms could catch. A bounded, infrequent
+  background check now catches and corrects this automatically; live
+  updates remain instant as the primary path. See DECISIONS.md.
+- **Confirmed Request-to-Speak selection has no random or "weighted"
+  behavior anywhere, and removed misleading old wording that suggested
+  otherwise** (issue #21, thirteenth corrective pass) — a full audit
+  found no executable weighted/random logic exists (that system was
+  fully retired earlier); two Session Simulator activity-log messages
+  still said "weighted selection" from before that retirement. Renamed
+  to describe what actually decides it: the highest-voted eligible
+  candidate, deterministically. See DECISIONS.md.
 - **Fixed a genuine server-side bug that could permanently block
   next-speaker selection for an event, silently, indefinitely, across
   completely unrelated future sessions** (issue #21, twelfth corrective

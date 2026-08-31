@@ -433,7 +433,7 @@ describe.skipIf(!hasServiceCredentials)("simulateAdvanceSelection (real database
     expect(result.claimed).toBe(false);
   });
 
-  it("claims the seat for a simulated winner — real freeze/weighted-select/claim/grant/pool-reset, new speaker gets a fresh real round", async () => {
+  it("claims the seat for a simulated winner — real freeze/deterministic-select/claim/grant/pool-reset, new speaker gets a fresh real round", async () => {
     const candidateGuestId = crypto.randomUUID();
     const { requestId, messageId } = await requestToSpeakAsGuest(eventId, candidateGuestId, "Fake Fox", "let me speak");
     const voterGuestId = crypto.randomUUID();

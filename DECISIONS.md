@@ -3,6 +3,104 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-08-31 — Thirteenth corrective pass: a real RTS vote-count drift traced and closed with a bounded backstop resync; confirmed "weighted selection" was stale wording only, never stale logic (issue #21)
+
+**Context**: with the major vacancy/replacement bug now behaving
+correctly on a real device, the user asked for a narrow, diagnostic
+pass on two smaller remaining issues surfaced by the twelfth pass's own
+new diagnostics: (1) a recurring client/database RTS vote-count drift
+(caught twice now, most recently `client=1, database=2` on a clean,
+591ms-latency capture with `STATE CHANGED DURING CAPTURE: no`), and (2)
+whether the activity log's "real weighted selection" wording reflected
+actual executable logic or was just stale text. Explicit instruction:
+do not touch the now-healthy replacement architecture unless this pass
+finds a directly related defect.
+
+**Vote-count drift — traced through the full lifecycle before writing
+any fix.** Read `cast_speaker_request_vote(_as_guest)` directly: a vote
+transfer is a real `DELETE` then a real `INSERT` (never an `UPDATE`),
+which `useActiveSpeakerRequests`' own handlers already handle
+correctly — no mismatched event type, no wrong table/column, no logic
+bug found. What the hook's own two existing resync mechanisms
+(on-`SUBSCRIBED`, visibility/focus) provably cannot catch: a single WAL
+message silently dropped in transit — a real, known failure mode of
+long-lived WebSocket connections on cellular networks — *without* the
+underlying connection ever closing or the tab ever backgrounding.
+Neither existing trigger fires in that case, so a rare, single dropped
+delta during a long, continuously-visible, continuously-connected
+session (precisely how both captures were taken) would never self-
+correct. **Fix**: a bounded 20s periodic resync added to the same
+effect, explicitly a backstop (Realtime deltas remain the primary,
+instant path) — the same "Realtime for responsiveness, an authoritative
+read for convergence" principle this codebase already applies elsewhere
+(`useAutomaticPromotion`'s own bounded backstop poll behind its reactive
+fast path is the direct precedent, and was pointed to explicitly).
+Proven with fake-timer tests: a vote count that drifted converges back
+via the interval with no visibility/focus/SUBSCRIBED event firing, and
+the interval doesn't fire before its own 20s elapses (never a tight
+poll).
+
+**"Weighted selection" audit — answered directly, not assumed.**
+Searched the entire codebase for `weighted`, `Math.random`, `Top-3`,
+and the old `lib/speaker-selection.ts`/`SELECTION_RANK_WEIGHTS`
+references. **Answer: NO executable weighted/random RTS winner-selection
+logic exists anywhere** — `lib/speaker-selection.ts` was already deleted
+(confirmed by a direct filesystem check, not just a stale comment
+claiming so), `freeze_speaker_candidates`' own SQL ranks purely via
+`row_number() over (order by count(v.id) desc, sreq.created_at asc,
+sreq.id asc)` — no randomness, no ties possible even at the tiebreak
+level. Every remaining `weighted` mention in the codebase is either (a)
+two live, user-visible Session Simulator activity-log strings
+(`"...promoted (real weighted selection)"` /
+`"...promoted (reactive, real weighted selection)"`) that were
+genuinely misleading stale terminology — the exact thing the real-device
+report caught — or (b) comments/test names correctly *contrasting* the
+current deterministic behavior against the retired system by name,
+which don't claim weighted logic exists and were left alone. Renamed
+the two live log strings to `"promoted (deterministic RTS ranking — #1
+by votes)"` / `"promoted (reactive, deterministic RTS ranking — #1 by
+votes)"`, updated the handful of comments and two test names that used
+the same stale wording, and proved determinism directly against the
+real database: the same vote arrangement (7/3/1 votes) selected the
+same winner across 5 independent, freshly-created rounds; a genuine 5-5
+tie selected the earlier request across 5 independent rounds; a
+client's live-projected ranking was proven to match the authoritative
+ranking both before and after a real vote transfer.
+
+**Debug snapshot improvements**: `STATE MISMATCHES`' RTS vote-count
+check (added in the twelfth pass) was expanded into a dedicated
+`RTS COUNT MISMATCH` block per disagreeing candidate — candidate name,
+both raw counts, the signed delta, and both ranks — with an explicit
+`PROSPECTIVE RANKING MISMATCH` call-out on top when the rank itself
+(not just the raw count) differs, since that's the case that could
+eventually change who's actually shown as Next Speaker Candidate.
+
+**A real bug found and fixed while building the repeated-selection
+tests, in the test harness, not the product**: an early version of the
+"same winner every time" test left both seats vacant between attempts,
+which correctly triggered the atomic *dual*-seat reservation (proven
+correct in the tenth pass) — reserving the top *two* candidates for
+their own distinct seats simultaneously — and the test's own assertion
+only checked whichever landed on seat 1, misreporting a "wrong winner"
+that was actually a correct dual reservation landing on the seat the
+test didn't expect. Fixed by keeping a stable filler on seat 1 throughout,
+so exactly one seat is ever open per attempt — this incidentally
+re-confirmed the dual-seat reservation behavior working exactly as
+designed, rather than revealing any actual selection bug.
+
+**Reason**: every fix here follows from tracing the real lifecycle (vote
+transfer, WebSocket delivery, the exact SQL ranking) before writing
+anything, exactly as instructed — no periodic-refetch band-aid without
+first ruling out a logic bug, and no code deleted or renamed on the
+weighted-selection question without first proving, by reading the
+actual files, that no executable path reaches it.
+
+**Tradeoffs**: none against any previously-established invariant — the
+replacement/vacancy architecture from the ninth through twelfth passes
+is completely untouched; deterministic RTS ranking, the atomic dual-seat
+reservation, and every prior pass's own fixes are unchanged; the full
+existing test suite (real-database tests included) still passes.
+
 ## 2026-08-31 — Twelfth corrective pass: a genuinely stale `speaker_selection_rounds` row could block selection forever — found via the eleventh pass's own two-phase debug snapshot, root-caused against the real linked database, fixed at its actual source (issue #21)
 
 **Context**: the eleventh pass's own two-phase T0/T1 debug snapshot did

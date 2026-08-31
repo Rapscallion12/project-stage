@@ -114,11 +114,24 @@ describe("applyVoteInsert / applyVoteDelete", () => {
   });
 });
 
-/** Same fake-Supabase-with-triggerable-SUBSCRIBED pattern as use-active-speakers-resync.test.ts, adapted for this hook's two queries (requests: two .eq()s then .order(); votes: one .eq()). Also captures each registered `.on(event, config, callback)` by `event:table`, so a test can fire a specific DELETE handler directly (Session Simulator Reset Session follow-up). */
-function makeFakeSupabase(pendingRows: SpeakerRequest[], voteRows: SpeakerRequestVote[] = []) {
+/**
+ * Same fake-Supabase-with-triggerable-SUBSCRIBED pattern as
+ * use-active-speakers-resync.test.ts, adapted for this hook's two
+ * queries (requests: two .eq()s then .order(); votes: one .eq()). Also
+ * captures each registered `.on(event, config, callback)` by
+ * `event:table`, so a test can fire a specific DELETE handler directly
+ * (Session Simulator Reset Session follow-up), and exposes a mutable
+ * `voteRowsRef`/`setVoteRows` — issue #21, thirteenth corrective pass —
+ * so a test can simulate the server-side vote state changing (a "missed
+ * Realtime delta") and then prove a later resync (SUBSCRIBED,
+ * visibility/focus, or the bounded backstop interval) converges the
+ * client back to it, not just what the very first fetch returned.
+ */
+function makeFakeSupabase(pendingRows: SpeakerRequest[], initialVoteRows: SpeakerRequestVote[] = []) {
   let subscribeCallback: ((status: string) => void) | null = null;
   const fromCalls: string[] = [];
   const handlers: Record<string, (payload: unknown) => void> = {};
+  const voteRowsRef = { current: initialVoteRows };
 
   const channel = {
     on: vi.fn((_type: string, config: { event: string; table: string }, callback: (payload: unknown) => void) => {
@@ -139,7 +152,7 @@ function makeFakeSupabase(pendingRows: SpeakerRequest[], voteRows: SpeakerReques
       if (table === "speaker_request_votes") {
         return {
           select: vi.fn(() => ({
-            eq: vi.fn(async () => ({ data: voteRows })),
+            eq: vi.fn(async () => ({ data: voteRowsRef.current })),
           })),
         };
       }
@@ -162,6 +175,11 @@ function makeFakeSupabase(pendingRows: SpeakerRequest[], voteRows: SpeakerReques
       subscribeCallback?.("SUBSCRIBED");
     },
     fireRequestDelete: (id: string) => handlers["DELETE:speaker_requests"]?.({ old: { id } }),
+    fireVoteInsert: (row: SpeakerRequestVote) => handlers["INSERT:speaker_request_votes"]?.({ new: row }),
+    fireVoteDelete: (id: string) => handlers["DELETE:speaker_request_votes"]?.({ old: { id } }),
+    setVoteRows: (rows: SpeakerRequestVote[]) => {
+      voteRowsRef.current = rows;
+    },
   };
 }
 
@@ -329,6 +347,145 @@ describe("useActiveSpeakerRequests", () => {
 
     await waitFor(() => {
       expect(result.current.pendingRequests.map((r) => r.id)).toEqual(["real-1"]);
+    });
+  });
+
+  // Issue #21, thirteenth corrective pass: a real-device debug snapshot
+  // (two-phase T0/T1 capture) caught the client's own accumulated RTS
+  // vote count disagreeing with a fresh authoritative count. Traced to
+  // the real `cast_speaker_request_vote(_as_guest)` RPC (a transfer is a
+  // real DELETE then a real INSERT, never an UPDATE — matching this
+  // hook's own handlers) rather than a logic bug; these tests prove the
+  // delta-handling side is correct, and the backstop-resync tests below
+  // prove convergence even when a delta is genuinely missed.
+  describe("vote transfer, toggle-off, and multi-viewer concurrency (issue #21, thirteenth corrective pass)", () => {
+    it("a vote transfer (A → B) decrements A and increments B — both sides, not just the newly-voted candidate", async () => {
+      const requestA = request({ id: "a" });
+      const requestB = request({ id: "b" });
+      const fake = makeFakeSupabase([requestA, requestB], [vote({ id: "v1", request_id: "a", voter_profile_id: "voter-1" })]);
+      createClient.mockReturnValue(fake.client);
+
+      const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, [requestA, requestB]));
+      fake.triggerSubscribed();
+      await waitFor(() => {
+        const byId = Object.fromEntries(result.current.pendingRequests.map((r) => [r.id, r]));
+        expect(byId.a.voteCount).toBe(1);
+        expect(byId.b.voteCount).toBe(0);
+      });
+
+      // The real RPC's own order: DELETE the old vote row, then INSERT
+      // the new one — two separate Realtime events, not an UPDATE.
+      fake.fireVoteDelete("v1");
+      fake.fireVoteInsert(vote({ id: "v2", request_id: "b", voter_profile_id: "voter-1" }));
+
+      await waitFor(() => {
+        const byId = Object.fromEntries(result.current.pendingRequests.map((r) => [r.id, r]));
+        expect(byId.a.voteCount).toBe(0);
+        expect(byId.b.voteCount).toBe(1);
+      });
+    });
+
+    it("toggling a vote off decrements the request with no stale remainder", async () => {
+      const requestA = request({ id: "a" });
+      const fake = makeFakeSupabase([requestA], [vote({ id: "v1", request_id: "a", voter_profile_id: "voter-1" })]);
+      createClient.mockReturnValue(fake.client);
+
+      const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, [requestA]));
+      fake.triggerSubscribed();
+      await waitFor(() => expect(result.current.pendingRequests[0].voteCount).toBe(1));
+
+      fake.fireVoteDelete("v1");
+
+      await waitFor(() => expect(result.current.pendingRequests[0].voteCount).toBe(0));
+    });
+
+    it("multi-viewer concurrency: interleaved transfers and a removal across three distinct voters land on the exact final numeric count, not just a plausible ordering", async () => {
+      // A=2, B=2 to start (voter-1 → A, voter-2 → B).
+      // Viewer 1 moves A→B. Viewer 2 moves B→A. Viewer 3 removes their A vote.
+      // Starting: A: voter-1, voter-3 (2). B: voter-2, voter-4 (2).
+      const requestA = request({ id: "a" });
+      const requestB = request({ id: "b" });
+      const fake = makeFakeSupabase(
+        [requestA, requestB],
+        [
+          vote({ id: "v1", request_id: "a", voter_profile_id: "voter-1" }),
+          vote({ id: "v3", request_id: "a", voter_profile_id: "voter-3" }),
+          vote({ id: "v2", request_id: "b", voter_profile_id: "voter-2" }),
+          vote({ id: "v4", request_id: "b", voter_profile_id: "voter-4" }),
+        ],
+      );
+      createClient.mockReturnValue(fake.client);
+
+      const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, [requestA, requestB]));
+      fake.triggerSubscribed();
+      await waitFor(() => {
+        const byId = Object.fromEntries(result.current.pendingRequests.map((r) => [r.id, r]));
+        expect(byId.a.voteCount).toBe(2);
+        expect(byId.b.voteCount).toBe(2);
+      });
+
+      // Viewer 1 (voter-1): A → B.
+      fake.fireVoteDelete("v1");
+      fake.fireVoteInsert(vote({ id: "v1b", request_id: "b", voter_profile_id: "voter-1" }));
+      // Viewer 2 (voter-2): B → A.
+      fake.fireVoteDelete("v2");
+      fake.fireVoteInsert(vote({ id: "v2a", request_id: "a", voter_profile_id: "voter-2" }));
+      // Viewer 3 (voter-3): removes their A vote entirely.
+      fake.fireVoteDelete("v3");
+
+      // Expected final: A has voter-2 only (1). B has voter-4, voter-1 (2).
+      await waitFor(() => {
+        const byId = Object.fromEntries(result.current.pendingRequests.map((r) => [r.id, r]));
+        expect(byId.a.voteCount).toBe(1);
+        expect(byId.b.voteCount).toBe(2);
+      });
+      // Numeric equality, not just relative ordering.
+      expect(result.current.pendingRequests.find((r) => r.id === "b")?.voteCount).toBe(2);
+      expect(result.current.pendingRequests.find((r) => r.id === "a")?.voteCount).toBe(1);
+    });
+  });
+
+  describe("bounded backstop resync — convergence when a Realtime delta is genuinely missed (issue #21, thirteenth corrective pass)", () => {
+    it("a vote count that drifted because a delta was missed converges back to the authoritative count via the bounded backstop interval, with no visibility/focus/SUBSCRIBED event firing", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const requestA = request({ id: "a" });
+      const fake = makeFakeSupabase([requestA], [vote({ id: "v1", request_id: "a", voter_profile_id: "voter-1" })]);
+      createClient.mockReturnValue(fake.client);
+
+      const { result } = renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, [requestA]));
+      fake.triggerSubscribed();
+      await vi.waitFor(() => expect(result.current.pendingRequests[0].voteCount).toBe(1));
+
+      // Simulate a genuinely missed Realtime INSERT: the server-side
+      // vote count is now 2, but no INSERT event is ever fired for it —
+      // exactly what a single dropped WAL message on an otherwise-
+      // healthy, continuously-connected session looks like from the
+      // client's own vantage point.
+      fake.setVoteRows([
+        vote({ id: "v1", request_id: "a", voter_profile_id: "voter-1" }),
+        vote({ id: "v2", request_id: "a", voter_profile_id: "voter-2" }),
+      ]);
+      expect(result.current.pendingRequests[0].voteCount).toBe(1); // still stale — no delta, no resync yet
+
+      // No SUBSCRIBED, no visibilitychange, no focus — only time passing.
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await vi.waitFor(() => expect(result.current.pendingRequests[0].voteCount).toBe(2));
+    });
+
+    it("the backstop interval is bounded, not a tight poll — it does not resync before its own interval elapses", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const requestA = request({ id: "a" });
+      const fake = makeFakeSupabase([requestA], []);
+      createClient.mockReturnValue(fake.client);
+
+      renderHook(() => useActiveSpeakerRequests("e1", profileIdentity, [requestA]));
+      fake.triggerSubscribed();
+      await vi.waitFor(() => expect(fake.fromCalls.filter((t) => t === "speaker_requests").length).toBeGreaterThan(0));
+      const callsAfterSubscribe = fake.fromCalls.length;
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fake.fromCalls.length).toBe(callsAfterSubscribe); // no resync yet — well under the 20s interval
     });
   });
 });

@@ -630,7 +630,7 @@ export function SessionSimulatorPanel({
           const result = await simulateAdvanceSelection(eventId, Array.from(allSimulatedGuestIdsRef.current), guestDisplayNamesRef.current);
           if (!result.claimed) break;
           const name = guestDisplayNamesRef.current[result.guestId] ?? "a simulated candidate";
-          appendLog(`Seat ${result.seatNumber} → ${name} promoted (reactive, real weighted selection)`);
+          appendLog(`Seat ${result.seatNumber} → ${name} promoted (reactive, deterministic RTS ranking — #1 by votes)`);
         }
       } catch (err) {
         appendLog(`Reactive candidate promotion failed: ${err instanceof Error ? err.message : "unknown error"} — the bounded backstop poll will retry`);
@@ -883,8 +883,8 @@ export function SessionSimulatorPanel({
 
     // Part 4/5: automatic candidate promotion — every 4-6s (matching
     // production's own useAutomaticPromotion polling interval), checks
-    // whether a seat is open and, only when the real weighted-selection
-    // round's winner is already a known simulated identity, completes
+    // whether a seat is open and, only when the current deterministic
+    // RTS round's winner is already a known simulated identity, completes
     // the exact claim a real candidate's own browser would perform. See
     // simulateAdvanceSelection's own doc comment for the full reasoning
     // and the safety check that keeps this from ever acting on a real
@@ -897,6 +897,18 @@ export function SessionSimulatorPanel({
     // missed Realtime delta, the same relationship the sixth pass
     // established between `useAutomaticPromotion`'s own poll and its
     // reactive fast path.
+    //
+    // Issue #21, thirteenth corrective pass: "weighted selection" in the
+    // log line below was stale terminology, not stale behavior — audited
+    // directly (see DECISIONS.md): the weighted-random draw
+    // (`lib/speaker-selection.ts`, `SELECTION_RANK_WEIGHTS`,
+    // `Math.random()`) was fully retired in the third corrective pass;
+    // that file no longer exists, and every selection path
+    // (`freeze_speaker_candidates`'s own `row_number() over (order by
+    // count(v.id) desc, sreq.created_at asc, sreq.id asc)`) has been
+    // purely deterministic since. This wording just never got updated
+    // to match, which real-device evidence showed was genuinely
+    // confusing — renamed to say what actually decided it.
     schedule(() => {
       if (realJoinInProgressRef.current) return;
       if (speakersRef.current.length >= 2) return;
@@ -904,7 +916,7 @@ export function SessionSimulatorPanel({
         (result) => {
           if (result.claimed) {
             const name = guestDisplayNamesRef.current[result.guestId] ?? "a simulated candidate";
-            appendLog(`Seat ${result.seatNumber} → ${name} promoted (real weighted selection)`);
+            appendLog(`Seat ${result.seatNumber} → ${name} promoted (deterministic RTS ranking — #1 by votes)`);
           }
         },
       );
@@ -1620,19 +1632,6 @@ export function SessionSimulatorPanel({
       if ((authoritative.round?.round_number ?? null) !== (stageRound?.round_number ?? null)) {
         mismatches.push(`Round number: client=${stageRound?.round_number ?? "none"}, database=${authoritative.round?.round_number ?? "none"}`);
       }
-      // Issue #21, twelfth corrective pass: a real-device capture showed
-      // the client's own Realtime-accumulated vote count disagreeing
-      // with a fresh authoritative count for the *same* candidate
-      // (4 vs 3) while this section still said "none detected" — the
-      // comparison simply never looked at vote counts at all. Matched
-      // by request id, not display name (two different requests can
-      // legitimately share a name).
-      for (const authReq of authoritative.pendingRequests) {
-        const clientReq = pendingRequests.find((r) => r.id === authReq.id);
-        if (clientReq && clientReq.voteCount !== authReq.vote_count) {
-          mismatches.push(`RTS vote count for ${authReq.display_name}: client=${clientReq.voteCount}, database=${authReq.vote_count}`);
-        }
-      }
     }
     if (mismatches.length === 0) {
       push(authoritative ? "  none detected" : "  unknown — authoritative fetch did not succeed, see above");
@@ -1640,6 +1639,52 @@ export function SessionSimulatorPanel({
       for (const m of mismatches) push(`  - ${m}`);
     }
     push("");
+
+    // Issue #21, twelfth/thirteenth corrective passes: a real-device
+    // capture showed the client's own Realtime-accumulated vote count
+    // disagreeing with a fresh authoritative count for the *same*
+    // candidate (4 vs 3, later 1 vs 2) while STATE MISMATCHES still said
+    // "none detected" — that section never looked at vote counts at
+    // all. Fixed (twelfth pass), then made more useful (thirteenth
+    // pass, Section 14): a dedicated block per mismatched candidate with
+    // both counts, the signed delta, and both ranks — cheap to compute
+    // (the client's own `pendingRequests` is already sorted the way
+    // `useActiveSpeakerRequests` ranks it; the authoritative list is
+    // sorted the same way, by vote count, immediately above) — matched
+    // by request id, never display name (two different requests can
+    // legitimately share a name). Called out prominently as its own
+    // "PROSPECTIVE RANKING MISMATCH" line when the rank itself differs,
+    // not just the raw count — that's the case that could eventually
+    // change who's actually shown as Next Speaker Candidate.
+    if (authoritative) {
+      const clientRankById = new Map(pendingRequests.map((r, i) => [r.id, i + 1]));
+      const authRankById = new Map(
+        [...authoritative.pendingRequests].sort((a, b) => b.vote_count - a.vote_count).map((r, i) => [r.id, i + 1]),
+      );
+      let anyCountMismatch = false;
+      for (const authReq of authoritative.pendingRequests) {
+        const clientReq = pendingRequests.find((r) => r.id === authReq.id);
+        if (!clientReq || clientReq.voteCount === authReq.vote_count) continue;
+        anyCountMismatch = true;
+        const clientRank = clientRankById.get(authReq.id) ?? null;
+        const authRank = authRankById.get(authReq.id) ?? null;
+        push("RTS COUNT MISMATCH");
+        push(`Candidate: ${authReq.display_name}`);
+        push(`Client votes: ${clientReq.voteCount}`);
+        push(`Database votes: ${authReq.vote_count}`);
+        push(`Delta: ${clientReq.voteCount - authReq.vote_count >= 0 ? "+" : ""}${clientReq.voteCount - authReq.vote_count}`);
+        push(`Client rank: ${clientRank !== null ? `#${clientRank}` : "—"}`);
+        push(`Database rank: ${authRank !== null ? `#${authRank}` : "—"}`);
+        if (clientRank !== authRank) {
+          push("PROSPECTIVE RANKING MISMATCH");
+        }
+        push("");
+      }
+      if (!anyCountMismatch) {
+        push("RTS COUNT MISMATCH: none detected");
+        push("");
+      }
+    }
 
     push("RESET / SIMULATOR OWNERSHIP");
     push(`  Guest ids tracked this run: ${allSimulatedGuestIdsRef.current.size}`);

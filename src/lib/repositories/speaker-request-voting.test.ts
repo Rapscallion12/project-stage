@@ -216,7 +216,7 @@ describe.skipIf(!hasServiceCredentials)("speaker request voting + selection (iss
       expect(activeRounds).toHaveLength(1);
     });
 
-    it("commits a weighted-random pick as the current candidate", async () => {
+    it("commits the deterministic RTS winner as the current candidate", async () => {
       const { data: rounds } = await service
         .from("speaker_selection_rounds")
         .select("*")
