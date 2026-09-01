@@ -904,7 +904,7 @@ export async function resolveSeatClosingAction(eventSpeakersId: string): Promise
  * (hooks/use-stage-round-reconciliation.ts) for the client-side trigger.
  */
 export async function reconcileStageRoundAction(eventId: string): Promise<void> {
-  await ensureStageRound(eventId);
+  await ensureStageRound(eventId, "reconcile-action");
 }
 
 /**

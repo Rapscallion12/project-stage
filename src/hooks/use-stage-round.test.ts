@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { applyStageRoundChange, useStageRound } from "./use-stage-round";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
@@ -120,5 +120,38 @@ describe("useStageRound — visibility/focus resync (issue #21, eighth correctiv
     fake.triggerSubscribed();
 
     await waitFor(() => expect(result.current?.round_number).toBe(1));
+  });
+});
+
+/**
+ * Issue #21, seventeenth corrective pass: while this pass's own incident
+ * was traced to a real server-side bug (migration 00000000000041), the
+ * investigation's own Section 3 asked for an audit of the round
+ * lifecycle for the analogous stale-observation class already fixed for
+ * `useActiveSpeakers`. This hook had on-SUBSCRIBED and visibility/focus
+ * resync but no bounded backstop — the one trigger that can catch a
+ * single WAL message silently dropped on an otherwise-healthy,
+ * continuously-visible connection, matching the exact precedent
+ * `useActiveSpeakerRequests`/`useActiveSpeakers` already established.
+ */
+describe("useStageRound — bounded backstop (issue #21, seventeenth corrective pass)", () => {
+  it("resyncs via the bounded 20s backstop with no SUBSCRIBED/visibility/focus trigger firing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fresh = stageRound({ round_number: 4, phase: "active" });
+      const fake = makeFakeSupabase(fresh);
+      createClient.mockReturnValue(fake.client);
+
+      const { result } = renderHook(() => useStageRound("e1"));
+      expect(result.current).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+
+      expect(result.current?.round_number).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

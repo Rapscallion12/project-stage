@@ -134,10 +134,18 @@ export async function resolveSeatClosing(eventSpeakersId: string): Promise<{ eve
  * underlying `claim_speaker_seat` RPC and so already get this for free
  * too) and for tests that want to assert on the resulting `StageRound`
  * directly.
+ *
+ * `source` (issue #21, seventeenth corrective pass, migration
+ * 00000000000041): a short literal tag identifying *this* caller,
+ * recorded into `stage_rounds.last_transition_reason` only when this
+ * call actually causes a phase/round-number change — see that
+ * migration's own doc comment for the real-device transition-
+ * observability gap this closes. Defaults to `"reconcile"` (this
+ * function's own most common caller, `reconcileStageRoundAction`).
  */
-export async function ensureStageRound(eventId: string): Promise<StageRound> {
+export async function ensureStageRound(eventId: string, source = "reconcile"): Promise<StageRound> {
   const supabase = createServiceClient();
-  const { data, error } = await supabase.rpc("ensure_stage_round", { p_event_id: eventId });
+  const { data, error } = await supabase.rpc("ensure_stage_round", { p_event_id: eventId, p_source: source });
   if (error) {
     throw new Error(error.message);
   }

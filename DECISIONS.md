@@ -3,6 +3,145 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-01 — Seventeenth corrective pass: a seat entering its own Final-30 closing window was incorrectly demoting the *shared* round for both speakers, hiding the timer even though the pairing was still fully intact (issue #21)
+
+**Context**: with client/database speaker state now reconciling
+correctly (sixteenth pass), a new real-device snapshot found a
+different, "impossible" state: both seats authoritatively occupied by
+the same two speakers the whole time, canonical client state matching
+the database perfectly, `STATE MISMATCHES: none detected` — yet the
+shared round sat in `awaiting_pairing` with the 60s timer gone, and had
+been for several minutes. Explicit instruction: trace the actual
+writer, don't patch by forcing the timer visible, define the legal
+round state machine before changing anything, and distinguish
+legitimate `active`→`awaiting_pairing` transitions (a real vacancy) from
+broken ones (a stale/delayed process wrongly believing the pairing is
+incomplete).
+
+**Trace — the one and only writer.** Exhaustive grep across every
+migration for `stage_rounds.phase`/`set phase` writes: exactly one
+function ever sets it, `ensure_stage_round`. Reading its then-current
+(migration 33) body: it required *both* `v_occupied_count = 2` *and*
+`v_closing_count = 0` before treating the round as active. `resolve_stage_round`
+(the shared deadline's own resolver) sets a narrow-loss seat's
+`round_phase` to `'closing'` *without* vacating it (`left_at` stays
+null, the seat stays fully occupied, still part of the pairing) —
+purely a marker for that seat's own independent 30s Final-30 grace
+window — then, in the same call, invokes `ensure_stage_round`. With the
+other seat having genuinely continued (still `round_phase = 'active'`),
+`v_occupied_count` was still 2, but `v_closing_count` was now 1, so the
+function fell into its own `else` branch and demoted the *entire*
+shared round — hiding the timer for the continuing speaker too, who had
+nothing to do with the other seat's own Final 30.
+
+**A genuine, acknowledged design-intent reversal, not an oversight.**
+The original migration 24 doc comment documented this exact behavior as
+deliberate: "only when both seats are occupied and neither is in its
+own closing window... otherwise marks (or leaves) the stage
+'awaiting_pairing'." This pass's own explicit instructions directly
+contradict that: "once both authoritative seats establish the resulting
+pairing, the shared round must reliably become/stay active... the two
+seats still share ONE authoritative round," with an explicit
+LEGITIMATE-vs-BROKEN framing naming exactly this scenario as BROKEN.
+Treated the current, explicit instruction as authoritative and recorded
+this as a deliberate reversal in the migration's own doc comment, not a
+silent override of the original design note.
+
+**Proved, not assumed, this isn't a stale-read/stale-write race**
+(explicitly asked for). `ensure_stage_round` always re-derives
+`v_occupied_count`/`v_closing_count` from a fresh `select count(*)` at
+the very top of its own execution, under a `for update` lock on the
+round row (`select * into v_round from stage_rounds ... for update`)
+that serializes every concurrent caller. No caller can ever pass in — or
+be poisoned by — a stale precomputed occupancy count. This was a pure
+SQL logic bug, not a concurrency bug.
+
+**Fix**: the "is this round active" gate now depends only on
+`v_occupied_count = 2` — a seat being `'closing'` no longer excludes it.
+The renewal condition inside (`phase = 'awaiting_pairing' or ends_at <=
+now`) is unchanged, and — since the outer gate no longer blocks it —
+now correctly renews the round for the *continuing* seat at the normal
+60s boundary even while the other seat's own independent 30s countdown
+keeps running, exactly matching an ordinary Continue/Continue renewal.
+The `event_speakers` sync UPDATE that stamps the new `round_number`/
+`round_ends_at` onto seats was already correctly scoped to
+`round_phase = 'active'` only (excludes the closing seat, governed
+instead by its own `closing_ends_at`) — no change needed there.
+
+**Observability, kept minimal on purpose.** One new nullable column,
+`stage_rounds.last_transition_reason`, written by `ensure_stage_round`
+only on an actual phase/round-number change (never a no-op call),
+reusing the already-existing `updated_at` for the mutation timestamp
+rather than adding a second column. Every one of `ensure_stage_round`'s
+six callers (`claim_speaker_seat`, `end_speaker_seat`,
+`leave_speaker_seat`, `leave_speaker_seat_as_guest`,
+`resolve_stage_round`, `resolve_seat_closing`) now passes its own
+literal source tag via a new `p_source` parameter, so the recorded
+string names exactly which caller made the transition and the old/new
+phase and round number it observed. Preview/dev diagnostics only, per
+instruction — surfaced in the Session Simulator panel's existing debug
+snapshot, not anywhere production-visible.
+
+**Independent confirmation the diagnosis was right, not just internally
+consistent.** A pre-existing real-database test (`stage-rounds.test.ts`,
+predating this pass) had been asserting the *old, buggy* behavior —
+`round.phase === "awaiting_pairing"` after a narrow-loss with both seats
+still occupied — as correct. That test's own failure after applying the
+fix (requiring its assertions to be corrected to the new, intended
+behavior) is evidence written before this pass's own theory existed,
+not evidence shaped to confirm it.
+
+**`useStageRound` audited for the same stale-observation class already
+fixed in `useActiveSpeakers`** (explicitly requested). Found it already
+had on-`SUBSCRIBED` and visibility/focus resync but no bounded backstop
+— added one (20s), matching the established sibling-hook pattern.
+Explicitly *not* the fix for this incident (proven server-side); pure
+defense-in-depth.
+
+**A second, genuinely separate bug found while verifying this fix live**,
+not fixed in this pass. `event_speakers_active` — the view every live
+client read of seat state goes through (`useActiveSpeakers`, and every
+other repository function reading "current speakers") — was defined
+(migration 18) with `select * from event_speakers ...` *before*
+`round_phase`/`closing_ends_at` existed as columns (migration 21,
+three migrations later). Postgres freezes a view's `select *` into the
+specific column list that existed at `CREATE VIEW` time, so those two
+columns silently never reach any client through this view, regardless
+of what the (manually-typed, not generator-derived) `EventSpeaker` type
+claims. Concretely: `useStageRoundResolution`'s client-side Final-30
+timer (`speakers.filter(s => s.round_phase === "closing" ...)`) and
+`speaker-vote-panel.tsx`'s own closing-countdown UI both read a field
+that is always `undefined` in production — the automatic replacement a
+narrowly-losing real speaker is supposed to receive after 30s does not
+fire on its own. Reproduced live: a simulated seat sat in `closing`
+across three consecutive round boundaries (~3 minutes) with no
+automatic eviction, until manually forced via the simulator's own
+`Force Replace Now` (which calls the real `resolveSeatClosingAction`).
+This is unrelated to the shared-round bug this pass fixed (different
+root cause, different code path, different fix shape — recreating the
+view's own column list, not touching `ensure_stage_round`) and is
+flagged for its own dedicated corrective pass rather than folded in
+here, per this project's own "name the gap, don't unilaterally expand
+scope" discipline.
+
+**Verification**: full suite green (1149/1149 tests, 84/84 files — up
+from 1145/84), lint, tsc, build all clean. New/changed tests:
+`stage-rounds.test.ts` — the corrected narrow-loss test (round now
+`active`, continuing seat's round renews) plus three new tests: `last_transition_reason`
+recording the initiating source and old/new phase+round for a fresh
+pairing, concurrent duplicate `ensure_stage_round` calls after both
+seats are already occupied never demoting the active pairing, and a
+redundant reconcile call arriving right after a narrow-loss transition
+not undoing the still-active round. `use-stage-round.test.ts` — new
+bounded-backstop test. Live-browser verification (fresh dev server,
+real demo event, real simulator run, not forced/scripted outcomes):
+7 consecutive rounds observed end-to-end, including two decisive
+replacements, one narrow-loss/closing (the exact bug scenario,
+confirmed fixed — `INVARIANT STATUS: OK`, timer visibly ticking across
+three round boundaries while one seat stayed closing), and a full
+replacement cycle to completion. Not merged to `main`; fresh preview
+deployed.
+
 ## 2026-09-01 — Sixteenth corrective pass: canonical stage speaker state (`useActiveSpeakers`) now reconciles event-driven off bootstrap's own authoritative confirmation, closing a real 13+ second client/database divergence (issue #21)
 
 **Context**: with simulator bootstrap now authoritatively succeeding

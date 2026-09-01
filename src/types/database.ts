@@ -475,6 +475,7 @@ export type Database = {
           fallback_excluded_guest_ids: string[]
           fallback_excluded_profile_ids: string[]
           id: string
+          last_transition_reason: string | null
           phase: string
           round_number: number
           started_at: string
@@ -486,6 +487,7 @@ export type Database = {
           fallback_excluded_guest_ids?: string[]
           fallback_excluded_profile_ids?: string[]
           id?: string
+          last_transition_reason?: string | null
           phase?: string
           round_number?: number
           started_at?: string
@@ -497,6 +499,7 @@ export type Database = {
           fallback_excluded_guest_ids?: string[]
           fallback_excluded_profile_ids?: string[]
           id?: string
+          last_transition_reason?: string | null
           phase?: string
           round_number?: number
           started_at?: string
@@ -664,13 +667,14 @@ export type Database = {
         }
       }
       ensure_stage_round: {
-        Args: { p_event_id: string }
+        Args: { p_event_id: string; p_source?: string }
         Returns: {
           ends_at: string
           event_id: string
           fallback_excluded_guest_ids: string[]
           fallback_excluded_profile_ids: string[]
           id: string
+          last_transition_reason: string | null
           phase: string
           round_number: number
           started_at: string

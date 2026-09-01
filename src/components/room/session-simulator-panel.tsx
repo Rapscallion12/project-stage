@@ -2090,6 +2090,44 @@ export function SessionSimulatorPanel({
     push(`STATE CHANGED DURING CAPTURE: ${stateChangedDuringCapture ? "yes" : "no"}`);
     push("");
 
+    // Issue #21, seventeenth corrective pass: a real-device snapshot
+    // showed the shared round authoritatively demoted (active →
+    // awaiting_pairing) while both seats remained authoritatively
+    // occupied by the same two speakers the whole time — a genuine
+    // round-lifecycle bug (traced to `ensure_stage_round` treating any
+    // seat's own Final-30 "closing" window as equivalent to the pairing
+    // being incomplete; see DECISIONS.md and migration
+    // 00000000000041), not a client-sync issue. This section makes the
+    // round's own lifecycle state directly legible: the last
+    // authoritative mutation (when, by what/why, per
+    // `stage_rounds.last_transition_reason` — recorded server-side only
+    // on an actual phase/round-number change), each occupied seat's own
+    // round_phase (a "closing" seat is still occupied and still part of
+    // the pairing — never itself a reason the shared round should be
+    // demoted), and an explicit invariant check: occupied seat count
+    // should always agree with round phase, regardless of how many of
+    // those seats are individually closing.
+    if (authoritative) {
+      push("ROUND TRANSITION DIAGNOSTICS");
+      push(`Round: #${authoritative.round?.round_number ?? "—"} ${authoritative.round?.phase ?? "none"}`);
+      push(`Last authoritative mutation: ${authoritative.round?.updated_at ?? "unknown"}`);
+      push(`Last transition reason: ${authoritative.round?.last_transition_reason ?? "none recorded"}`);
+      const closingSeats = authoritative.seats.filter((s) => s.round_phase !== "active");
+      push(`Occupied seats: ${authoritative.seats.length} (closing: ${closingSeats.length})`);
+      for (const seat of authoritative.seats) {
+        push(`  Seat ${seat.seat_number}: round_phase=${seat.round_phase}`);
+      }
+      const expectedPhase = authoritative.seats.length === 2 ? "active" : "awaiting_pairing";
+      const actualPhase = authoritative.round?.phase ?? "none";
+      const roundInvariantOk = actualPhase === expectedPhase;
+      push(`INVARIANT STATUS: ${roundInvariantOk ? "OK" : "VIOLATION"}`);
+      if (!roundInvariantOk) {
+        push(`  EXPECTED: phase=${expectedPhase} (${authoritative.seats.length} seat(s) occupied)`);
+        push(`  ACTUAL: phase=${actualPhase}`);
+      }
+      push("");
+    }
+
     // Issue #21, twelfth corrective pass, Section "ADD INVARIANT
     // DETECTION TO SNAPSHOT": a real-device capture proved the room
     // could sit in established + fillable-vacant + eligible-RTS + no-

@@ -452,7 +452,7 @@ export async function resetSimulatorSession(
     if ((remainingOccupied ?? 0) === 0) {
       await supabase.from("stage_rounds").delete().eq("event_id", eventId);
     } else {
-      await ensureStageRound(eventId);
+      await ensureStageRound(eventId, "reset-simulator-session");
     }
   }
 
@@ -467,12 +467,21 @@ export async function resetSimulatorSession(
 
 export type DebugSnapshotState = {
   fetchedAt: string;
-  round: { round_number: number; phase: string; ends_at: string } | null;
+  round: {
+    round_number: number;
+    phase: string;
+    ends_at: string;
+    /** Issue #21, seventeenth corrective pass: when `ensure_stage_round` last actually changed phase/round_number, and by whom/why — see migration 00000000000041's own doc comment. `null` before any transition has ever been recorded (a brand-new placeholder row). */
+    updated_at: string;
+    last_transition_reason: string | null;
+  } | null;
   seats: Array<{
     seat_number: 1 | 2;
     display_name: string;
     identity_kind: "profile" | "guest";
     disconnected: boolean;
+    /** Issue #21, seventeenth corrective pass: whether this seat is in its own individual Final-30 window — occupied (`left_at is null`) either way; a `"closing"` seat is still part of the pairing, just excluded from the shared round's own next Continue/Replace cycle. */
+    round_phase: string;
   }>;
   pendingRequests: Array<{
     id: string;
@@ -507,7 +516,11 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
   const supabase = createServiceClient();
 
   const [{ data: roundRow }, { data: seatRows }, { data: requestRows }, { data: voteRows }] = await Promise.all([
-    supabase.from("stage_rounds").select("round_number, phase, ends_at").eq("event_id", eventId).maybeSingle(),
+    supabase
+      .from("stage_rounds")
+      .select("round_number, phase, ends_at, updated_at, last_transition_reason")
+      .eq("event_id", eventId)
+      .maybeSingle(),
     supabase
       .from("event_speakers_active")
       .select("seat_number, display_name, profile_id, guest_id, disconnected_at")
@@ -521,6 +534,21 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
       .order("created_at", { ascending: true }),
     supabase.from("speaker_request_votes").select("request_id").eq("event_id", eventId),
   ]);
+
+  // Issue #21, seventeenth corrective pass: `event_speakers_active`'s own
+  // column set is frozen from its original CREATE VIEW (migration
+  // 00000000000018) — it predates `round_phase` entirely (added to
+  // `event_speakers` itself in migration 00000000000021, well after the
+  // view), so a `select *` view doesn't retroactively pick it up. A
+  // small, separate direct read against the base table fills in just
+  // this one extra field for the same currently-occupied seats, rather
+  // than redefining the view for a debug-only need.
+  const { data: roundPhaseRows } = await supabase
+    .from("event_speakers")
+    .select("seat_number, round_phase")
+    .eq("event_id", eventId)
+    .is("left_at", null);
+  const roundPhaseBySeat = new Map((roundPhaseRows ?? []).map((r) => [r.seat_number, r.round_phase]));
 
   const requestIds = (requestRows ?? []).map((r) => r.id);
   const { data: messageRows } =
@@ -542,12 +570,21 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
 
   return {
     fetchedAt: new Date().toISOString(),
-    round: roundRow ? { round_number: roundRow.round_number, phase: roundRow.phase, ends_at: roundRow.ends_at } : null,
+    round: roundRow
+      ? {
+          round_number: roundRow.round_number,
+          phase: roundRow.phase,
+          ends_at: roundRow.ends_at,
+          updated_at: roundRow.updated_at,
+          last_transition_reason: roundRow.last_transition_reason,
+        }
+      : null,
     seats: (seatRows ?? []).map((s) => ({
       seat_number: s.seat_number as 1 | 2,
       display_name: s.display_name ?? "(unknown)",
       identity_kind: s.profile_id ? "profile" : ("guest" as const),
       disconnected: s.disconnected_at !== null,
+      round_phase: (s.seat_number !== null ? roundPhaseBySeat.get(s.seat_number) : undefined) ?? "active",
     })),
     pendingRequests: (requestRows ?? []).map((r) => ({
       id: r.id,

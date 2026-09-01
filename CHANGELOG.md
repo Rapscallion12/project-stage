@@ -13,6 +13,24 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed the shared 60-second round timer disappearing while both
+  speakers were still genuinely seated** (issue #21, seventeenth
+  corrective pass) — this happened specifically once one speaker
+  narrowly lost their Continue/Replace vote and entered their own
+  individual 30-second "Final 30" grace window: even though both seats
+  were still occupied and the pairing was intact, the shared round was
+  being demoted as if the pairing had broken, hiding the timer for
+  *both* speakers, including the one who had nothing to do with the
+  Final-30 window. The shared round now correctly stays active — and
+  the continuing speaker gets their normal fresh round — the whole time
+  the other speaker's own Final 30 plays out independently. Added a
+  small, preview/dev-only diagnostic recording why the round's phase
+  last changed. Also found, while verifying this fix against a real
+  running room: a *separate*, pre-existing bug where a speaker's own
+  Final-30 grace window never actually finishes on its own for real
+  participants (the two-minute automatic replacement it's supposed to
+  trigger doesn't fire) — flagged for a dedicated corrective pass rather
+  than folded into this one. See DECISIONS.md.
 - **Fixed a case where the stage could show both seats as empty for
   several seconds after they actually became occupied** (issue #21,
   sixteenth corrective pass) — most noticeable right after starting the

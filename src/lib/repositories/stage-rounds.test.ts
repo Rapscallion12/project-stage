@@ -197,6 +197,27 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     expect(seat2!.round_ends_at).toBe(round.ends_at);
   });
 
+  /**
+   * Section 6 observability, pinned against the actual pairing-formation
+   * transition (not just the closing-demotion fix's own transition,
+   * covered separately below): `claim_speaker_seat`'s trailing
+   * `ensure_stage_round(p_event_id, 'claim_speaker_seat')` call is the
+   * one that flips the round from 'awaiting_pairing' to 'active'.
+   * `claimBothSeats` always claims seat 1 alone first (forcing the round
+   * to 'awaiting_pairing', if it wasn't already) before claiming seat 2
+   * — so regardless of whatever phase the shared event's round was left
+   * in by an earlier test, the transition captured by seat 2's claim is
+   * guaranteed to read 'awaiting_pairing' as its old phase.
+   */
+  it("last_transition_reason records the initiating source and old/new phase+round for the transition that establishes a fresh pairing", async () => {
+    await claimBothSeats();
+    const round = await getStageRound();
+    expect(round.phase).toBe("active");
+    expect(round.last_transition_reason).toBe(
+      `claim_speaker_seat: awaiting_pairing->active (round ${round.round_number - 1}->${round.round_number}, occupied=2 closing=0)`,
+    );
+  });
+
   it("claiming only one seat leaves the stage awaiting_pairing — no ticking countdown with only one speaker seated", async () => {
     await claimSeat1Only();
     const round = await getStageRound();
@@ -284,8 +305,9 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     expect(round.phase).toBe("awaiting_pairing");
   });
 
-  it("a narrow loss produces individual closing for that seat only — the continuing partner does not get a fresh independent timer meanwhile", async () => {
+  it("a narrow loss produces individual closing for that seat only — the shared round stays active and the continuing partner gets a fresh round, unaffected by the closing seat", async () => {
     const [id1, id2] = await claimBothSeats();
+    const roundBefore = await getStageRound();
     await castContinueVotes(id1);
     // 3 replace / 2 continue = 60% for seat 2 — strictly between thresholds.
     await castNarrowLossVotes(id2);
@@ -303,12 +325,99 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     expect(seat2!.round_phase).toBe("closing");
     expect(seat2!.closing_ends_at).not.toBeNull();
 
-    // The shared round backs off to awaiting_pairing while one seat is
-    // closing — seat1 (the continuing speaker) is NOT given a fresh
-    // round_number/round_ends_at while this is happening.
+    // Issue #21, seventeenth corrective pass: a real-device snapshot
+    // proved the *previous* behavior here — demoting the whole shared
+    // round to awaiting_pairing merely because one seat is closing —
+    // was a real bug: both seats remain authoritatively occupied (seat2
+    // is closing, not vacant), so the pairing itself is still intact.
+    // The shared round now correctly stays active, and seat1 (the
+    // continuing speaker, genuinely unaffected by seat2's own Final-30)
+    // gets a fresh round_number/round_ends_at — the same renewal an
+    // ordinary Continue/Continue outcome would produce. seat2's own
+    // round_number is deliberately NOT synced to this new round (the
+    // sync UPDATE only ever touches round_phase='active' seats) — it's
+    // governed entirely by its own closing_ends_at instead.
     const round = await getStageRound();
-    expect(round.phase).toBe("awaiting_pairing");
+    expect(round.phase).toBe("active");
+    expect(round.round_number).toBe(roundBefore.round_number + 1);
     expect(seat1!.round_number).toBe(round.round_number);
+
+    // Section 6 observability: the row itself now records which caller
+    // made this exact transition and the old/new phase+round it observed
+    // — proving `resolve_stage_round`'s own trailing `ensure_stage_round`
+    // call is the one that renewed the round here (not, say, a
+    // coincidental client-triggered reconcile), and that it correctly
+    // saw the round as already 'active' going into a boundary-driven
+    // renewal (`ends_at <= v_now`), not 'awaiting_pairing'.
+    expect(round.last_transition_reason).toBe(
+      `resolve_stage_round: active->active (round ${roundBefore.round_number}->${round.round_number}, occupied=2 closing=1)`,
+    );
+  });
+
+  /**
+   * Issue #21, seventeenth corrective pass, Section 7A: the pass's own
+   * investigation proved (Section 3) that `ensure_stage_round` cannot
+   * actually be poisoned by a stale precomputed occupancy count — every
+   * call re-derives `v_occupied_count`/`v_closing_count` fresh, under a
+   * `for update` lock on the round row, at the top of its own execution.
+   * This test pins that guarantee directly: several concurrent calls
+   * (standing in for late/duplicate reconcile triggers — a Realtime
+   * resync, a bootstrap follow-up, a duplicate client resync — arriving
+   * after the pairing is already correctly active) must never demote a
+   * currently-valid active pairing, and must never disagree with each
+   * other about the outcome, however they're interleaved by Postgres.
+   */
+  it("concurrent ensure_stage_round calls after both seats are already occupied never demote the active pairing — no caller can poison it with a stale observation (Section 7A)", async () => {
+    const [id1, id2] = await claimBothSeats();
+    const roundBefore = await getStageRound();
+    expect(roundBefore.phase).toBe("active");
+
+    const results = await Promise.all([
+      service.rpc("ensure_stage_round", { p_event_id: eventId, p_source: "test-stale-reconcile-1" }),
+      service.rpc("ensure_stage_round", { p_event_id: eventId, p_source: "test-stale-reconcile-2" }),
+      service.rpc("ensure_stage_round", { p_event_id: eventId, p_source: "test-stale-reconcile-3" }),
+    ]);
+    for (const { error } of results) expect(error).toBeNull();
+
+    // Not yet at the boundary and already active -- every one of these
+    // calls should have been a true no-op: same round_number, same
+    // phase, no spurious renewal.
+    const round = await getStageRound();
+    expect(round.phase).toBe("active");
+    expect(round.round_number).toBe(roundBefore.round_number);
+
+    const { data: seat1 } = await service.from("event_speakers").select("left_at").eq("id", id1).single();
+    const { data: seat2 } = await service.from("event_speakers").select("left_at").eq("id", id2).single();
+    expect(seat1!.left_at).toBeNull();
+    expect(seat2!.left_at).toBeNull();
+  });
+
+  /**
+   * The exact regression class from this pass's real-device finding: a
+   * reconcile call landing WHILE one seat is closing (not merely before
+   * or after) must still never demote the shared round for the seat that
+   * genuinely continued — proven here by invoking `ensure_stage_round`
+   * an extra, redundant time immediately after `resolve_stage_round`
+   * itself already renewed it, standing in for a duplicate/late-arriving
+   * trigger (e.g. a client-side reconcile fired by the same Realtime
+   * event that already updated everyone).
+   */
+  it("a redundant reconcile call arriving right after a narrow-loss transition (one seat closing, one continuing) does not undo the still-active round", async () => {
+    const [id1, id2] = await claimBothSeats();
+    await castContinueVotes(id1);
+    await castNarrowLossVotes(id2);
+    await backdateStageRound();
+    await service.rpc("resolve_stage_round", { p_event_id: eventId }); // seat2 now closing; round already renewed active per the fix
+
+    const roundAfterResolve = await getStageRound();
+    expect(roundAfterResolve.phase).toBe("active");
+
+    const { error } = await service.rpc("ensure_stage_round", { p_event_id: eventId, p_source: "test-late-duplicate-reconcile" });
+    expect(error).toBeNull();
+
+    const round = await getStageRound();
+    expect(round.phase).toBe("active");
+    expect(round.round_number).toBe(roundAfterResolve.round_number);
   });
 
   it("the closing period expiring replaces that one seat regardless of later activity, and the next shared round begins only once the vacancy is refilled", async () => {

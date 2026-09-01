@@ -1347,6 +1347,55 @@ different dependencies. Current order:
       active ~1.93s → Startup READY ~2.0s — canonical state converged
       *before* READY, not 13+ seconds after. See DECISIONS.md and
       SESSION_LOG.md's Session 57.
+
+      **Seventeenth corrective pass (2026-09-01, same branch)**: a new
+      real-device snapshot showed both seats authoritatively occupied by
+      the same two speakers, canonical client state matching perfectly,
+      yet the shared round sitting in `awaiting_pairing` with the 60s
+      timer gone. Traced (not assumed) `stage_rounds.phase` to its one
+      and only writer, `ensure_stage_round`: since its first version
+      (migration 24), it required *both* both-seats-occupied *and*
+      nobody currently in their own Final-30 "closing" window before
+      treating the round as active — a narrow-loss outcome puts the
+      losing seat into `round_phase = 'closing'` without vacating it, so
+      the still-fully-paired stage fell into the function's own `else`
+      branch and got demoted, hiding the timer for the *continuing*
+      speaker too, who had nothing to do with the other seat's own
+      Final 30. This was a deliberate, documented design choice at the
+      shared-round architecture's own introduction — reversed here per
+      this pass's own explicit instruction that a seat merely closing,
+      still occupied and still part of the pairing, must not demote the
+      shared round. Proved (not assumed) this isn't a stale-read/stale-
+      write race: `ensure_stage_round` always re-derives occupancy fresh
+      under a row lock at the top of its own execution; every one of its
+      six callers now also tags its call with its own literal source
+      name. Fix: the "is this round active" gate now depends only on
+      both-seats-occupied; a seat being closing no longer excludes it,
+      and the (unchanged) renewal condition correctly gives the
+      continuing seat a fresh round at the normal boundary even while
+      the other seat's own independent 30s countdown keeps running. Added
+      a small, preview/dev-only `last_transition_reason` column,
+      populated only on an actual phase/round-number change, encoding
+      the initiating source and the old/new phase and round number — a
+      pre-existing real-database test had been asserting the *old, buggy*
+      behavior as correct, and its own failure after the fix is
+      independent confirmation the diagnosis was right. Live-browser
+      verification ran the simulator through 7 consecutive rounds
+      (several decisive replacements, one narrow-loss/closing) — the
+      exact bug scenario (one seat closing, one continuing) was observed
+      live three separate round boundaries in a row with the timer
+      correctly staying visible and ticking throughout, then a full
+      replacement cycle completed cleanly. That same verification also
+      surfaced a genuinely separate, pre-existing bug: `event_speakers_active`
+      (the view every live client read of seat state goes through) was
+      defined before `round_phase`/`closing_ends_at` existed as columns,
+      so Postgres's own `select *` column-freezing means those two
+      columns never actually reach any client — the Final-30 UI and its
+      automatic replacement-after-30s timer are consequently non-
+      functional for real participants right now. Not fixed in this
+      pass (different root cause, different fix shape); flagged clearly
+      for its own corrective pass. See DECISIONS.md and SESSION_LOG.md's
+      Session 58.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

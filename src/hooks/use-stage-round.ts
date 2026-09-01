@@ -83,10 +83,30 @@ export function useStageRound(eventId: string): StageRound | null {
     document.addEventListener("visibilitychange", handleVisibilityRestored);
     window.addEventListener("focus", handleVisibilityRestored);
 
+    // Issue #21, seventeenth corrective pass: while auditing the round
+    // lifecycle for the same class of "stale observation" problem the
+    // sixteenth pass closed for `useActiveSpeakers`, this hook proved to
+    // have on-SUBSCRIBED and visibility/focus resync (both already
+    // present) but no bounded backstop — the one thing every sibling
+    // hook that reads Realtime deltas off a single, long-lived,
+    // continuously-visible connection now has (`useActiveSpeakers`,
+    // `useActiveSpeakerRequests`), specifically because neither of those
+    // two triggers can ever catch a single WAL message silently dropped
+    // in transit without the connection itself visibly dropping. This
+    // pass's own root-cause investigation found the actual bug to be
+    // server-side (a real, provable `stage_rounds.phase` mutation, not a
+    // client-observation gap — see migration 00000000000041), so this is
+    // deliberately a defense-in-depth addition, not the fix for the
+    // incident itself.
+    const backstopInterval = setInterval(() => {
+      void fetchStageRound(supabase, eventId).then(setStageRound);
+    }, 20_000);
+
     return () => {
       supabase.removeChannel(channel);
       document.removeEventListener("visibilitychange", handleVisibilityRestored);
       window.removeEventListener("focus", handleVisibilityRestored);
+      clearInterval(backstopInterval);
     };
   }, [eventId]);
 
