@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { useActiveSpeakers } from "@/hooks/use-active-speakers";
 import { useActiveSpeakerRequests } from "@/hooks/use-active-speaker-requests";
 import { useAutomaticPromotion } from "@/hooks/use-automatic-promotion";
@@ -19,6 +19,7 @@ import { useStageRound } from "@/hooks/use-stage-round";
 import { useStageRoundResolution } from "@/hooks/use-stage-round-resolution";
 import { useStageRoundReconciliation } from "@/hooks/use-stage-round-reconciliation";
 import { useSpeakerSelectionReconciliation } from "@/hooks/use-speaker-selection-reconciliation";
+import { useSpeakerInvariantRecovery } from "@/hooks/use-speaker-invariant-recovery";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -122,7 +123,22 @@ export function EventRoom({
   isPreviewBuild: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
-  const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
+  const { speakers, roomStatus, refetch: refetchSpeakers, getSyncDiagnostics: getSpeakerSyncDiagnostics } = useActiveSpeakers(
+    event.id,
+    initialSpeakers,
+  );
+  // Issue #21, sixteenth corrective pass: `refetchSpeakers` now takes an
+  // optional `reason` and returns the freshly-fetched rows (so a caller
+  // like simulator bootstrap can verify convergence directly — see
+  // SessionSimulatorPanel's own doc comment). `onClaimSucceeded`/
+  // `useSeatReconciliation`'s own `refetch` prop are typed `() => void`/
+  // `() => Promise<void>` and never need the fetched rows themselves —
+  // this is the same reconcile, just called without a reason (defaults
+  // to "manual") and with its return value discarded, never a second,
+  // parallel mechanism.
+  const refetchSpeakersAsVoid = useCallback(async () => {
+    await refetchSpeakers();
+  }, [refetchSpeakers]);
   const { pendingRequests } = useActiveSpeakerRequests(event.id, identity, initialPendingRequests);
 
   // Issue #27: lifted above the orientation branch — like every other
@@ -421,7 +437,7 @@ export function EventRoom({
     // own useCallback), and this hook's claim effect depends on it, so an
     // unstable identity here would re-schedule its countdown timer on
     // every unrelated EventRoom re-render.
-    onClaimSucceeded: refetchSpeakers,
+    onClaimSucceeded: refetchSpeakersAsVoid,
   });
 
   // Issue #18 real-device finding (2026-08-28): the automatic,
@@ -435,7 +451,7 @@ export function EventRoom({
   useSeatReconciliation({
     isSpeaker,
     canPublish: connection.canPublish,
-    refetch: refetchSpeakers,
+    refetch: refetchSpeakersAsVoid,
   });
 
   // Issue #21 corrective pass, real-device finding: closes the stuck
@@ -487,6 +503,17 @@ export function EventRoom({
   // this one catches the round ever being active without a genuinely
   // established pairing in the first place).
   useStageRoundReconciliation(event.id, speakers);
+
+  // Issue #21, sixteenth corrective pass: the inverse invariant —
+  // `useStageRoundReconciliation` above re-verifies the shared round
+  // against this tab's own *speaker* occupancy; nothing previously
+  // checked the other direction. A real-device snapshot caught exactly
+  // this combination: client round #7 active, client seats occupied:
+  // none, for 13+ seconds. See the hook's own doc comment for why this
+  // is a bounded safety net, not the primary fix (that's event-driven
+  // reconciliation at the actual mutation sites, e.g.
+  // SessionSimulatorPanel's own bootstrap-confirmation calls below).
+  useSpeakerInvariantRecovery(stageRound, speakers.length, refetchSpeakers);
 
   // Issue #21, fifth corrective pass, Section 6: the same reactive-
   // backstop discipline, for candidate selection/reservation this time —
@@ -679,6 +706,17 @@ export function EventRoom({
           stageRound={stageRound}
           realJoinInProgress={isJoiningSeat || promotionCountdown !== null}
           onSimulatedIdentitiesCreated={registerSimulatedGuestIds}
+          // Issue #21, sixteenth corrective pass: the same canonical
+          // reconcile function every other trigger in this component
+          // uses (SUBSCRIBED, visibility, focus, the invariant check
+          // above, the already-speaking contradiction below) — bootstrap
+          // calls this directly after its own authoritative seat
+          // confirmation, tagged "bootstrap", instead of only trusting
+          // Realtime to eventually deliver the same INSERT this tab's
+          // own mutation just caused. One canonical stage speaker state,
+          // never a simulator-specific duplicate.
+          refetchSpeakers={refetchSpeakers}
+          getSpeakerSyncDiagnostics={getSpeakerSyncDiagnostics}
           // Issue #21, seventh corrective pass, Section 19: defense in
           // depth alongside SessionSimulatorPanel's own database cleanup
           // — an explicit fresh read of speaker occupancy, the same

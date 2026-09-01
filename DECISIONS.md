@@ -3,6 +3,139 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-01 — Sixteenth corrective pass: canonical stage speaker state (`useActiveSpeakers`) now reconciles event-driven off bootstrap's own authoritative confirmation, closing a real 13+ second client/database divergence (issue #21)
+
+**Context**: with simulator bootstrap now authoritatively succeeding
+(fifteenth pass), a new real-device snapshot showed a *different* gap:
+bootstrap's own confirmation ("Seat 1 = Nimble Lynx, Seat 2 = Dapper
+Deer," "Pairing detected," "Round active," "Startup READY") coexisted
+with the stage-facing client still reporting both seats vacant, 13+
+seconds later — an "impossible" client state (an active shared round
+requires the established pairing) that only self-healed later, in the
+same session, for reasons the evidence didn't fully prove. Explicit
+instruction: trace the actual state paths, don't assume a generic
+"Realtime timing" explanation, and fix it event-driven, never with a
+poll or an arbitrary startup delay.
+
+**State source trace.** Two genuinely separate sources of truth: (1)
+bootstrap's own authoritative confirmation, a direct
+`event_speakers_active` read inside `SessionSimulatorPanel`'s own
+`establishSeat`/`fetchSeatOccupants` — entirely local to that
+component, never touching any other client state; (2) the *canonical*
+stage-facing speaker state, `useActiveSpeakers` (`EventRoom`), which
+only ever updated via incremental Realtime `postgres_changes` deltas
+plus a full resync on-`SUBSCRIBED` — no bounded backstop, no visibility/
+focus resync (unlike its sibling hooks `useActiveSpeakerRequests`/
+`useSeatReconciliation`, both already fixed in the thirteenth/earlier
+passes for the identical class of problem). These two sources had no
+connection to each other at all: a successful bootstrap claim updated
+source (1) immediately and correctly, but nothing ever told source (2)
+to look again — it depended entirely on Realtime redelivering the same
+INSERT its own mutation had just caused, with no bounded fallback if
+that single message was silently dropped in transit (a real, known
+failure mode on mobile networks, the same root cause already proven for
+votes/requests in the thirteenth pass) and no reconnect ever occurring
+to re-trigger the on-SUBSCRIBED path (this was a long-lived, continuously-
+connected session — the same shape that made the thirteenth pass's own
+vote-drift bug so hard to observe).
+
+**Fix — the one canonical reconcile, reused everywhere, called directly
+from the mutation site.** `useActiveSpeakers` gained a `reconcile(reason)`
+function (exposed as `refetch(reason?)`) — every trigger (on-SUBSCRIBED,
+visibility restoration, window focus, a new bounded 20s backstop, and
+any external caller) now shares this one function; none duplicate the
+fetch-and-replace logic. `SessionSimulatorPanel`'s `establishSeat` calls
+it directly, tagged `"bootstrap"`, immediately after its own
+authoritative seat confirmation — the actual fix, not the backstop:
+the client learns the truth the instant bootstrap itself does, never
+waiting on Realtime at all. `EventRoom` passes its own `useActiveSpeakers`
+instance's `refetch` straight through as a prop — no simulator-specific
+duplicate speaker store, per explicit instruction.
+
+**A second, independent race found and closed while building this**:
+multiple reconciles can genuinely overlap (the on-SUBSCRIBED resync and
+a bootstrap-triggered one, moments apart) — without protection, an
+*older*, slower-to-resolve read completing *after* a newer one would
+clobber it with stale data. Closed with a monotonic sequence number:
+only the most recently *started* reconcile's result is ever applied,
+regardless of completion order. Proven directly (`use-active-speakers-
+sync.test.ts`, "stale initial fetch race").
+
+**READY semantics — genuinely changed, not just relabeled.**
+`establishInitialPairing` now performs one final, *awaited* verification
+after the round is confirmed active: calls `refetchSpeakers("bootstrap")`
+and checks the returned rows actually show both intended identities on
+their respective seats, bounded to 3 short attempts (never an arbitrary
+wait — `refetchSpeakers` is a direct authoritative read, not Realtime-
+dependent, so this converges on the first attempt in the ordinary case).
+If it genuinely doesn't converge, this is reported as a distinct
+`CLIENT SYNC` failure (`formatFailedPhase`'s own `phase` field literally
+says "Canonical client speaker state reconciliation," never conflated
+with a bootstrap failure — the database is already correct in that
+case, only this tab's own canonical state hasn't caught up).
+
+**A bounded safety net, not the primary fix, for the general shape.** A
+new `useSpeakerInvariantRecovery` hook (mirroring `useStageRoundReconciliation`'s
+own shape and doc-comment precedent, but the *inverse* direction — that
+hook re-verifies the round against speaker occupancy; this one
+re-verifies speaker occupancy against the round) fires one bounded,
+event-driven reconcile per distinct round number whenever an active
+round coexists with fewer than two locally-known speakers — the exact
+"impossible" combination the triggering snapshot showed. Fires at most
+once per round transition, never a retry loop, never a `setInterval` —
+a safety net for whatever the direct fix at bootstrap's own mutation
+site doesn't cover, not a replacement for it.
+
+**Why it took >13 seconds to self-heal in the user's own continued
+session — stated honestly, not invented.** The evidence does not prove
+the exact trigger. `useActiveSpeakers` (before this pass) had exactly
+one mechanism capable of replacing its *entire* stale state at once
+(both seats simultaneously, matching the later snapshot's full
+convergence, including a seat whose own occupant was never replaced in
+between): a fresh on-`SUBSCRIBED` resync, which only fires on the
+*initial* subscription or an automatic *reconnect* after a real
+connection drop. The most likely supported explanation is a genuine
+WebSocket reconnect — a real network blip, or (matching the eighth
+pass's own established real-device lesson) the mobile tab being
+backgrounded and foregrounded — since that is the only trigger the
+pre-fix hook actually had; a single later real INSERT (e.g. "Gentle
+Heron promoted") could explain *one* seat updating on its own via the
+ordinary Realtime path, but not both simultaneously, including the seat
+that was never replaced. This is reported as the supported likely
+cause, not a proven certainty.
+
+**Debug snapshot**: two new side-by-side blocks, `AUTHORITATIVE SPEAKER
+STATE` and `CANONICAL CLIENT SPEAKER STATE` (the existing `STATE
+MISMATCHES` section already diffs them; these make each source's own
+raw values directly comparable without needing to reconstruct one side
+from a diff), plus a `SPEAKER SYNC` section (channel status, last
+SUBSCRIBED/Realtime-event/reconcile-started/reconcile-completed
+timestamps, reconcile reason, reconcile result, last mutation source) —
+the exact fields needed to distinguish "Realtime hasn't delivered yet"
+from "no reconcile ever ran" from "a reconcile ran but disagreed,"
+without dumping every internal detail.
+
+**Regression check**: no change to `claim_speaker_seat`, `simulateSeedSpeaker`,
+`ensureActiveSelectionRound`, `freeze_speaker_candidates`, or any
+selection/replacement logic — this pass is client-side speaker-state
+synchronization only. Deterministic RTS, real-participant protection,
+and the fifteenth pass's own unified bootstrap mechanism are all
+untouched, confirmed by diff scope and by the fifteenth pass's own
+real-database tests remaining green unmodified.
+
+**Verification**: full suite (1145 tests, 84 files — up from 1122/82,
++2 new test files: `use-active-speakers-sync.test.ts` and
+`use-speaker-invariant-recovery.test.ts`, plus additions to
+`session-simulator-panel.test.tsx`), lint, tsc, build all clean.
+Live-browser measurement (fresh dev server, real demo event, real
+database): Start tap → both seats authoritatively confirmed → **stage
+tiles showing both real names** at ~1.9s → shared round active at
+~1.93s → Startup READY at ~2.0s — the canonical client state converged
+*before* READY was even declared, not 13+ seconds after. A subsequent
+real Open Seat → vacate → reserve → promote → occupy cycle (the real
+production replacement pipeline, untouched) kept the canonical state
+correctly synchronized throughout.
+
 ## 2026-08-31 — Fifteenth corrective pass: retired the real-RTS-wait bootstrap path for an already-established stage; bootstrap is now one unified, authoritative bypass mechanism with stale-generation cleanup (issue #21)
 
 **Context**: even after the fourteenth pass's idempotent/self-healing

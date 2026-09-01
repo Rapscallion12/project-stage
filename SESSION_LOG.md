@@ -4,6 +4,80 @@ Newest entry first.
 
 ---
 
+## 2026-09-01 — Session 57: Sixteenth corrective pass — canonical stage speaker state now reconciles event-driven off bootstrap's own authoritative confirmation, closing a real 13+ second client/database divergence (issue #21)
+
+**Goal**: with bootstrap now authoritatively succeeding, a new snapshot
+showed a different gap — bootstrap's own confirmation coexisting with
+the stage-facing client still reporting both seats vacant, 13+ seconds
+later. Explicit ask: trace the actual state paths, not a generic
+"Realtime timing" explanation; fix event-driven, never a poll or
+arbitrary delay.
+
+**Trace**: two separate sources of truth — bootstrap's own direct
+`event_speakers_active` read (local to `SessionSimulatorPanel`), and
+the *canonical* stage speaker state, `useActiveSpeakers`, which only
+updated via incremental Realtime deltas plus a full resync on-SUBSCRIBED
+— no bounded backstop, no visibility/focus resync (unlike its sibling
+hooks, already fixed for this exact class of bug in earlier passes).
+Nothing connected the two; a successful bootstrap claim never told the
+canonical hook to look again, leaving it entirely dependent on Realtime
+redelivering the same INSERT its own mutation caused.
+
+**Fix**: `useActiveSpeakers` gained one canonical `reconcile(reason)`
+(exposed as `refetch(reason?)`), reused by every trigger (SUBSCRIBED,
+visibility, focus, a new 20s backstop, and any external caller) —
+`SessionSimulatorPanel`'s `establishSeat` now calls it directly, tagged
+"bootstrap," immediately after its own authoritative confirmation. No
+simulator-specific duplicate speaker store — `EventRoom` passes its own
+hook instance's `refetch` straight through as a prop. Found and closed
+a second race while building this: overlapping reconciles could let an
+older, slower read clobber a newer one — fixed with a monotonic
+sequence number, only the most recently *started* reconcile ever wins.
+
+**READY semantics changed**: bootstrap now does one final, bounded,
+awaited verification (refetch + check both seats match) before
+declaring READY — converges on the first attempt in the ordinary case
+since it's a direct authoritative read, not Realtime-dependent. A
+genuine non-convergence is reported as a distinct "CLIENT SYNC" failure,
+never conflated with a bootstrap failure.
+
+**Safety net, not the fix**: a new `useSpeakerInvariantRecovery` hook
+(the inverse of the existing `useStageRoundReconciliation`) fires one
+bounded reconcile per round transition when an active round coexists
+with fewer than two known local speakers — never a loop, never a poll.
+
+**Why the user's own session self-healed after 13+ seconds**: not
+provably certain from the evidence, stated honestly. The pre-fix hook
+had exactly one mechanism able to replace its entire stale state at
+once (both seats simultaneously, matching what was observed) — a fresh
+on-SUBSCRIBED resync, which only fires on initial connect or a real
+reconnect. Most likely explanation: a genuine WebSocket reconnect
+(network blip, or the tab backgrounding/foregrounding) — the only
+trigger the hook actually had.
+
+**Debug snapshot**: new `AUTHORITATIVE SPEAKER STATE` /
+`CANONICAL CLIENT SPEAKER STATE` side-by-side blocks, plus `SPEAKER
+SYNC` (channel status, SUBSCRIBED/event/reconcile timestamps, reason,
+result, mutation source).
+
+**Verification**: full suite (1145 tests, 84 files — up from 1122/82),
+lint, tsc, build all clean. New test files:
+`use-active-speakers-sync.test.ts` (bootstrap-before-SUBSCRIBED, missed
+INSERTs, the stale-fetch race, partial delivery, normal fast path,
+removal/replacement without resurrection, sync diagnostics, backstop)
+and `use-speaker-invariant-recovery.test.ts`, plus new
+`session-simulator-panel.test.tsx` coverage for the bootstrap→reconcile
+wiring, CLIENT SYNC reporting, and the new debug-snapshot sections.
+Live-browser measurement (fresh dev server, real demo event): Start tap
+→ both seats confirmed → stage tiles showing both real names at ~1.9s →
+round active ~1.93s → Startup READY ~2.0s — canonical state converged
+*before* READY, not 13+ seconds after. A real Open Seat → vacate →
+reserve → promote → occupy cycle afterward kept canonical state
+correctly synchronized throughout, confirming the real replacement
+pipeline is untouched. Not merged to `main`; fresh preview deployed.
+
+---
+
 ## 2026-08-31 — Session 56: Fifteenth corrective pass — retired the real-RTS-wait bootstrap path for an already-established stage; unified authoritative bypass bootstrap with stale-generation cleanup (issue #21)
 
 **Goal**: the simulator still needed repeated Reset→Start attempts on an

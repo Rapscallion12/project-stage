@@ -902,6 +902,110 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     });
   });
 
+  describe("canonical stage speaker state reconciliation after bootstrap (issue #21, sixteenth corrective pass)", () => {
+    it("calls refetchSpeakers('bootstrap') after each seat's own authoritative confirmation — the canonical client speaker state, not a simulator-only duplicate", async () => {
+      const refetchSpeakers = vi.fn().mockResolvedValue([]);
+      render(<SessionSimulatorPanel {...baseProps} refetchSpeakers={refetchSpeakers} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+      // At least once per seat, tagged "bootstrap" — never any other reason.
+      expect(refetchSpeakers.mock.calls.filter((call) => call[0] === "bootstrap").length).toBeGreaterThanOrEqual(2);
+      expect(refetchSpeakers.mock.calls.every((call) => call[0] === "bootstrap")).toBe(true);
+    });
+
+    it("verifies convergence before declaring READY — when refetchSpeakers immediately reflects both seats, startup completes normally with no added delay", async () => {
+      const refetchSpeakers = vi.fn(async () => [
+        speaker({ id: "conv-1", seat_number: 1, guest_id: "will-be-seat1", display_name: "Seat One" }),
+        speaker({ id: "conv-2", seat_number: 2, guest_id: "will-be-seat2", display_name: "Seat Two" }),
+      ]);
+      // The mock's own returned guest ids won't literally match the
+      // randomly-generated seed identities' own ids — this test is about
+      // the *no-refetchSpeakers-wired* / *always-converges* shape rather
+      // than an exact-identity match, covered by the real-database test
+      // in simulator-startup.test.ts. Here, simulateSeedSpeaker's own
+      // mock already reports success, and this test only asserts
+      // refetchSpeakers was actually consulted and startup still reaches
+      // Running promptly.
+      render(<SessionSimulatorPanel {...baseProps} refetchSpeakers={refetchSpeakers} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled(), { timeout: 3000 });
+      expect(refetchSpeakers).toHaveBeenCalled();
+    });
+
+    it("CLIENT SYNC: when the database confirms both seats but refetchSpeakers never reflects it, startup reports a distinct CLIENT SYNC failure — never a generic or bootstrap-failure message", async () => {
+      // refetchSpeakers always resolves successfully, but its own
+      // returned rows never actually show the intended identities seated
+      // — simulating the canonical client state genuinely failing to
+      // converge despite bootstrap's own authoritative success.
+      const refetchSpeakers = vi.fn().mockResolvedValue([]);
+      render(<SessionSimulatorPanel {...baseProps} refetchSpeakers={refetchSpeakers} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+
+      await waitFor(() => expect(screen.getByTestId("sim-startup-phase")).toHaveTextContent("Failed"), { timeout: 5000 });
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("CLIENT SYNC");
+      expect(screen.getByTestId("sim-log")).toHaveTextContent("reporting distinctly from a bootstrap failure");
+      expect(screen.getByTestId("sim-startup-error")).toHaveTextContent("Canonical client speaker state reconciliation");
+      expect(screen.getByTestId("sim-startup-error")).toHaveTextContent("database already confirms both seats");
+      // Never even attempted a real Request-to-Speak/RTS wait — the
+      // retired Case B path — this is purely a client-sync reporting gap.
+      expect(simulateRequestToSpeak).not.toHaveBeenCalled();
+    });
+
+    it("without refetchSpeakers wired at all (standalone/test use), startup completes normally — nothing to verify, never blocks", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+    });
+
+    it("the debug snapshot's new AUTHORITATIVE SPEAKER STATE / CANONICAL CLIENT SPEAKER STATE / SPEAKER SYNC sections render the wired diagnostics", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      const getSpeakerSyncDiagnostics = vi.fn(() => ({
+        channelStatus: "SUBSCRIBED",
+        lastSubscribedAt: "2026-09-01T00:00:00.000Z",
+        lastRealtimeEventAt: null,
+        lastReconcileStartedAt: "2026-09-01T00:00:01.000Z",
+        lastReconcileCompletedAt: "2026-09-01T00:00:01.500Z",
+        lastReconcileReason: "bootstrap" as const,
+        lastReconcileResult: "changed" as const,
+        lastMutationSource: "reconcile" as const,
+      }));
+      fetchDebugSnapshotState.mockResolvedValueOnce({
+        fetchedAt: new Date().toISOString(),
+        round: { round_number: 1, phase: "active", ends_at: new Date().toISOString() },
+        seats: [{ seat_number: 1, display_name: "Auth Speaker", identity_kind: "guest", disconnected: false }],
+        pendingRequests: [],
+      });
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          speakers={[speaker({ id: "client-1", seat_number: 1, display_name: "Client Speaker" })]}
+          getSpeakerSyncDiagnostics={getSpeakerSyncDiagnostics}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("sim-copy-debug-snapshot"));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      const copied = writeText.mock.calls[0][0];
+
+      expect(copied).toContain("AUTHORITATIVE SPEAKER STATE");
+      expect(copied).toContain("Seat 1: Auth Speaker");
+      expect(copied).toContain("CANONICAL CLIENT SPEAKER STATE");
+      expect(copied).toContain("Seat 1: Client Speaker");
+      expect(copied).toContain("SPEAKER SYNC");
+      expect(copied).toContain("Realtime channel status: SUBSCRIBED");
+      expect(copied).toContain("Last SUBSCRIBED at: 2026-09-01T00:00:00.000Z");
+      expect(copied).toContain("Last speaker Realtime event at: never");
+      expect(copied).toContain("Last authoritative speaker reconcile started: 2026-09-01T00:00:01.000Z");
+      expect(copied).toContain("Last authoritative speaker reconcile completed: 2026-09-01T00:00:01.500Z");
+      expect(copied).toContain("Reconcile reason: bootstrap");
+      expect(copied).toContain("Reconcile result: changed");
+      expect(copied).toContain("Last client speaker-state mutation source: reconcile");
+    });
+  });
+
   describe("natural session progression (real-device follow-up — no force buttons required to advance)", () => {
     it("casts round votes periodically on an active round, with no force button ever clicked", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });

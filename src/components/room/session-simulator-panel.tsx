@@ -35,6 +35,7 @@ import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
+import type { SpeakerReconcileReason, SpeakerSyncDiagnostics } from "@/hooks/use-active-speakers";
 
 /**
  * Issue #21, third corrective pass: selection is now deterministic —
@@ -301,6 +302,8 @@ export function SessionSimulatorPanel({
   realJoinInProgress = false,
   onSimulatedIdentitiesCreated,
   onSimulatorReset,
+  refetchSpeakers,
+  getSpeakerSyncDiagnostics,
 }: {
   eventId: string;
   speakers: EventSpeaker[];
@@ -314,6 +317,20 @@ export function SessionSimulatorPanel({
   onSimulatedIdentitiesCreated?: (ids: string[]) => void;
   /** Reset Session follow-up: called once cleanup completes, so the caller (EventRoom) can clear its own `simulatedGuestIds` set — that state is otherwise only ever added to, never removed. Optional, same reasoning as the prop above. */
   onSimulatorReset?: () => void;
+  /**
+   * Issue #21, sixteenth corrective pass: the *canonical* stage speaker
+   * reconcile — `EventRoom`'s own `useActiveSpeakers().refetch`, passed
+   * straight through, never wrapped in a simulator-specific duplicate.
+   * `establishSeat` calls this (tagged `"bootstrap"`) immediately after
+   * its own authoritative seat confirmation, so the stage-facing client
+   * state converges the moment bootstrap itself knows the truth, instead
+   * of only ever depending on Realtime to redeliver the same INSERT this
+   * tab's own mutation just caused. Optional so this component still
+   * works standalone in tests that don't wire a real speaker hook.
+   */
+  refetchSpeakers?: (reason?: SpeakerReconcileReason) => Promise<EventSpeaker[]>;
+  /** The same hook's own `getSyncDiagnostics` — surfaced in Copy Debug Snapshot's new SPEAKER SYNC section. Optional, same reasoning as `refetchSpeakers`. */
+  getSpeakerSyncDiagnostics?: () => SpeakerSyncDiagnostics;
 }) {
   const [running, setRunning] = useState(false);
   // Issue #21, fourth corrective pass: the bounded startup state machine
@@ -1571,6 +1588,62 @@ export function SessionSimulatorPanel({
 
     appendLog(`Round active — Round ${round.round_number}`);
     setStartupState((s) => ({ ...s, sharedRound: "active" }));
+
+    // Issue #21, sixteenth corrective pass: a real-device snapshot proved
+    // bootstrap's own authoritative confirmation ("Seat 1/2 = ...")
+    // is *not* the same fact as the stage-facing CANONICAL client speaker
+    // state (`EventRoom`'s own `useActiveSpeakers`) having converged —
+    // these diverged for 13+ seconds. Each `establishSeat` call above
+    // already fired its own fire-and-forget `"bootstrap"` reconcile; this
+    // is the final, *awaited* verification before declaring READY —
+    // bounded (never an arbitrary wait), since `refetchSpeakers` is a
+    // direct authoritative read, not dependent on Realtime timing at all,
+    // so this should converge on the very first attempt in the ordinary
+    // case. If it genuinely doesn't, this is reported as a distinct
+    // CLIENT SYNC gap, never conflated with a bootstrap failure — the
+    // database is already correct; only this tab's own canonical state
+    // hasn't caught up.
+    const CLIENT_SYNC_VERIFY_ATTEMPTS = 3;
+    let clientSynced = false;
+    for (let attempt = 1; attempt <= CLIENT_SYNC_VERIFY_ATTEMPTS; attempt++) {
+      if (startupTokenRef.current !== token) return false;
+      const fresh = await refetchSpeakers?.("bootstrap");
+      // `fresh === undefined` means no `refetchSpeakers` was wired at all
+      // (standalone/test use of this component) — nothing to verify.
+      if (fresh === undefined) {
+        clientSynced = true;
+        break;
+      }
+      const seat1Matches = fresh.find((s) => s.seat_number === 1)?.guest_id === a.id;
+      const seat2Matches = fresh.find((s) => s.seat_number === 2)?.guest_id === b.id;
+      if (seat1Matches && seat2Matches) {
+        clientSynced = true;
+        break;
+      }
+      if (attempt < CLIENT_SYNC_VERIFY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    }
+    if (!clientSynced) {
+      setStartupState((s) => ({
+        ...s,
+        phase: "failed",
+        error: formatFailedPhase({
+          phase: "Canonical client speaker state reconciliation",
+          attempts: CLIENT_SYNC_VERIFY_ATTEMPTS,
+          maxAttempts: CLIENT_SYNC_VERIFY_ATTEMPTS,
+          expected: `Canonical client state shows Seat 1 = ${a.displayName}, Seat 2 = ${b.displayName}`,
+          authoritative: "database already confirms both seats — this is a CLIENT SYNC gap, not a bootstrap failure",
+          lastError: "canonical stage speaker state did not converge within the expected window",
+          recovery: "safe to retry Start — bootstrap itself already succeeded server-side; a retry's own idempotency fast-path will confirm both seats immediately",
+        }),
+      }));
+      appendLog(
+        "CLIENT SYNC: database confirms both seats occupied, but the canonical stage speaker state did not converge — reporting distinctly from a bootstrap failure",
+      );
+      return false;
+    }
+
     appendLog(`Seeded 2 stable simulated speakers — ${a.displayName} → seat 1, ${b.displayName} → seat 2, Round ${round.round_number} active`);
     return true;
   }
@@ -1636,6 +1709,7 @@ export function SessionSimulatorPanel({
       setSeatStartupStatus(seatNumber, "occupied");
       lastSeatFailureRef.current[seatNumber] = null;
       bootstrapResultRef.current[seatKey] = { intended: identity.displayName, authoritative: identity.displayName };
+      void refetchSpeakers?.("bootstrap");
       return true;
     }
 
@@ -1653,6 +1727,14 @@ export function SessionSimulatorPanel({
           setSeatStartupStatus(seatNumber, "occupied");
           lastSeatFailureRef.current[seatNumber] = null;
           bootstrapResultRef.current[seatKey] = { intended: identity.displayName, authoritative: identity.displayName };
+          // Issue #21, sixteenth corrective pass: the canonical stage
+          // speaker state converges the instant bootstrap itself knows
+          // the truth — never waiting on Realtime to redeliver the same
+          // INSERT this mutation just caused. Fire-and-forget here (this
+          // function's own job is done); `establishInitialPairing`
+          // separately awaits+verifies convergence once both seats are
+          // confirmed, below.
+          void refetchSpeakers?.("bootstrap");
           return true;
         }
         // Section "AUTHORITATIVE CONFIRMATION AFTER EACH SEAT": a
@@ -1685,6 +1767,14 @@ export function SessionSimulatorPanel({
           setSeatStartupStatus(seatNumber, "occupied");
           lastSeatFailureRef.current[seatNumber] = null;
           bootstrapResultRef.current[seatKey] = { intended: identity.displayName, authoritative: identity.displayName };
+          // Issue #21, sixteenth corrective pass: the canonical stage
+          // speaker state converges the instant bootstrap itself knows
+          // the truth — never waiting on Realtime to redeliver the same
+          // INSERT this mutation just caused. Fire-and-forget here (this
+          // function's own job is done); `establishInitialPairing`
+          // separately awaits+verifies convergence once both seats are
+          // confirmed, below.
+          void refetchSpeakers?.("bootstrap");
           return true;
         }
         if (occupant?.guestId && allSimulatedGuestIdsRef.current.has(occupant.guestId)) {
@@ -2041,6 +2131,50 @@ export function SessionSimulatorPanel({
       } else if (eligibleCount === 0) {
         push("  (no eligible RTS candidates — nothing to reserve; not a violation)");
       }
+    }
+    push("");
+
+    // Issue #21, sixteenth corrective pass: a real-device snapshot showed
+    // simulator bootstrap's own authoritative confirmation coexisting
+    // with the stage-facing canonical client speaker state
+    // (`useActiveSpeakers`, via `speakers`) still reporting both seats
+    // vacant, 13+ seconds later — two genuinely separate sources of
+    // truth that had diverged, with nothing in the previous snapshot
+    // placing them side by side for a fast comparison (the existing
+    // "STATE MISMATCHES" section below already *diffs* them, but doesn't
+    // show either source's own raw values directly). These two blocks
+    // are exactly those two sources, adjacent, in the same format.
+    push("AUTHORITATIVE SPEAKER STATE");
+    if (authoritative) {
+      for (const seatNumber of [1, 2] as const) {
+        const seat = authoritative.seats.find((s) => s.seat_number === seatNumber);
+        push(`Seat ${seatNumber}: ${seat ? seat.display_name : "vacant"}`);
+      }
+    } else {
+      push("  unknown — authoritative fetch did not succeed, see above");
+    }
+    push("");
+
+    push("CANONICAL CLIENT SPEAKER STATE");
+    for (const seatNumber of [1, 2] as const) {
+      const seat = speakers.find((s) => s.seat_number === seatNumber);
+      push(`Seat ${seatNumber}: ${seat ? seat.display_name : "vacant"}`);
+    }
+    push("");
+
+    push("SPEAKER SYNC");
+    const speakerSync = getSpeakerSyncDiagnostics?.();
+    if (speakerSync) {
+      push(`Realtime channel status: ${speakerSync.channelStatus ?? "unknown"}`);
+      push(`Last SUBSCRIBED at: ${speakerSync.lastSubscribedAt ?? "never"}`);
+      push(`Last speaker Realtime event at: ${speakerSync.lastRealtimeEventAt ?? "never"}`);
+      push(`Last authoritative speaker reconcile started: ${speakerSync.lastReconcileStartedAt ?? "never"}`);
+      push(`Last authoritative speaker reconcile completed: ${speakerSync.lastReconcileCompletedAt ?? "never"}`);
+      push(`Reconcile reason: ${speakerSync.lastReconcileReason ?? "—"}`);
+      push(`Reconcile result: ${speakerSync.lastReconcileResult ?? "—"}`);
+      push(`Last client speaker-state mutation source: ${speakerSync.lastMutationSource ?? "—"}`);
+    } else {
+      push("  unavailable — no speaker sync diagnostics wired");
     }
     push("");
 

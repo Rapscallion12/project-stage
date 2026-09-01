@@ -1310,6 +1310,43 @@ different dependencies. Current order:
       recovery sequence, and that a real post-bootstrap vacancy still
       flows entirely through the unmodified real RTS pipeline. See
       DECISIONS.md and SESSION_LOG.md's Session 56.
+
+      **Sixteenth corrective pass (2026-09-01, same branch)**: with
+      bootstrap now authoritatively succeeding, a new snapshot showed a
+      different gap — bootstrap's own confirmation ("Seat 1/2 = ...",
+      "Round active," "Startup READY") coexisting with the stage-facing
+      client still reporting both seats vacant, 13+ seconds later.
+      Traced to two genuinely separate sources of truth: bootstrap's own
+      direct authoritative read, and `useActiveSpeakers` (the canonical
+      client speaker state), which only updated via incremental Realtime
+      deltas plus a full resync on-SUBSCRIBED — no bounded backstop, no
+      visibility/focus resync, unlike its sibling hooks already fixed
+      for the identical class of problem. Fixed with one canonical
+      `reconcile(reason)` inside `useActiveSpeakers`, reused by every
+      trigger (SUBSCRIBED, visibility, focus, a new 20s backstop, and any
+      external caller) — bootstrap's own `establishSeat` now calls it
+      directly, tagged "bootstrap," the instant its own authoritative
+      confirmation lands, rather than depending on Realtime to
+      redeliver the same INSERT its own mutation caused. No simulator-
+      specific duplicate speaker store — `EventRoom` passes its own hook
+      instance's `refetch` straight through. Closed a second race found
+      while building this: overlapping reconciles could let an older,
+      slower read clobber a newer one — fixed with a monotonic sequence
+      number. `Startup READY` now performs one final, bounded, awaited
+      client-state verification before declaring success; genuine non-
+      convergence reports a distinct "CLIENT SYNC" failure, never
+      conflated with a bootstrap failure. Added `useSpeakerInvariantRecovery`
+      (the inverse of the existing `useStageRoundReconciliation`) as a
+      bounded, event-driven safety net for the general "active round +
+      <2 local speakers" shape, firing at most once per round transition.
+      Debug Snapshot gained side-by-side `AUTHORITATIVE SPEAKER STATE`/
+      `CANONICAL CLIENT SPEAKER STATE` blocks plus a `SPEAKER SYNC`
+      section (channel status, timestamps, reconcile reason/result,
+      mutation source). Live-browser measurement: Start tap → both seats
+      confirmed → stage tiles showing both real names at ~1.9s → round
+      active ~1.93s → Startup READY ~2.0s — canonical state converged
+      *before* READY, not 13+ seconds after. See DECISIONS.md and
+      SESSION_LOG.md's Session 57.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

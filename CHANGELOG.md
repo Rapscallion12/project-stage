@@ -13,6 +13,17 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed a case where the stage could show both seats as empty for
+  several seconds after they actually became occupied** (issue #21,
+  sixteenth corrective pass) — most noticeable right after starting the
+  Session Simulator, but the same general improvement now protects real
+  live rooms too: the room's own live speaker list now double-checks
+  itself directly the moment a seat change is confirmed server-side,
+  instead of only waiting for the normal live-update message to arrive
+  on its own — and, as a safety net, now also periodically re-checks
+  itself in the background and re-checks itself whenever the app is
+  reopened or refocused, matching protections already in place elsewhere
+  in the room. See DECISIONS.md.
 - **Fixed the Session Simulator still needing repeated Reset → Start
   attempts specifically on a room that had already been used before**
   (issue #21, fifteenth corrective pass, preview/dev tooling only) — on
