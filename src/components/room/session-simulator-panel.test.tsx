@@ -846,7 +846,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fetchDebugSnapshotState.mockResolvedValueOnce({
         fetchedAt: new Date().toISOString(),
         round: { round_number: 1, phase: "active", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
-        seats: [{ seat_number: 1, display_name: "Dapper Heron", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+        seats: [{ seat_number: 1, display_name: "Dapper Heron", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
         pendingRequests: [],
       });
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -890,7 +890,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fetchDebugSnapshotState.mockResolvedValueOnce({
         fetchedAt: new Date().toISOString(),
         round: { round_number: 2, phase: "active", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
-        seats: [{ seat_number: 1, display_name: "Someone Else Entirely", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+        seats: [{ seat_number: 1, display_name: "Someone Else Entirely", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
         pendingRequests: [],
       });
 
@@ -975,7 +975,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fetchDebugSnapshotState.mockResolvedValueOnce({
         fetchedAt: new Date().toISOString(),
         round: { round_number: 1, phase: "active", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
-        seats: [{ seat_number: 1, display_name: "Auth Speaker", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+        seats: [{ seat_number: 1, display_name: "Auth Speaker", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
         pendingRequests: [],
       });
       render(
@@ -2220,7 +2220,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fetchDebugSnapshotState.mockResolvedValueOnce({
         fetchedAt: new Date().toISOString(),
         round: null,
-        seats: [{ seat_number: 1, display_name: "Someone", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+        seats: [{ seat_number: 1, display_name: "Someone", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
         pendingRequests: [],
       });
       render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "s1", seat_number: 1 })]} />);
@@ -2317,7 +2317,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         fetchDebugSnapshotState.mockResolvedValueOnce({
           fetchedAt: new Date().toISOString(),
           round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
-          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
           pendingRequests: [
             { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
           ],
@@ -2349,7 +2349,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         fetchDebugSnapshotState.mockResolvedValueOnce({
           fetchedAt: new Date().toISOString(),
           round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
-          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
           pendingRequests: [
             { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: true, reserved_seat_number: 2, frozen_rank: 1, selection_failed: false },
           ],
@@ -2377,7 +2377,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         fetchDebugSnapshotState.mockResolvedValueOnce({
           fetchedAt: new Date().toISOString(),
           round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
-          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active" }],
+          seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
           pendingRequests: [],
         });
         render(

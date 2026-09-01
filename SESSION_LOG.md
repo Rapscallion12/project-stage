@@ -4,6 +4,82 @@ Newest entry first.
 
 ---
 
+## 2026-09-01 — Session 59: Eighteenth corrective pass — `event_speakers_active`'s frozen columns were silently dropping five round-lifecycle fields from every client, breaking Final-30's automatic replacement (issue #21)
+
+**Goal**: the narrow, dedicated follow-up the seventeenth pass's own
+finding flagged — a narrow-loss seat correctly entered `closing`, but
+its 30s grace window never automatically finished for a real
+participant. Fix the data plumbing only, not a Final 30 redesign.
+
+**Proved the view problem first**: local migrations show
+`event_speakers_active` (migration 18) as `select * from event_speakers
+where ...`, created before migration 21 added five columns
+(`round_number`, `round_started_at`, `round_ends_at`, `round_phase`,
+`closing_ends_at`). Confirmed directly against the *live* database's own
+generated types, not just the migration files: the view's `Row` type had
+exactly 11 columns before this fix — all five migration-21 columns
+absent, not just the two (`round_phase`/`closing_ends_at`) the previous
+pass's own finding named. `speaker-vote-panel.tsx`'s own `roundKey`/
+`nearestDeadlineMs` had the identical, previously-unnoticed gap.
+
+**Precisely characterized the failure, not just described it**:
+`useActiveSpeakers`'s Realtime subscription reads off the *base table*
+directly (Postgres CDC bypasses views entirely) — so every live
+INSERT/UPDATE delta already carried all 16 columns correctly, the whole
+time. It was specifically every *reconcile* (on-SUBSCRIBED,
+visibility/focus, the 20s backstop) — reading the stale view — that
+clobbered a just-delivered-correct `round_phase: "closing"` back to
+`undefined` moments later. This is why the seventeenth pass's own
+reproduction looked the way it did: the client learned correctly, then
+had it taken away again, canceling `useStageRoundResolution`'s
+already-scheduled replacement timer. Confirmed `speakerRoundDisplay`
+already derives its countdown purely from the authoritative arguments
+passed in, no local timer state — a pure data-plumbing bug, zero
+display-logic changes needed.
+
+**Fix**: `create or replace view` with an explicit column list (not
+another `select *`, to prevent this exact drift recurring silently) —
+reproduces the original 11 columns in their original order, appends the
+five migration-21 columns at the end. No SQL-level dependents existed to
+break (confirmed by grep); this is the only view in the entire schema.
+Every newly-exposed column is the same public visibility tier as the
+rest of the row — nothing sensitive newly surfaced. Simplified the
+Session Simulator's debug snapshot (removed a now-redundant base-table
+workaround query from the seventeenth pass), added a FINAL 30 / CLOSING
+STATE section (authoritative vs. client side by side).
+
+**Verified with a real, unscripted, natural expiration — no Force
+Replace Now.** Narrow-loss resolved via real vote-casting; the seat
+entered `closing` with authoritative/client state matching exactly
+(25s remaining both); ~30s later the seat vacated automatically (the
+client's own scheduled timer firing on its own); a replacement was
+deterministically reserved and seated; the shared round resumed active
+— the whole vacancy-to-resumed-pairing cycle took about 3 seconds,
+entirely without intervention. Migration 41's shared-round invariant
+reconfirmed throughout: active while merely closing, legitimately
+demoted only once the seat genuinely vacated. A real browser reload
+mid-countdown showed the remaining time derived from the authoritative
+deadline, not reset to 30 — also pinned deterministically at the hook
+level (same `closing_ends_at`, called 12s apart: 30s then 18s).
+
+**Found, deliberately not fixed**: an unusually rapid sequence of manual
+test actions left one Request-to-Speak reservation stuck pointing at an
+already-refilled seat, blocking that vacancy's own selection
+reconciliation. Confirmed unrelated to `event_speakers_active` (RTS
+reservation logic never reads that view) — a separate, pre-existing
+selection-reconciliation edge case, flagged for whoever picks up RTS
+selection edge cases next, not folded into this pass.
+
+**Verification**: full suite (1153 tests, 84 files — up from 1149/84),
+lint, tsc, build all clean. New tests: three real-database tests reading
+through `event_speakers_active` directly (narrow-loss fields visible
+through the view; both seats independently closing each get correct
+fields; voluntary leave before deadline doesn't produce a duplicate
+resolution), plus the countdown remount/refresh test. Not merged to
+`main`; fresh preview deployed.
+
+---
+
 ## 2026-09-01 — Session 58: Seventeenth corrective pass — a closing seat was demoting the *shared* round for both speakers even though the pairing stayed fully intact (issue #21)
 
 **Goal**: new real-device snapshot — both seats authoritatively

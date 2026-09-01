@@ -3,6 +3,159 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-01 — Eighteenth corrective pass: `event_speakers_active`'s frozen column set was silently dropping five round-lifecycle columns from every live client read, breaking Final-30's automatic replacement (issue #21)
+
+**Context**: the seventeenth pass's own real-browser verification found a
+*separate* bug while proving its own fix: a narrow-loss seat correctly
+entered `closing`, but its 30-second grace window never automatically
+finished — the seat sat there indefinitely until manually forced. This
+pass is the narrow, dedicated follow-up that finding asked for: fix the
+data plumbing, and only issues directly resulting from it — not a Final
+30 redesign.
+
+**Prove the view problem first, per explicit instruction.** Local
+migration files show `event_speakers_active` (migration 18) as `select *
+from event_speakers where is_speaker_seat_active(...)`, created before
+migration 21 added five columns to `event_speakers`
+(`round_number`, `round_started_at`, `round_ends_at`, `round_phase`,
+`closing_ends_at`). That alone is a plausible theory, not proof — so this
+was verified directly against the *live* linked database's own generated
+types (`npx supabase gen types typescript --linked`, which introspects
+the real schema, not these migration files): before this pass's fix,
+`event_speakers_active`'s `Row` type had exactly 11 columns — precisely
+the set `event_speakers` had immediately before migration 21 ran.
+`event_speakers`'s own `Row` type had 16. **All five** of migration 21's
+columns were absent from the view, not just the two
+(`round_phase`/`closing_ends_at`) the seventeenth pass's own finding
+happened to name — `round_number`/`round_started_at`/`round_ends_at`
+were equally silently missing, meaning `speaker-vote-panel.tsx`'s own
+`roundKey`/`nearestDeadlineMs` derivation had the identical gap, unnoticed
+until this audit.
+
+**Audit every consumer, and precisely characterize *why* the failure
+happens, not just *that* it does.** `useActiveSpeakers`'s Realtime
+`postgres_changes` subscription is registered directly on the *base
+table* `event_speakers`, not the view — Postgres logical replication
+(what powers Supabase Realtime) streams off the base table's WAL,
+completely bypassing views. So every INSERT/UPDATE delta this hook
+receives already carried all 16 columns correctly, the whole time. It was
+specifically every *reconcile* — the full authoritative resync on
+SUBSCRIBED, visibility/focus restoration, the bounded 20s backstop, and
+every bootstrap/invariant-triggered `refetch()` — reading
+`event_speakers_active` via `.select("*")` — that clobbered a
+just-delivered-correct `round_phase: "closing"` back to `undefined`
+moments later. This precisely explains the seventeenth pass's own
+reproduction: a narrow-loss UPDATE briefly set the client's state
+correctly, but the very next reconcile (the 20s backstop, if nothing
+else fired first) silently erased it, canceling
+`useStageRoundResolution`'s already-scheduled replacement timer — "the
+client learns correctly, then has it taken away again," not "the client
+never learns." `speaker-vote-panel.tsx`'s own closing-countdown UI
+(`votingClosed`, the emphasis countdown) had the identical exposure.
+`useSpeakerRoundCountdown`/`speakerRoundDisplay` were confirmed, by
+reading them, to already derive the countdown purely from the
+authoritative `speaker.closing_ends_at`/`round_phase` arguments passed in
+— no local "when did I start counting" state at all — so once the data
+itself is correct, the display logic requires zero changes; this was
+purely a data-plumbing bug, never a display-logic one.
+
+**Fix: `create or replace view` with an explicit column list, not another
+`select *`.** Postgres allows `CREATE OR REPLACE VIEW` to append new
+output columns at the end without disturbing dependents, as long as every
+existing column's name/position/type is unchanged — verified no SQL-level
+dependents exist first (grepped every migration for
+`event_speakers_active` in a `from` clause: none; the generated types'
+"referencedRelation: event_speakers_active" entries on
+`speaker_round_votes`'s FK are the *same* real constraint, which
+genuinely targets the base table — the generator lists it twice only
+because it also infers a PostgREST embedding path through the view;
+Postgres does not allow a view to be an actual FK target at all). The new
+migration reproduces the original 11 columns in their original order
+(reconstructed from `event_speakers`'s own column history:
+migration 5's initial columns, `display_name` in migration 10, `guest_id`
+in migration 12, `disconnected_at` in migration 16,
+`media_inactive_since` in migration 17 — all before this view's own
+creation), then appends the five migration-21 columns at the end. An
+explicit list, deliberately, so this exact class of drift can't recur
+silently — a future column added to `event_speakers` now requires a
+conscious decision (and a migration) to expose it here, rather than an
+automatic, invisible omission. Every one of the five newly-exposed
+columns is the same public visibility tier as the rest of the row
+(round-lifecycle bookkeeping — a number, timestamps, a two-value phase
+string — no auth secrets, nothing the base table doesn't already expose
+to the same anon/authenticated/service_role grant), so nothing sensitive
+is newly surfaced. `security_invoker`, the filtering predicate
+(`is_speaker_seat_active`), and the existing grant are all preserved
+unchanged; the grant is re-issued explicitly anyway (a no-op if
+`CREATE OR REPLACE VIEW` already preserved it) rather than assumed.
+
+**Debug snapshot simplified, not just extended.** The seventeenth pass's
+own debug snapshot had already worked around this exact gap for its one
+field (`round_phase`) with a second, redundant base-table query — removed
+now that the view itself carries it correctly, and extended into a new
+FINAL 30 / CLOSING STATE section showing authoritative vs. client
+`round_phase`/`closing_ends_at`/remaining time side by side per seat, so
+a future capture can directly verify the two sources agree.
+
+**Verification, natural (not forced) expiration, per explicit
+instruction.** Ran the real Session Simulator against a real dev server,
+narrow-losing a seat via real vote-casting (never a synthetic RPC
+bypass), then letting the real 30-second `closing_ends_at` deadline
+expire completely untouched — no `Force Replace Now`, no manual seat
+removal. Measured timestamps from one clean run: narrow loss resolved
+and `closing_ends_at` set at `20:09:51.260768Z` (client and authoritative
+reads matching exactly, both reporting 25s remaining at capture);
+deadline at `20:10:21.260768Z`; the seat was observed vacated
+client-side one second later (`20:10:22` — the client's own scheduled
+`useStageRoundResolution` timer firing entirely on its own); a
+replacement was deterministically reserved the following second
+(`20:10:23`) and occupied the second after that (`20:10:24`), with the
+shared round transitioning `awaiting_pairing → active` in the same
+instant — the entire vacancy-to-resumed-pairing cycle took about 3
+seconds, end to end, with no intervention. A second, independent capture
+earlier in the same session showed the identical pattern with different
+timings, confirming this wasn't a one-off. Migration 41's own shared-round
+invariant was reconfirmed at every step: active while merely closing
+(both seats occupied), legitimately demoted to `awaiting_pairing` only
+the instant the seat *actually* vacated, reactivated once the resulting
+pairing was restored — never demoted by closing alone.
+
+**Refresh/reconnect, both at the hook level and live.** A real browser
+reload mid-countdown (via a second read of the room) showed matching
+authoritative/client `closing_ends_at` and a `remaining` value consistent
+with elapsed time, not reset to 30 — and this is additionally pinned
+deterministically at the hook level (`speakerRoundDisplay`, called twice
+with the same `closing_ends_at` 12 seconds apart, returns 30s then 18s),
+since the countdown function's own signature (a plain
+`speaker`/`now`/`isPreviewBuild` argument list, no internal state) makes
+a remount's behavior provable without a live browser at all.
+
+**A second, genuinely separate bug found live, deliberately not
+fixed.** During this pass's own verification, an unusually rapid
+sequence of manual test actions (several `Force Narrow Loss`/
+`Resolve Round Now` clicks in quick succession, faster than the product's
+normal pacing) left one Request-to-Speak reservation pointing at a seat
+that had since been refilled by something else — a stale reservation
+blocking that one vacancy's own selection reconciliation. Confirmed this
+is unrelated to `event_speakers_active` (RTS reservation logic
+(`speaker_requests`/`speaker_selection_rounds`) never reads that view at
+all) and is most plausibly a genuinely separate, pre-existing selection-
+reconciliation edge case surfaced only by testing faster than the app is
+normally used, not a consequence of this pass's fix. Named clearly here
+rather than silently pulled into this pass's scope, per this project's
+own "name the gap, don't unilaterally expand scope" discipline.
+
+**Verification**: full suite green (1153/1153 tests, 84/84 files — up
+from 1149/84), lint, tsc, build all clean. New/changed tests:
+`stage-rounds.test.ts` — three new real-database tests reading through
+`event_speakers_active` directly (a narrow-loss seat's `round_phase`/
+`closing_ends_at` visible through the view; both seats independently
+narrow-losing in the same resolution each getting correct, independent
+closing fields; a closing seat's voluntary-leave-before-deadline not
+producing a duplicate/late resolution); `use-speaker-round-countdown.test.ts`
+— the remount/refresh test above. Not merged to `main`; fresh preview
+deployed.
+
 ## 2026-09-01 — Seventeenth corrective pass: a seat entering its own Final-30 closing window was incorrectly demoting the *shared* round for both speakers, hiding the timer even though the pairing was still fully intact (issue #21)
 
 **Context**: with client/database speaker state now reconciling

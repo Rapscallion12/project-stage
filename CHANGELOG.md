@@ -13,6 +13,28 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed a speaker's own Final-30 grace window never actually finishing
+  on its own** (issue #21, eighteenth corrective pass — closes the bug
+  flagged at the end of the seventeenth) — a narrowly-losing speaker
+  correctly entered their 30-second grace window and the countdown
+  correctly showed on their own row, but the automatic replacement that's
+  supposed to happen once it runs out silently never fired for a real
+  (non-simulated) participant; someone in that state could sit there
+  indefinitely until a moderator or another lifecycle event intervened.
+  Root cause: the database view every live client reads seat state
+  through was defined before the two columns this exact feature depends
+  on existed, so those columns were silently never actually delivered to
+  the browser, despite the app's own code assuming they always were. That
+  view now explicitly includes every column real clients need, closing
+  the gap at its source. Verified against a real, unscripted run, letting
+  the real 30-second deadline expire naturally end to end (no manual
+  shortcuts): the seat vacated automatically the instant its deadline
+  passed, a replacement was chosen the same way it always is, and the
+  shared round resumed normally, all within about 3 seconds, matching
+  the product's existing rules throughout (no shared-round or replacement
+  behavior changed). Also confirmed a real browser refresh mid-countdown
+  correctly keeps counting down from the same authoritative deadline
+  instead of restarting at 30. See DECISIONS.md.
 - **Fixed the shared 60-second round timer disappearing while both
   speakers were still genuinely seated** (issue #21, seventeenth
   corrective pass) — this happened specifically once one speaker

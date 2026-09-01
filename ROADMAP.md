@@ -1396,6 +1396,59 @@ different dependencies. Current order:
       pass (different root cause, different fix shape); flagged clearly
       for its own corrective pass. See DECISIONS.md and SESSION_LOG.md's
       Session 58.
+
+      **Eighteenth corrective pass (2026-09-01, same branch)**: the
+      narrow, follow-up fix the seventeenth pass's own final finding
+      flagged. `event_speakers_active` — the view every live client reads
+      seat state through — was created (migration 18) before
+      `round_number`/`round_started_at`/`round_ends_at`/`round_phase`/
+      `closing_ends_at` existed as columns (migration 21, three
+      migrations later); Postgres freezes a view's `select *` at creation
+      time, so live-database introspection (not assumption) proved all
+      five, not just the two the previous pass's own finding named, were
+      silently absent from every client read. Realtime deltas already
+      carried them correctly (Postgres CDC replicates off the base table,
+      never a view); it was specifically every *reconcile* — on-
+      SUBSCRIBED, visibility/focus, the 20s backstop — that clobbered a
+      just-delivered correct value back to `undefined`, which is why a
+      real speaker's Final-30 grace window could enter `closing`
+      correctly and still never auto-resolve: `useStageRoundResolution`'s
+      client-side replacement timer depends on exactly the field a
+      reconcile kept erasing. Fixed with a `create or replace view` using
+      an explicit column list (not another `select *`, to prevent this
+      exact class of drift recurring silently) — no SQL-level dependents
+      existed to break (confirmed by grep), and this is the only view in
+      the entire schema (a narrow, one-off fix, not a wider pattern).
+      Simplified the Session Simulator's own debug snapshot, whose prior
+      pass had worked around the same gap with a second, redundant base-
+      table query — no longer needed once the view itself is fixed — and
+      added an explicit FINAL 30 / CLOSING STATE section (authoritative
+      vs. client `round_phase`/`closing_ends_at`/remaining, side by
+      side). Verified against a real, unscripted simulator run, letting
+      the real 30s deadline expire with no manual shortcut (no Force
+      Replace Now): narrow loss resolved and the seat entered `closing`
+      with authoritative and client state matching exactly; ~30s later
+      the seat vacated automatically (the client's own scheduled timer
+      firing on its own); a replacement was deterministically selected
+      and seated, and the shared round resumed active — the entire
+      vacancy-to-resumed-pairing cycle completed in about 3 seconds, all
+      without intervention. A real browser reload mid-countdown confirmed
+      the remaining time comes from the authoritative deadline, not a
+      restarted local timer (also pinned as a deterministic hook-level
+      test, since the countdown function takes the deadline and current
+      time as plain arguments with no local "when did I start counting"
+      state at all). Migration 41's shared-round behavior reconfirmed
+      unaffected throughout: active while merely closing, legitimately
+      demoted only once the seat genuinely vacated, reactivated once the
+      resulting pairing was restored. Found, but explicitly left
+      unfixed as a separate, pre-existing issue unrelated to this view
+      (Request-to-Speak reservation/selection, not seat-state data): a
+      stale seat reservation left pointing at an already-refilled seat
+      after an unusually rapid sequence of manual test actions, blocking
+      that one vacancy's own selection reconciliation — flagged for
+      whoever picks up Request-to-Speak selection edge cases next,
+      distinct from Final 30. See DECISIONS.md and SESSION_LOG.md's
+      Session 59.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never

@@ -2128,6 +2128,43 @@ export function SessionSimulatorPanel({
       push("");
     }
 
+    // Issue #21, eighteenth corrective pass: `event_speakers_active` was
+    // silently missing `round_phase`/`closing_ends_at` (and three other
+    // round-lifecycle columns) for every client read since migration
+    // 00000000000021 added them — three migrations after this view's own
+    // creation locked in its column list. Realtime deltas always carried
+    // them correctly (Postgres CDC replicates off the base table, never
+    // through a view), but every *reconcile* clobbered that back to
+    // `undefined` moments later, silently canceling
+    // `useStageRoundResolution`'s just-scheduled Final-30 timer — the
+    // exact mechanism behind the seventeenth pass's "closing seat stuck
+    // for three round boundaries" finding. Fixed at the source (migration
+    // 00000000000042, an explicit column list, not another `select *`).
+    // This section makes the fix directly verifiable per capture: the
+    // authoritative deadline `event_speakers_active` now actually
+    // returns, side by side with what this tab's own canonical client
+    // state (`speakers`, sourced from the same Realtime+reconcile
+    // pipeline) currently shows for the same seat — they should always
+    // agree once a reconcile has run since the transition.
+    const closingNow = Date.now();
+    push("FINAL 30 / CLOSING STATE");
+    for (const seatNumber of [1, 2] as const) {
+      const authSeat = authoritative?.seats.find((s) => s.seat_number === seatNumber);
+      const clientSeat = speakers.find((s) => s.seat_number === seatNumber);
+      push(`Seat ${seatNumber}:`);
+      push(`  round_phase (authoritative): ${authSeat?.round_phase ?? (authoritative ? "vacant" : "unknown — authoritative fetch did not succeed")}`);
+      push(`  closing_ends_at (authoritative): ${authSeat?.closing_ends_at ?? "n/a"}`);
+      if (authSeat?.round_phase === "closing" && authSeat.closing_ends_at) {
+        push(`  remaining (authoritative): ${Math.max(0, Math.round((new Date(authSeat.closing_ends_at).getTime() - closingNow) / 1000))}s`);
+      }
+      push(`  round_phase (client): ${clientSeat?.round_phase ?? "vacant"}`);
+      push(`  closing_ends_at (client): ${clientSeat?.closing_ends_at ?? "n/a"}`);
+      if (clientSeat?.round_phase === "closing" && clientSeat.closing_ends_at) {
+        push(`  remaining (client): ${Math.max(0, Math.round((new Date(clientSeat.closing_ends_at).getTime() - closingNow) / 1000))}s`);
+      }
+    }
+    push("");
+
     // Issue #21, twelfth corrective pass, Section "ADD INVARIANT
     // DETECTION TO SNAPSHOT": a real-device capture proved the room
     // could sit in established + fillable-vacant + eligible-RTS + no-

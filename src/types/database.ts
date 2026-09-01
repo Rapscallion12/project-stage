@@ -519,6 +519,7 @@ export type Database = {
     Views: {
       event_speakers_active: {
         Row: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string | null
           event_id: string | null
@@ -529,9 +530,14 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string | null
+          round_number: number | null
+          round_phase: string | null
+          round_started_at: string | null
           seat_number: number | null
         }
         Insert: {
+          closing_ends_at?: string | null
           disconnected_at?: string | null
           display_name?: string | null
           event_id?: string | null
@@ -542,9 +548,14 @@ export type Database = {
           left_reason?: string | null
           media_inactive_since?: string | null
           profile_id?: string | null
+          round_ends_at?: string | null
+          round_number?: number | null
+          round_phase?: string | null
+          round_started_at?: string | null
           seat_number?: number | null
         }
         Update: {
+          closing_ends_at?: string | null
           disconnected_at?: string | null
           display_name?: string | null
           event_id?: string | null
@@ -555,6 +566,10 @@ export type Database = {
           left_reason?: string | null
           media_inactive_since?: string | null
           profile_id?: string | null
+          round_ends_at?: string | null
+          round_number?: number | null
+          round_phase?: string | null
+          round_started_at?: string | null
           seat_number?: number | null
         }
         Relationships: [

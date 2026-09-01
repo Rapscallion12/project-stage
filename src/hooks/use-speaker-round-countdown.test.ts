@@ -42,3 +42,30 @@ describe("speakerRoundDisplay (issue #21 corrective pass — closing-phase only;
     expect(speakerRoundDisplay(speaker, NOW, true)).toBeNull();
   });
 });
+
+/**
+ * Issue #21, eighteenth corrective pass, Section 7/9C: "refresh during
+ * Final 30 must preserve approximately the correct remaining time." This
+ * function takes the authoritative `speaker` row and the current clock as
+ * plain arguments — no local "when did I start counting" state at all —
+ * so a browser refresh (a fresh mount, calling this with the *same*
+ * `closing_ends_at` it already had, just a later `now`) is safe by
+ * construction, not by any special remount-handling code. Pinned
+ * explicitly here, framed as a remount, rather than only inferred from
+ * the individual pure-function cases above.
+ */
+describe("speakerRoundDisplay — refresh/remount during Final 30 (issue #21, eighteenth corrective pass)", () => {
+  it("a second call 12s later, simulating a page refresh with the same authoritative deadline, resumes from ~18s remaining rather than restarting at 30", () => {
+    const closingEndsAt = new Date(NOW + 30_000).toISOString();
+    const speaker = { round_phase: "closing" as const, closing_ends_at: closingEndsAt };
+
+    // "First render," right as Final 30 begins.
+    const first = speakerRoundDisplay(speaker, NOW, true);
+    expect(first).toEqual({ remainingSeconds: 30, phase: "closing" });
+
+    // "Refresh" — a brand-new call (standing in for a fresh mount after a
+    // real browser reload), same authoritative speaker row, 12s later.
+    const afterRefresh = speakerRoundDisplay(speaker, NOW + 12_000, true);
+    expect(afterRefresh).toEqual({ remainingSeconds: 18, phase: "closing" });
+  });
+});

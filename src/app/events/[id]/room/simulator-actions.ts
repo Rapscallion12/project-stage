@@ -482,6 +482,8 @@ export type DebugSnapshotState = {
     disconnected: boolean;
     /** Issue #21, seventeenth corrective pass: whether this seat is in its own individual Final-30 window — occupied (`left_at is null`) either way; a `"closing"` seat is still part of the pairing, just excluded from the shared round's own next Continue/Replace cycle. */
     round_phase: string;
+    /** Issue #21, eighteenth corrective pass: the authoritative Final-30 deadline while `round_phase` is `"closing"` — `null` otherwise. Read straight through `event_speakers_active` now that migration 00000000000042 exposes it. */
+    closing_ends_at: string | null;
   }>;
   pendingRequests: Array<{
     id: string;
@@ -523,7 +525,7 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
       .maybeSingle(),
     supabase
       .from("event_speakers_active")
-      .select("seat_number, display_name, profile_id, guest_id, disconnected_at")
+      .select("seat_number, display_name, profile_id, guest_id, disconnected_at, round_phase, closing_ends_at")
       .eq("event_id", eventId)
       .order("seat_number", { ascending: true }),
     supabase
@@ -534,21 +536,6 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
       .order("created_at", { ascending: true }),
     supabase.from("speaker_request_votes").select("request_id").eq("event_id", eventId),
   ]);
-
-  // Issue #21, seventeenth corrective pass: `event_speakers_active`'s own
-  // column set is frozen from its original CREATE VIEW (migration
-  // 00000000000018) — it predates `round_phase` entirely (added to
-  // `event_speakers` itself in migration 00000000000021, well after the
-  // view), so a `select *` view doesn't retroactively pick it up. A
-  // small, separate direct read against the base table fills in just
-  // this one extra field for the same currently-occupied seats, rather
-  // than redefining the view for a debug-only need.
-  const { data: roundPhaseRows } = await supabase
-    .from("event_speakers")
-    .select("seat_number, round_phase")
-    .eq("event_id", eventId)
-    .is("left_at", null);
-  const roundPhaseBySeat = new Map((roundPhaseRows ?? []).map((r) => [r.seat_number, r.round_phase]));
 
   const requestIds = (requestRows ?? []).map((r) => r.id);
   const { data: messageRows } =
@@ -584,7 +571,8 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
       display_name: s.display_name ?? "(unknown)",
       identity_kind: s.profile_id ? "profile" : ("guest" as const),
       disconnected: s.disconnected_at !== null,
-      round_phase: (s.seat_number !== null ? roundPhaseBySeat.get(s.seat_number) : undefined) ?? "active",
+      round_phase: s.round_phase ?? "active",
+      closing_ends_at: s.closing_ends_at,
     })),
     pendingRequests: (requestRows ?? []).map((r) => ({
       id: r.id,

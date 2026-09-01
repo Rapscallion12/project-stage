@@ -482,6 +482,112 @@ describe.skipIf(!hasServiceCredentials)("stage rounds (issue #21 corrective pass
     const { error: ensureError } = await asA.rpc("ensure_stage_round", { p_event_id: eventId });
     expect(ensureError?.code).toBe("42501");
   });
+
+  /**
+   * Issue #21, eighteenth corrective pass, Section 9: every other test in
+   * this file reads `event_speakers` directly via the service client,
+   * which never had this bug — this block specifically exercises the
+   * *client-facing* read path, `event_speakers_active`, the view real
+   * browser clients actually read through (`listActiveSpeakers`,
+   * `getActiveSeatForIdentity`, `useActiveSpeakers`' own reconcile). Pins
+   * migration 00000000000042 directly: a narrow-loss transition's
+   * `round_phase`/`closing_ends_at` must be visible through the view, not
+   * just on the base table.
+   */
+  describe("event_speakers_active view — Final-30 fields (issue #21, eighteenth corrective pass)", () => {
+    it("A: a narrow-loss seat's round_phase and closing_ends_at are visible through event_speakers_active, not just the base table", async () => {
+      const [id1, id2] = await claimBothSeats();
+      await castContinueVotes(id1);
+      await castNarrowLossVotes(id2);
+      await backdateStageRound();
+      await service.rpc("resolve_stage_round", { p_event_id: eventId });
+
+      const { data: viewRows, error } = await service
+        .from("event_speakers_active")
+        .select("id, round_phase, closing_ends_at")
+        .eq("event_id", eventId)
+        .order("seat_number", { ascending: true });
+      expect(error).toBeNull();
+
+      const seat1View = viewRows!.find((r) => r.id === id1);
+      const seat2View = viewRows!.find((r) => r.id === id2);
+      expect(seat1View?.round_phase).toBe("active");
+      expect(seat1View?.closing_ends_at).toBeNull();
+      expect(seat2View?.round_phase).toBe("closing");
+      expect(seat2View?.closing_ends_at).not.toBeNull();
+      // The deadline through the view must be the same value the base
+      // table has — not a second, independently-derived one.
+      const { data: seat2Base } = await service.from("event_speakers").select("closing_ends_at").eq("id", id2).single();
+      expect(seat2View?.closing_ends_at).toBe(seat2Base!.closing_ends_at);
+    });
+
+    it("D: both speakers independently narrow-losing in the same resolution each get their own correct closing fields through the view", async () => {
+      const [id1, id2] = await claimBothSeats();
+      await castNarrowLossVotes(id1);
+      await castNarrowLossVotes(id2);
+      await backdateStageRound();
+      const { data: outcomes } = await service.rpc("resolve_stage_round", { p_event_id: eventId });
+      expect(outcomes!.every((o) => o.out_outcome === "narrow-loss")).toBe(true);
+
+      const { data: viewRows } = await service
+        .from("event_speakers_active")
+        .select("id, seat_number, round_phase, closing_ends_at")
+        .eq("event_id", eventId);
+      const seat1View = viewRows!.find((r) => r.id === id1);
+      const seat2View = viewRows!.find((r) => r.id === id2);
+      expect(seat1View?.round_phase).toBe("closing");
+      expect(seat2View?.round_phase).toBe("closing");
+      expect(seat1View?.closing_ends_at).not.toBeNull();
+      expect(seat2View?.closing_ends_at).not.toBeNull();
+      // Each seat's own deadline, independently stamped by resolve_stage_round's
+      // per-seat loop (both happen to share the same value here because
+      // Postgres's now() is fixed for the whole transaction — not because
+      // they're the same column/row).
+      expect(seat1View?.id).not.toBe(seat2View?.id);
+
+      // The round itself must still read as active through the same view
+      // path a client would use to decide "is there a shared timer" —
+      // migration 00000000000041's own fix, unaffected by this pass.
+      const round = await getStageRound();
+      expect(round.phase).toBe("active");
+    });
+
+    it("E: a closing speaker who leaves voluntarily before their deadline does not get a duplicate/late resolution", async () => {
+      const [id1, id2] = await claimBothSeats();
+      await castContinueVotes(id1);
+      await castNarrowLossVotes(id2);
+      await backdateStageRound();
+      await service.rpc("resolve_stage_round", { p_event_id: eventId }); // seat2 now closing
+
+      const asSpeaker2 = await signInAs("speaker2");
+      const { error: leaveError } = await asSpeaker2.rpc("leave_speaker_seat", { p_event_id: eventId });
+      expect(leaveError).toBeNull();
+
+      const { data: seat2AfterLeave } = await service.from("event_speakers").select("left_at, left_reason").eq("id", id2).single();
+      expect(seat2AfterLeave!.left_at).not.toBeNull();
+      expect(seat2AfterLeave!.left_reason).toBe("voluntary"); // not "replaced" — this was a voluntary leave, not the closing deadline firing
+
+      // The seat no longer shows through the view at all — vacated, not
+      // still "closing" with a deadline that's about to double-fire.
+      const { data: viewRowAfterLeave } = await service
+        .from("event_speakers_active")
+        .select("id")
+        .eq("id", id2)
+        .maybeSingle();
+      expect(viewRowAfterLeave).toBeNull();
+
+      // A late resolve_seat_closing call (e.g. a client's already-scheduled
+      // timer firing after the voluntary leave already won the race) must
+      // be a safe no-op, not a duplicate/incorrect eviction.
+      await backdateClosingEnd(id2);
+      const { data: lateResolution, error: lateError } = await service.rpc("resolve_seat_closing", { p_event_speakers_id: id2 });
+      expect(lateError).toBeNull();
+      expect(lateResolution).toHaveLength(0);
+
+      const { data: seat2Final } = await service.from("event_speakers").select("left_at, left_reason").eq("id", id2).single();
+      expect(seat2Final!.left_reason).toBe("voluntary"); // unchanged — not overwritten to "replaced" by the late call
+    });
+  });
 });
 
 /**
