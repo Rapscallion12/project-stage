@@ -4,15 +4,30 @@ import { useRef, useState } from "react";
 import { uploadAvatar, deleteAvatarFile } from "@/lib/avatar-upload";
 import { saveAvatarUrl, removeAvatar } from "@/app/profile/actions";
 import { ParticipantAvatar } from "@/components/room/participant-avatar";
-import { Button } from "@/components/ui/button";
 
 /**
- * Issue #29, Section 4/20: upload/remove, independent of the rest of
- * Edit Profile's own explicit Save button — Section 20 asks for avatar
- * removal specifically as its own immediate action, and an upload only
- * has anything to persist once it has a URL to write, so both make more
- * sense as their own small, self-contained round trips than as form
- * fields waiting on a separate Save tap.
+ * Issue #29, Section 4/20 (original pass) + profile UX polish pass
+ * Sections 5-8: upload/remove, independent of the rest of Edit Profile's
+ * own explicit Save button — Section 20 asks for avatar removal
+ * specifically as its own immediate action, and an upload only has
+ * anything to persist once it has a URL to write, so both make more sense
+ * as their own small, self-contained round trips than as form fields
+ * waiting on a separate Save tap.
+ *
+ * **The avatar circle itself is the picker trigger** (real-iPhone
+ * feedback: a separate "Add photo" button next to the avatar wasn't an
+ * obvious relationship) — a real `<button>` wrapping `ParticipantAvatar`,
+ * so Enter/Space activate it for free with no extra keyboard handling.
+ * Same `inputRef.current?.click()` this pass's original "Add photo"
+ * button called, and the exact same `uploadAvatar`/`saveAvatarUrl`/
+ * `deleteAvatarFile`/`removeAvatar` pipeline below, completely
+ * unchanged — only the trigger and layout are new, per this pass's own
+ * explicit "do not create a second upload implementation" instruction.
+ * The small camera-badge overlay is decorative (`aria-hidden`); the real
+ * accessible name lives on the button itself and switches between "Add
+ * profile photo" / "Change profile photo" depending on whether one
+ * already exists, satisfying Section 7's accessibility requirement
+ * without needing a separate visible text button anymore.
  */
 export function AvatarEditor({ userId, displayName, initialAvatarUrl }: { userId: string; displayName: string; initialAvatarUrl: string | null }) {
   const [avatarUrl, setAvatarUrl] = useState(initialAvatarUrl);
@@ -57,18 +72,32 @@ export function AvatarEditor({ userId, displayName, initialAvatarUrl }: { userId
 
   return (
     <div className="flex items-center gap-4">
-      <ParticipantAvatar name={displayName} imageUrl={avatarUrl} size="lg" />
-      <div className="flex flex-col gap-2">
-        <div className="flex gap-2">
-          <Button type="button" variant="secondary" disabled={pending} onClick={() => inputRef.current?.click()}>
-            {pending ? "Uploading…" : avatarUrl ? "Change photo" : "Add photo"}
-          </Button>
-          {avatarUrl && (
-            <Button type="button" variant="ghost" disabled={pending} onClick={handleRemove}>
-              Remove
-            </Button>
-          )}
-        </div>
+      <div className="relative shrink-0">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => inputRef.current?.click()}
+          aria-label={avatarUrl ? "Change profile photo" : "Add profile photo"}
+          data-testid="avatar-picker-trigger"
+          className="block rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
+        >
+          <ParticipantAvatar name={displayName} imageUrl={avatarUrl} size="lg" />
+        </button>
+        {/* Decorative edit affordance — the real accessible name is on the button above. Same emoji-icon language the rest of this app's profile UI already uses (SocialLinksDisplay's own PLATFORM_ICONS). */}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-1 -bottom-1 flex h-8 w-8 items-center justify-center rounded-full border-2 border-background bg-accent text-sm text-white shadow-sm"
+        >
+          📷
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        {pending && <p className="text-sm text-muted">Uploading…</p>}
+        {avatarUrl && !pending && (
+          <button type="button" onClick={handleRemove} className="w-fit text-xs text-muted underline-offset-2 hover:text-foreground hover:underline">
+            Remove photo
+          </button>
+        )}
         <input
           ref={inputRef}
           type="file"

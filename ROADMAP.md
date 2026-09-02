@@ -1644,6 +1644,17 @@ redirect.
       username yet stay non-navigable — no fake guest profile pages.
 - [x] "My Profile" entry point inside the existing room account menu
       (`RoomInfoOverlay`) — no revived site-wide header inside the room.
+- [x] **Profile UX polish pass** (real-iPhone feedback): the home page
+      header now shows a signed-in visitor's own avatar (`HomeAccountMenu`)
+      — tapping it opens My Profile/Edit Profile/Log out (or "Complete
+      Profile" alone, pre-username), replacing the old bare email + full-
+      width Log out button. The room's own account menu
+      (`RoomInfoOverlay`) now shares the exact same profile-link logic
+      (`AccountMenuLinks`), so both surfaces behave identically. On Edit
+      Profile, the avatar circle itself is now the photo picker (with a
+      small camera-icon affordance) — the separate "Add photo" button is
+      gone, and Remove Photo survives as small secondary text. The
+      underlying upload/resize/storage pipeline is completely unchanged.
 
 ## Explicitly not on this roadmap
 

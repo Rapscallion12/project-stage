@@ -13,6 +13,21 @@ merged to `main`.
 
 ### Added
 
+- **The home page now has a real profile entry point** (issue #29,
+  profile UX polish pass, based on real-iPhone feedback): a signed-in
+  visitor's own avatar now appears in the top-right of the header on
+  every page outside the live room, replacing the old bare email + a
+  full-width "Log out" button. Tapping it opens a small menu — My
+  Profile, Edit Profile, and Log out (or, for an account that hasn't
+  chosen a username yet, a single "Complete Profile" — never a link to a
+  profile page that doesn't exist). On the Edit Profile screen, the
+  avatar circle itself is now the photo picker — tap or click it directly
+  to add or replace a photo, with a small camera icon showing it's
+  interactive — and the old separate "Add photo" button is gone. A
+  "Remove photo" option stays available, as small text, once a photo
+  exists. Nothing about the underlying upload, storage, or save behavior
+  changed — guests, the live room, and every other part of the profile
+  system are unaffected. See DECISIONS.md and SESSION_LOG.md.
 - **Profiles are real now** (issue #29, first profile/social-identity
   pass): every registered account gets a public profile page at
   `/profile/<username>` — a photo, a unique @username, a display name, a

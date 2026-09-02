@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { signOut } from "@/app/auth/actions";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { AccountMenuLinks } from "@/components/profile/account-menu-links";
 import { ROOM_STATUS_LABEL, type RoomStatus } from "@/lib/room-status";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
@@ -138,13 +139,8 @@ export function RoomInfoOverlay({
                   </Button>
                 </form>
               </div>
-              {/* Issue #29, Section 14: the smallest sensible "My Profile" entry point — inside the account menu that already existed, never a revived site-wide header inside the room. Links to the public profile once a username exists, or the completion flow if not yet — see EditProfilePage's own doc comment. */}
-              <Link
-                href={identity.username ? `/profile/${identity.username}` : "/profile/edit"}
-                className="rounded-lg px-2 py-2 text-sm font-medium hover:bg-foreground/5"
-              >
-                My Profile
-              </Link>
+              {/* Issue #29, Section 14 (and the profile UX polish pass's Section 11 audit): the smallest sensible profile entry point — inside the account menu that already existed, never a revived site-wide header inside the room. `AccountMenuLinks` is the same component the home header's own avatar menu uses, so "My Profile"/"Edit Profile"/"Complete Profile" behave identically everywhere they appear. */}
+              <AccountMenuLinks username={identity.username} />
             </div>
           )}
         </div>

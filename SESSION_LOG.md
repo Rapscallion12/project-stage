@@ -4,6 +4,113 @@ Newest entry first.
 
 ---
 
+## 2026-09-02 — Session 62: Profile UX polish pass — home page avatar/account menu, shared account-menu links, clickable Edit Profile avatar (issue #29)
+
+**Goal**: a narrow polish pass on top of Session 61's profile work, driven
+by two pieces of real-iPhone feedback: (1) the home page had no visible
+way to reach a profile at all, and (2) Edit Profile's avatar + separate
+"Add photo" button wasn't an obvious relationship. Explicit constraints:
+no profile architecture/schema changes, no core live-room changes, reuse
+the existing upload pipeline verbatim, and — unlike the previous pass —
+actually perform the requested real-browser walkthrough this time.
+
+**Home page avatar**: `SiteHeader` now fetches the signed-in visitor's
+own `getOwnProfile` row (same repository function Edit Profile/the public
+profile page already read — no separate cached identity state) and
+renders a new `HomeAccountMenu` in place of the old bare email + full-
+width "Log out" button. Tapping the avatar opens a small, right-anchored
+dropdown — My Profile / Edit Profile / Log out, or a single "Complete
+Profile" for an account without a username yet (never a link to a public
+profile page that doesn't exist). Closes on Escape, an outside click, or
+tapping any of its own links. A `-m-1 p-1` trigger brings the actual tap
+target to 44px (this project's own established minimum) without visually
+enlarging the 36px avatar. Guest header is completely untouched.
+
+**Shared `AccountMenuLinks`**: the actual "where do these links point"
+logic was extracted into one small component, used by both
+`HomeAccountMenu` and the room's own `RoomInfoOverlay` — which previously
+had a single hardcoded "My Profile" link that hadn't been updated for
+this pass's "Complete Profile" wording. Audited and swapped in, rather
+than left to drift into inconsistency with the new home menu. See
+DECISIONS.md for why this is a small shared component and not a reuse of
+`RoomInfoOverlay` wholesale (it's a full room-info sheet, not a small
+account menu, and forcing the home header into that shape would be the
+"broad rewrite to deduplicate a few lines" the pass's own instructions
+warned against).
+
+**Edit Profile avatar**: the avatar circle in `AvatarEditor` is now a real
+`<button>` wrapping `ParticipantAvatar`, calling the exact same
+`inputRef.current?.click()` the old "Add photo" button called — same
+`uploadAvatar`/`saveAvatarUrl`/`deleteAvatarFile`/`removeAvatar` pipeline,
+completely unchanged. A small `aria-hidden` camera-emoji badge (📷,
+matching this app's existing emoji-icon language) is purely decorative;
+the real accessible name lives on the button (`aria-label`, "Add profile
+photo" / "Change profile photo" depending on whether one exists already).
+The large standalone "Add photo"/"Change photo" button is gone; "Remove
+photo" survives as small secondary text, shown only once a photo exists.
+A real `<button>` gets keyboard activation (Enter/Space) for free — no
+extra key-handling code needed.
+
+**Testing**: new component suites for `HomeAccountMenu` (10 tests —
+photo/fallback avatar, opens on tap, correct links per profile-
+completeness state, closes on second tap/Escape/outside-click/link-tap,
+Log out reachable), `AccountMenuLinks` (4 tests — the two link-set states,
+never linking to a broken profile route, `onNavigate` firing), and
+`AvatarEditor` (11 tests, rewritten for the new interaction — correct
+accessible label in both states, fallback avatar renders inside the
+trigger, clicking/keyboard-focus-then-Enter both open the file picker
+whether or not a photo already exists, real `<button>` tag, the existing
+upload/error/remove pipeline is exercised unchanged, the old large
+button no longer exists). `room-info-overlay.test.tsx` updated for the
+new Complete Profile / My Profile+Edit Profile split.
+
+**Real browser walkthrough — actually performed this time** (the previous
+pass's stated gap): local dev server, two real Supabase-backed test
+accounts (one with a username, one without — both service-role-created
+and deleted afterward). Mobile viewport (390×844): logged in as the
+username'd account, confirmed the header avatar (fallback initials,
+correct color/label), opened the menu, followed Edit Profile, tapped the
+avatar itself (confirmed it opens the native file chooser), uploaded a
+real JPEG through it, watched the button label flip to "Change profile
+photo" and a "Remove photo" control appear, watched the *home header's
+own avatar* update live on the same page load (a Server Action's
+automatic route-tree refresh re-rendering the root layout, not anything
+built for this pass — confirms Section 9/10's identity-consistency and
+back-navigation requirements were already satisfied by the existing
+architecture), saved, landed on the public profile page, navigated Home,
+confirmed the new avatar persisted there, reopened the menu, and
+confirmed Log out actually works (back to the guest header). Logged in
+separately as the no-username account and confirmed the menu shows only
+"Complete Profile," routing to `/profile/edit` with a "Complete your
+profile" heading and a Cancel link correctly pointing at `/` (no username
+to fall back to) rather than a broken profile route. Desktop (1440×900)
+and mobile-landscape (844×390) both re-confirmed the same header/menu
+render with no clipping or overflow. Confirmed keyboard activation
+specifically (Shift+Tab to focus the avatar trigger, Enter to activate)
+opens the same file chooser. Also opened a real room (via `/dev`'s demo-
+event tooling) and confirmed `RoomInfoOverlay`'s account section now
+correctly shows "Complete Profile" through the shared component. All test
+accounts, uploaded files, and the demo event were deleted afterward; the
+shared sandbox test room was cleared.
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite **93 files / 1246 tests, all
+   passing** (up from 90/1221 before this pass).
+2. **Production interaction** — not applicable this pass; the real-
+   browser walkthrough above (tier 3, against a local dev server backed
+   by the real Supabase project) is the stronger verification actually
+   performed, superseding a plain fetch-based production-interaction
+   check for this UI-behavior-focused pass.
+3. **Real-device**: **UNVERIFIED — requires an actual iPhone.** See the
+   handoff's short checklist.
+
+Not merged to `main`. Fresh preview to be deployed and linked in the
+handoff.
+
+---
+
 ## 2026-09-02 — Session 61: First profile/social-identity pass — username, avatar, bio, social links, follow system, live-room identity linking (issue #29)
 
 **Goal**: an entirely new, large scope shift off issue #21's corrective-

@@ -54,21 +54,24 @@ describe("RoomInfoOverlay", () => {
     expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
   });
 
-  describe("My Profile entry point (issue #29, Section 14)", () => {
-    it("links to /profile/edit for an account with no username chosen yet", () => {
+  describe("profile entry point (issue #29, Section 14; relabeled in the profile UX polish pass to share AccountMenuLinks with the home header)", () => {
+    it("shows only Complete Profile — not My Profile/Edit Profile — for an account with no username chosen yet", () => {
       render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={accountIdentity} />);
-      expect(screen.getByRole("link", { name: "My Profile" })).toHaveAttribute("href", "/profile/edit");
+      expect(screen.getByRole("link", { name: "Complete Profile" })).toHaveAttribute("href", "/profile/edit");
+      expect(screen.queryByRole("link", { name: "My Profile" })).not.toBeInTheDocument();
     });
 
-    it("links to the public profile once a username exists", () => {
+    it("shows both My Profile and Edit Profile once a username exists", () => {
       const withUsername: Identity = { ...accountIdentity, username: "jamier" };
       render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={withUsername} />);
       expect(screen.getByRole("link", { name: "My Profile" })).toHaveAttribute("href", "/profile/jamier");
+      expect(screen.getByRole("link", { name: "Edit Profile" })).toHaveAttribute("href", "/profile/edit");
     });
 
-    it("never shows a My Profile link for a guest — no forced account/profile flow", () => {
+    it("never shows a profile link for a guest — no forced account/profile flow", () => {
       render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={guestIdentity} />);
       expect(screen.queryByRole("link", { name: "My Profile" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Complete Profile" })).not.toBeInTheDocument();
     });
   });
 

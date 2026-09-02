@@ -3,6 +3,90 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-02 — Profile UX polish pass: home avatar menu, shared account-menu links, clickable Edit Profile avatar (issue #29)
+
+**Problem**: real-iPhone testing of the first profile pass found the home
+page had no visible way to reach a profile at all, and Edit Profile's
+avatar/"Add photo" pairing wasn't an obvious relationship.
+
+**Decision 1 — a new `HomeAccountMenu` client component, not a reuse of
+`RoomInfoOverlay`.**
+
+- **Alternatives considered**: render `RoomInfoOverlay` (or a stripped
+  variant of it) from the home header too, since the instructions asked
+  to "strongly prefer reusing... the account-menu component used inside
+  rooms" where one exists.
+- **Reason**: `RoomInfoOverlay` isn't actually a small account menu — it's
+  a full room-info bottom sheet/popover (event title, description, Home/
+  Events nav, account section) sized and positioned for the room's own
+  fixed-height stage, with room-specific content (event title/status)
+  that has no equivalent on a plain page. Forcing it into the home header
+  would mean either rendering irrelevant room-shaped chrome or forking
+  its layout — both worse than a small, purpose-built corner dropdown.
+  What's actually shared is the *narrower* thing the instructions also
+  named explicitly — "My Profile / Edit Profile / Log out" — which became
+  its own component instead (Decision 2), used by both.
+- **Tradeoff**: two different visual containers (a full sheet vs. a
+  corner dropdown) for what is conceptually "the account menu." Accepted
+  — they're genuinely different UI contexts (a full-screen room overlay
+  vs. an ordinary page header), and forcing pixel-identical presentation
+  across both would be exactly the "broad rewrite to deduplicate a few
+  lines" the instructions said not to do.
+
+**Decision 2 — extracted `AccountMenuLinks`, used by both surfaces.**
+
+- **Decision**: the actual profile-link logic (My Profile + Edit Profile
+  when a username exists; Complete Profile alone when it doesn't) moved
+  into one small shared component, imported by `HomeAccountMenu` and
+  swapped into `RoomInfoOverlay` in place of its previous single
+  hardcoded "My Profile" link.
+- **Reason**: this is the one piece that actually needed to behave
+  identically everywhere it appears (Section 9's identity-consistency
+  requirement extends naturally to "where do these links point," not just
+  "whose avatar is this") — and the room menu's previous version hadn't
+  been updated for the "Complete Profile" wording this pass introduces,
+  so leaving it alone would have made the two surfaces actively
+  inconsistent, not just differently shaped.
+
+**Decision 3 — `getOwnProfile` fetched directly in `SiteHeader`, `Identity` type left unchanged.**
+
+- **Alternatives considered**: add `avatarUrl` to the `Identity` type
+  (`lib/identity.ts`), since that's the existing "who is this request
+  from" resolution every room surface already uses.
+- **Reason**: `Identity` is constructed as object literals across ~11
+  existing test files (the first profile pass already had to touch all of
+  them once, to add `username`) — widening it again for a field that
+  `RoomInfoOverlay` doesn't even need (the room menu never rendered an
+  avatar) would be a second wide, mechanical touch of unrelated test
+  files for no behavioral gain. `SiteHeader` already calls
+  `supabase.auth.getUser()` directly (an existing, documented Auth
+  exception) and is the only caller that needs the avatar; reading
+  `getOwnProfile(user.id)` there — the exact same repository function
+  Edit Profile and the public profile page already read — keeps the
+  identity source authoritative and single without growing a type used
+  far more broadly than this one new call site needs.
+
+**Decision 4 — the Edit Profile avatar reuses the existing upload
+pipeline verbatim; only the trigger and layout changed.**
+
+- **Decision**: `AvatarEditor`'s `uploadAvatar`/`saveAvatarUrl`/
+  `deleteAvatarFile`/`removeAvatar` calls are byte-for-byte unchanged.
+  The large "Add photo"/"Change photo" `<Button>` was replaced with a
+  real `<button>` wrapping `ParticipantAvatar` that calls the exact same
+  `inputRef.current?.click()` the old button called; a small `aria-hidden`
+  camera-emoji badge is purely decorative, with the real accessible name
+  living on the button itself (`aria-label`, switching between "Add
+  profile photo" / "Change profile photo"). "Remove photo" survives as a
+  small secondary text control, shown only once a photo exists.
+- **Reason**: the instructions were explicit ("do not create a second
+  upload implementation... preserve validation/resizing/JPEG conversion/
+  512px behavior/storage path/permissions/save semantics/error
+  handling") — none of that lives in the trigger or the button's own
+  markup, so none of it needed to change. Using a real `<button>` (not a
+  `<div onClick>`) gets keyboard activation (Enter/Space) for free, which
+  is exactly the "keyboard activation should work on desktop" requirement
+  without any extra key-handling code.
+
 ## 2026-09-02 — First profile/social-identity pass: routing, view-security, and follow-schema decisions (issue #29)
 
 **Problem**: build a lightweight but real social profile system —
