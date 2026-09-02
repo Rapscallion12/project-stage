@@ -36,6 +36,7 @@ import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
 import type { SpeakerReconcileReason, SpeakerSyncDiagnostics } from "@/hooks/use-active-speakers";
+import type { SelectionReconcileDiagnostics } from "@/hooks/use-speaker-selection-reconciliation";
 
 /**
  * Issue #21, third corrective pass: selection is now deterministic —
@@ -304,6 +305,7 @@ export function SessionSimulatorPanel({
   onSimulatorReset,
   refetchSpeakers,
   getSpeakerSyncDiagnostics,
+  getSelectionReconcileDiagnostics,
 }: {
   eventId: string;
   speakers: EventSpeaker[];
@@ -331,6 +333,8 @@ export function SessionSimulatorPanel({
   refetchSpeakers?: (reason?: SpeakerReconcileReason) => Promise<EventSpeaker[]>;
   /** The same hook's own `getSyncDiagnostics` — surfaced in Copy Debug Snapshot's new SPEAKER SYNC section. Optional, same reasoning as `refetchSpeakers`. */
   getSpeakerSyncDiagnostics?: () => SpeakerSyncDiagnostics;
+  /** Issue #21, nineteenth corrective pass: `useSpeakerSelectionReconciliation`'s own diagnostics — surfaced in Copy Debug Snapshot's new SELECTION RECONCILIATION section. Optional, same reasoning as `getSpeakerSyncDiagnostics`. */
+  getSelectionReconcileDiagnostics?: () => SelectionReconcileDiagnostics;
 }) {
   const [running, setRunning] = useState(false);
   // Issue #21, fourth corrective pass: the bounded startup state machine
@@ -2322,6 +2326,64 @@ export function SessionSimulatorPanel({
         push("");
       }
     }
+
+    // Issue #21, nineteenth corrective pass: a real-database investigation
+    // (no simulator involved) proved a genuine production-reachable bug —
+    // a winning candidate's own reservation could stay looking "live"
+    // forever after their claim succeeded, silently blocking real
+    // selection for a *later* vacancy of the same seat (see DECISIONS.md
+    // for the full trace; fixed in `markSpeakerRequestGranted` +
+    // migration 00000000000043). This section makes every currently-live
+    // reservation's own validity directly legible from one capture: which
+    // seat it targets, whether that seat's authoritative occupant is
+    // actually this same candidate (the only way a reservation should
+    // ever coexist with occupancy), and an explicit STALE call-out if not.
+    if (authoritative) {
+      push("RESERVATION LIFECYCLE");
+      const liveReservations = authoritative.pendingRequests.filter((r) => r.is_current_candidate && r.reserved_seat_number !== null);
+      if (liveReservations.length === 0) {
+        push("  none currently reserved");
+      }
+      for (const reservation of liveReservations) {
+        const seatNumber = reservation.reserved_seat_number!;
+        const occupant = authoritative.seats.find((s) => s.seat_number === seatNumber);
+        push(`Seat ${seatNumber} — ${reservation.display_name} (request ${reservation.id.slice(0, 8)})`);
+        push(`  selection round: ${reservation.selection_round_id ?? "none"}`);
+        push(`  created: ${reservation.created_at}`);
+        push(`  eligible (not selection_failed): ${reservation.selection_failed ? "no" : "yes"}`);
+        push(`  target seat occupancy: ${occupant ? occupant.display_name : "vacant"}`);
+        // A live reservation legitimately coexists with occupancy in
+        // exactly one shape: nobody occupies that seat yet (the
+        // candidate hasn't claimed it *yet*) — occupancy by anyone at
+        // all (even briefly, mid-claim) is a same-transaction transient
+        // this read can't distinguish from genuine staleness on its own,
+        // so it's called out for a human to interpret, never silently
+        // assumed either way.
+        const validity = occupant ? "SUSPECT — seat is occupied while this reservation is still live" : "OK — seat still vacant, reservation still meaningful";
+        push(`  validity: ${validity}`);
+        if (occupant) {
+          push("  invalidity reason: target seat already has an authoritative occupant — see markSpeakerRequestGranted (issue #21, nineteenth corrective pass) for what should have cleared this");
+        }
+      }
+      push("");
+    }
+
+    push("SELECTION RECONCILIATION");
+    const selectionReconcile = getSelectionReconcileDiagnostics?.();
+    if (selectionReconcile) {
+      push(`Last reconcile: ${selectionReconcile.lastReconcileAt ?? "never"}`);
+      push("Reason: occupancy or pending-request pool changed");
+      const before = selectionReconcile.reservationsBefore;
+      const after = selectionReconcile.reservationsAfter;
+      const beforeKey = before ? [...before].sort((a, b) => a.seatNumber - b.seatNumber).map((r) => `${r.seatNumber}:${r.requestId}`).join(",") : null;
+      const afterKey = after ? [...after].sort((a, b) => a.seatNumber - b.seatNumber).map((r) => `${r.seatNumber}:${r.requestId}`).join(",") : null;
+      push(`Result: ${before === null || after === null ? "unknown — reconcile hasn't completed yet" : beforeKey === afterKey ? "unchanged" : "changed"}`);
+      push(`Reservations before: ${before === null ? "unknown" : before.length === 0 ? "none" : before.map((r) => `seat ${r.seatNumber}=${r.requestId.slice(0, 8)}`).join(", ")}`);
+      push(`Reservations after: ${after === null ? "unknown" : after.length === 0 ? "none" : after.map((r) => `seat ${r.seatNumber}=${r.requestId.slice(0, 8)}`).join(", ")}`);
+    } else {
+      push("  unavailable — no selection reconcile diagnostics wired");
+    }
+    push("");
 
     // Issue #21, fourteenth corrective pass, Section "DEBUG SNAPSHOT:
     // STARTUP STATUS": a real-device report showed a startup failure

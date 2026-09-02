@@ -13,6 +13,22 @@ merged to `main`.
 
 ### Changed
 
+- **Fixed a rare case where a Request-to-Speak candidate who just won a
+  seat could keep blocking that same seat's *next* opening** (issue #21,
+  nineteenth corrective pass) — this specifically needed both seats
+  opening up at once, with one candidate winning and getting seated
+  quickly while the other candidate hadn't claimed their own seat yet;
+  if the *first* candidate's own seat then opened up again before the
+  second candidate ever claimed theirs, the system could keep treating
+  the first candidate's now-finished turn as if it were still an open
+  reservation, silently blocking anyone new from being offered that
+  seat. Confirmed this can genuinely happen during ordinary use — not
+  just something a testing tool could trigger — using only the same real
+  actions any two people can take, and fixed at the source: a candidate's
+  reservation is now correctly marked finished the instant they're
+  actually seated. Verified with dedicated automated tests and by
+  deliberately hammering the preview's testing tools as fast as possible
+  afterward — no stale reservation ever resurfaced. See DECISIONS.md.
 - **Fixed a speaker's own Final-30 grace window never actually finishing
   on its own** (issue #21, eighteenth corrective pass — closes the bug
   flagged at the end of the seventeenth) — a narrowly-losing speaker

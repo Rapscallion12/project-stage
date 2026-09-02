@@ -494,6 +494,10 @@ export type DebugSnapshotState = {
     reserved_seat_number: 1 | 2 | null;
     frozen_rank: number | null;
     selection_failed: boolean;
+    /** Issue #21, nineteenth corrective pass: when this request was originally submitted — shown in the new RESERVATION LIFECYCLE debug section. */
+    created_at: string;
+    /** Issue #21, nineteenth corrective pass: which frozen selection round (if any) this reservation belongs to — `null` until frozen. */
+    selection_round_id: string | null;
   }>;
 };
 
@@ -530,7 +534,7 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
       .order("seat_number", { ascending: true }),
     supabase
       .from("speaker_requests")
-      .select("id, message_id, profile_id, guest_id, is_current_candidate, reserved_seat_number, frozen_rank, selection_failed")
+      .select("id, message_id, profile_id, guest_id, is_current_candidate, reserved_seat_number, frozen_rank, selection_failed, created_at, selection_round_id")
       .eq("event_id", eventId)
       .eq("status", "pending")
       .order("created_at", { ascending: true }),
@@ -583,6 +587,8 @@ export async function fetchDebugSnapshotState(eventId: string): Promise<DebugSna
       reserved_seat_number: r.reserved_seat_number as 1 | 2 | null,
       frozen_rank: r.frozen_rank,
       selection_failed: r.selection_failed,
+      created_at: r.created_at,
+      selection_round_id: r.selection_round_id,
     })),
   };
 }

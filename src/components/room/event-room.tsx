@@ -521,7 +521,7 @@ export function EventRoom({
   // (triggered only by an eligible candidate's own polling) isn't always
   // enough. Any connected client re-verifies whenever its own view of
   // occupancy or the pending-request pool changes.
-  useSpeakerSelectionReconciliation(event.id, speakers, pendingRequests);
+  const { getReconcileDiagnostics: getSelectionReconcileDiagnostics } = useSpeakerSelectionReconciliation(event.id, speakers, pendingRequests);
 
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
@@ -717,6 +717,7 @@ export function EventRoom({
           // never a simulator-specific duplicate.
           refetchSpeakers={refetchSpeakers}
           getSpeakerSyncDiagnostics={getSpeakerSyncDiagnostics}
+          getSelectionReconcileDiagnostics={getSelectionReconcileDiagnostics}
           // Issue #21, seventh corrective pass, Section 19: defense in
           // depth alongside SessionSimulatorPanel's own database cleanup
           // — an explicit fresh read of speaker occupancy, the same

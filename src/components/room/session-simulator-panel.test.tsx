@@ -2319,7 +2319,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
           round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
           seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
           pendingRequests: [
-            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false, created_at: new Date().toISOString(), selection_round_id: null },
           ],
         });
         render(
@@ -2351,7 +2351,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
           round: { round_number: 1, phase: "awaiting_pairing", ends_at: new Date().toISOString(), updated_at: new Date().toISOString(), last_transition_reason: null },
           seats: [{ seat_number: 1, display_name: "Nimble Owl", identity_kind: "guest", disconnected: false, round_phase: "active", closing_ends_at: null }],
           pendingRequests: [
-            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: true, reserved_seat_number: 2, frozen_rank: 1, selection_failed: false },
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: true, reserved_seat_number: 2, frozen_rank: 1, selection_failed: false, created_at: new Date().toISOString(), selection_round_id: null },
           ],
         });
         render(
@@ -2405,7 +2405,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
           round: null,
           seats: [],
           pendingRequests: [
-            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false, created_at: new Date().toISOString(), selection_round_id: null },
           ],
         });
         render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1", voteCount: 4 })]} />);
@@ -2431,8 +2431,8 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
           round: null,
           seats: [],
           pendingRequests: [
-            { id: "r1", display_name: "Candidate A", identity_kind: "guest", vote_count: 2, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
-            { id: "r2", display_name: "Candidate B", identity_kind: "guest", vote_count: 1, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+            { id: "r1", display_name: "Candidate A", identity_kind: "guest", vote_count: 2, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false, created_at: new Date().toISOString(), selection_round_id: null },
+            { id: "r2", display_name: "Candidate B", identity_kind: "guest", vote_count: 1, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false, created_at: new Date().toISOString(), selection_round_id: null },
           ],
         });
         // Client (stale) still ranks B above A — the authoritative read
@@ -2462,7 +2462,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
           round: null,
           seats: [],
           pendingRequests: [
-            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false },
+            { id: "r1", display_name: "Dapper Rabbit", identity_kind: "guest", vote_count: 3, is_current_candidate: false, reserved_seat_number: null, frozen_rank: null, selection_failed: false, created_at: new Date().toISOString(), selection_round_id: null },
           ],
         });
         render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1", voteCount: 3 })]} />);

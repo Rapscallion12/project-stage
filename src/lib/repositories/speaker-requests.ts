@@ -244,12 +244,46 @@ export async function rankPendingSpeakerRequests(eventId: string): Promise<Ranke
  * already made in TypeScript before this is ever called; this is just
  * recording the outcome. Identity-agnostic (operates on the request id,
  * not the identity that made it), so issue #16 needed no change here.
+ *
+ * **Issue #21, nineteenth corrective pass: also consumes the
+ * reservation itself** (`is_current_candidate: false`,
+ * `reserved_seat_number: null`), not just the request's own `status`.
+ * Root cause this closes: every reservation-aware reader in this schema
+ * (`reserve_speaker_candidates_for_seats`'s "already has a live
+ * reservation" check, `withdraw_speaker_request(_as_guest)`'s exhaustion
+ * check, `release_failed_speaker_claim`'s own idempotency guard) treats
+ * `is_current_candidate = true` as "this reservation is still live and
+ * meaningful" — but before this fix, a winning candidate's own row kept
+ * that flag `true` forever after their claim succeeded, because
+ * `resetSpeakerCandidatePool`'s bulk wipe deliberately excludes the
+ * winner's own row (`id != p_winning_request_id`) and, in the dual-
+ * replacement case, *defers entirely* (does nothing at all) whenever the
+ * *other* seat still has a live reservation in flight. A real production
+ * sequence reproduces this with no simulator/bypass involved: both seats
+ * open, candidate X reserved for seat 1 and candidate Y for seat 2 in
+ * the same round; X claims first (their own promotion countdown simply
+ * finishes before Y's) — the pool reset defers because Y is still
+ * pending; if seat 1 then becomes vacant *again* before Y ever claims
+ * (X disconnects, leaves voluntarily, or loses a fast subsequent
+ * narrow-loss), the still-`active` round is reused for that new vacancy,
+ * and X's stale-but-never-cleared `is_current_candidate = true` makes
+ * every reservation-aware reader above believe seat 1 already has a live
+ * candidate — silently blocking real selection for it. Clearing the
+ * flag the instant a claim is granted — always safe, since this is
+ * strictly *after* `claimSpeakerSeat` has already succeeded and
+ * independently re-validated eligibility itself; nothing about the
+ * claim's own authorization depends on this flag staying `true` a moment
+ * longer — closes this at its actual source rather than teaching every
+ * downstream reader to second-guess a flag that should have meant
+ * "still live" in the first place. See migration 00000000000043's own
+ * doc comment for the paired defense-in-depth guard and DECISIONS.md for
+ * the full investigation.
  */
 export async function markSpeakerRequestGranted(requestId: string): Promise<void> {
   const supabase = createServiceClient();
   const { error } = await supabase
     .from("speaker_requests")
-    .update({ status: "granted", resolved_at: new Date().toISOString() })
+    .update({ status: "granted", resolved_at: new Date().toISOString(), is_current_candidate: false, reserved_seat_number: null })
     .eq("id", requestId)
     .eq("status", "pending");
   if (error) {

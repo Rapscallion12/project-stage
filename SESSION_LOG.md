@@ -4,6 +4,78 @@ Newest entry first.
 
 ---
 
+## 2026-09-01 — Session 60: Nineteenth corrective pass — a winning RTS candidate's own reservation never cleared, silently blocking a later reopening of the same seat; proven production-reachable, fixed at the source (issue #21)
+
+**Goal**: the eighteenth pass's own flagged finding — a stale RTS
+reservation blocking a real vacancy. Explicit mandate: determine whether
+this is reachable through normal production flows or only via unusually
+rapid simulator force actions, before touching anything. Do not assume
+production selection is broken.
+
+**Mapped the reservation lifecycle first**: `is_current_candidate`/
+`reserved_seat_number` on `speaker_requests` is cleared by exactly three
+paths (withdrawal, a failed claim, a new candidate taking the same
+seat) — grepped every migration to confirm these are exhaustive. A
+*successful* claim was never among them — `markSpeakerRequestGranted`
+only ever updated `status`/`resolved_at`.
+
+**Why this stayed hidden in the ordinary case**: `resetSpeakerCandidatePool`
+excludes the winner's own row from its bulk wipe (harmless normally,
+since the round it's in gets marked resolved right after). The gap only
+surfaces in **dual replacement**: when the *other* seat's own
+reservation is still pending, the pool reset **defers entirely** — the
+round stays fully active, and the first winner's stale flag survives
+inside it indefinitely.
+
+**Reproduced directly against the real linked database — zero simulator
+code anywhere in the chain**: both seats open, three candidates frozen
+(X→seat 1, Y→seat 2, Z third and unreserved); X claims first (an
+ordinary timing difference, not a forced race); the pool reset correctly
+defers since Y is still pending; confirmed via a temporary `git stash`
+of only the fix that X's own row incorrectly still shows
+`is_current_candidate = true` on the pre-fix code (direct before/after
+proof); seat 1 reopens again before Y ever claims; a fresh
+reconciliation call finds X's stale reservation and refuses to reserve
+Z — the exact reported symptom. **Classification: production-reachable**
+— confirmed with real evidence, not simulator-only.
+
+**Fix, at the source**: `markSpeakerRequestGranted` now clears
+`is_current_candidate`/`reserved_seat_number` in the same UPDATE that
+sets `status: 'granted'` — safe by construction, since this runs
+strictly after the claim itself already succeeded and independently
+re-validated eligibility (the exact "successful claim losing
+authorization before completion" race the pass's own instructions
+warned against is structurally impossible here). Paired defense-in-
+depth: migration 43 adds a `status = 'pending'` guard to
+`reserve_speaker_candidates_for_seats`'s own "already reserved" check.
+Dual-replacement isolation re-verified explicitly — the fix only ever
+touches the winning row's own fields; the other seat's reservation is
+proven byte-for-byte unchanged throughout.
+
+**Observability**: `useSpeakerSelectionReconciliation` gained a
+`SpeakerSyncDiagnostics`-shaped accessor (before/after reservation
+snapshots, last reconcile time), surfaced in the debug snapshot as two
+new sections — RESERVATION LIFECYCLE (per-reservation target seat,
+round, created time, eligibility, occupancy match, validity) and
+SELECTION RECONCILIATION. Preview/dev only.
+
+**Verification**: full suite (1162 tests, 86 files — up from 1153/84),
+lint, tsc, build all clean. New real-database tests cover the
+reproduction, withdrawal/Cancel advancement, failed-claim release,
+third-party-claim rejection preserved, one-seat-per-reservation,
+duplicate-reconciliation idempotency, and concurrent reconcile-vs-claim
+safety, plus new hook-level diagnostics tests. Live-browser verification
+(fresh dev server, real demo event, unscripted simulator run): a natural
+decisive replacement, a natural Final-30 expiration, then a deliberate
+rapid-fire stress test (several Force Replace/Resolve Round Now clicks
+in quick succession, producing a genuine simultaneous both-seats-closing
+state and seven round-boundary renewals back to back) — RESERVATION
+LIFECYCLE stayed clean throughout, and the resulting dual replacement
+correctly reserved two distinct candidates with no stale state
+surfacing anywhere. Not merged to `main`; fresh preview deployed.
+
+---
+
 ## 2026-09-01 — Session 59: Eighteenth corrective pass — `event_speakers_active`'s frozen columns were silently dropping five round-lifecycle fields from every client, breaking Final-30's automatic replacement (issue #21)
 
 **Goal**: the narrow, dedicated follow-up the seventeenth pass's own

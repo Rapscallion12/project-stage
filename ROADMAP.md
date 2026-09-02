@@ -1449,6 +1449,62 @@ different dependencies. Current order:
       whoever picks up Request-to-Speak selection edge cases next,
       distinct from Final 30. See DECISIONS.md and SESSION_LOG.md's
       Session 59.
+
+      **Nineteenth corrective pass (2026-09-01, same branch)**: the
+      previous pass's own flagged finding — investigated per explicit
+      instruction to prove production reachability before touching
+      anything, not assume the bug and start redesigning. Mapped the
+      full reservation lifecycle (`is_current_candidate`/
+      `reserved_seat_number` on `speaker_requests`) and traced every
+      place that clears it: withdrawal, a failed claim
+      (`release_failed_speaker_claim`), and `set_current_speaker_candidate`'s
+      own clear-before-set — but never a *successful* claim. A winning
+      candidate's own row kept `is_current_candidate = true` forever
+      after `markSpeakerRequestGranted`, because `resetSpeakerCandidatePool`
+      deliberately excludes the winner's own row from its bulk wipe and,
+      in the ordinary dual-replacement case, defers entirely (does
+      nothing at all) while the *other* seat's own reservation is still
+      pending. Reproduced this directly against the real linked database
+      using only real production RPCs — no simulator, no bypass: both
+      seats open, two candidates each reserved for one seat, the first
+      claims quickly while the second is still pending (a completely
+      ordinary timing difference, not an artificial race), then the
+      first candidate's own seat opens *again* before the second ever
+      claims — the still-active, deferred round gets reused for the new
+      vacancy, and the first candidate's stale reservation silently
+      blocks a fresh one. **Confirmed production-reachable, not
+      simulator-only** — this exact sequence needs no force/debug
+      controls, no unusual timing pressure, nothing a real two-person
+      Q&A couldn't produce on its own. Fixed at the source:
+      `markSpeakerRequestGranted` now clears the reservation the instant
+      a claim is granted (always safe — strictly after the claim itself
+      already succeeded and independently re-validated eligibility, so
+      nothing about authorization depends on the flag staying `true` a
+      moment longer), paired with a defense-in-depth guard in
+      `reserve_speaker_candidates_for_seats` so a reservation whose own
+      `status` isn't `'pending'` can never again be mistaken for a live
+      blocker, whatever set it stale. Dual-replacement isolation
+      re-verified explicitly throughout: the *other* seat's own still-
+      valid reservation is never disturbed by any of this. Added preview/
+      dev debug snapshot sections — RESERVATION LIFECYCLE (per-reservation
+      target seat, selection round, created time, eligibility, occupancy
+      match, validity) and SELECTION RECONCILIATION (last trigger,
+      before/after reservation snapshots) — via a small extension to
+      `useSpeakerSelectionReconciliation`'s own diagnostics, the same
+      shape `useActiveSpeakers`' sync diagnostics already established.
+      Verified with new deterministic real-database tests (the
+      reproduction itself, withdrawal/Cancel advancing correctly, a
+      failed-claim release, third-party-claim rejection preserved,
+      structural one-seat-per-reservation, duplicate-reconciliation
+      idempotency, concurrent-reconcile-vs-claim safety) plus a live
+      real-browser run: a natural decisive replacement, a natural
+      Final-30 expiration, then a deliberate rapid-fire stress test
+      (several Force Replace/Resolve Round Now clicks as fast as
+      possible, including one genuine dual-simultaneous-closing) — the
+      new RESERVATION LIFECYCLE section stayed clean throughout and the
+      dual replacement that followed correctly reserved two distinct
+      candidates, one per seat, with no stale state surfacing anywhere.
+      See DECISIONS.md and SESSION_LOG.md's Session 60.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
