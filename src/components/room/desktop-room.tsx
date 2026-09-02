@@ -69,6 +69,7 @@ export function DesktopRoom({
   messages,
   reactions,
   pendingRequests,
+  profileDirectory,
   onOpenRoomInfo,
 }: RoomLayoutProps) {
   return (
@@ -102,6 +103,7 @@ export function DesktopRoom({
             stageRound={stageRound}
             viewerIdentity={identity}
             pendingRequests={pendingRequests}
+            profileDirectory={profileDirectory}
           />
         </div>
         {joinSeatMessage && (

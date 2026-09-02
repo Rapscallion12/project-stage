@@ -16,7 +16,7 @@ const event: Event = {
   format: "main_stage",
 };
 
-const accountIdentity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const accountIdentity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 const guestIdentity: Identity = { type: "guest", id: "g1", displayName: "Cheerful Raven" };
 
 describe("SpeakerViewTopChrome (issue #18, Speaker View corrective pass)", () => {

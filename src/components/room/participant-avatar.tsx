@@ -9,6 +9,8 @@ const SIZE_CLASSES = {
   xs: "h-7 w-7 text-[10px]",
   sm: "h-9 w-9 text-xs",
   md: "h-14 w-14 text-lg",
+  /** Issue #29: the public profile page's own large header avatar — the only new size this pass adds; every existing caller is unaffected. */
+  lg: "h-24 w-24 text-3xl",
 } as const;
 
 /**
@@ -19,14 +21,12 @@ const SIZE_CLASSES = {
  * separate render branches. Both now go through this single component
  * rather than each carrying its own copy.
  *
- * `imageUrl` exists for a real profile photo, but `profiles` has no such
- * column today (checked against `src/types/database.ts` before writing
- * this — no schema exists to source one from), so every current caller
- * passes nothing and correctly falls through to the initials placeholder
- * — exactly "otherwise the existing appropriate avatar/initials/guest
- * placeholder," per explicit instruction. The prop is here so a real
- * photo, once the schema supports one, needs no second avatar system to
- * render it.
+ * `imageUrl` exists for a real profile photo — `profiles.avatar_url`
+ * (issue #29, migration 00000000000044) is now a real source for it, via
+ * the live room's own profile-directory lookup (`getPublicProfilesByIds`)
+ * for a `profile_id`-backed identity that's chosen an avatar; every guest
+ * and simulated identity, and every account that hasn't uploaded one yet,
+ * still correctly falls through to the initials placeholder.
  *
  * Identity-agnostic by design: this only ever receives a display name
  * (+ optional image) — it has no idea whether the participant is an
@@ -42,7 +42,7 @@ export function ParticipantAvatar({
 }: {
   name: string;
   imageUrl?: string | null;
-  size?: "xs" | "sm" | "md";
+  size?: "xs" | "sm" | "md" | "lg";
   className?: string;
 }) {
   if (imageUrl) {

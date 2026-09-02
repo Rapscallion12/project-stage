@@ -10,6 +10,7 @@ import type { Orientation } from "@/hooks/use-orientation";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
 import type { Identity } from "@/lib/identity";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
+import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
 
 /**
  * The video-first stage (issue #20) — both seats, full-bleed, filling
@@ -140,6 +141,7 @@ export function SpeakerStage({
   stageRound = null,
   viewerIdentity = null,
   pendingRequests = [],
+  profileDirectory = {},
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -175,6 +177,8 @@ export function SpeakerStage({
   viewerIdentity?: Identity | null;
   /** Issue #21, fifth corrective pass: every currently-pending Request-to-Speak request — used only to decide each empty seat's display state ("selecting" vs. "waiting" vs. "fallback-open"), never to re-derive anything authorization already decides server-side. Optional, defaulting to empty, so every existing caller/test that doesn't care can omit it. */
   pendingRequests?: RankedPendingRequest[];
+  /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible speaker with a public profile — see `useProfileDirectory`'s own doc comment. Optional, defaulting to empty, so every existing caller/test that doesn't care can omit it. */
+  profileDirectory?: Record<string, ProfileDirectoryEntry>;
 }) {
   const stageRoundDisplay = useStageRoundCountdown(stageRound, isPreviewBuild);
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
@@ -297,6 +301,7 @@ export function SpeakerStage({
           isPreviewBuild={isPreviewBuild}
           isSimulated={Boolean(seat?.guest_id && simulatedGuestIds?.has(seat.guest_id))}
           emptySeatState={seatState}
+          profileEntry={seat?.profile_id ? profileDirectory[seat.profile_id] : undefined}
         />
       </div>
     );

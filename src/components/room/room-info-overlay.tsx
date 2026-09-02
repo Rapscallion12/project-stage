@@ -129,13 +129,22 @@ export function RoomInfoOverlay({
               </ButtonLink>
             </div>
           ) : (
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm text-muted">{identity.displayName}</span>
-              <form action={signOut}>
-                <Button type="submit" variant="secondary">
-                  Log out
-                </Button>
-              </form>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm text-muted">{identity.displayName}</span>
+                <form action={signOut}>
+                  <Button type="submit" variant="secondary">
+                    Log out
+                  </Button>
+                </form>
+              </div>
+              {/* Issue #29, Section 14: the smallest sensible "My Profile" entry point — inside the account menu that already existed, never a revived site-wide header inside the room. Links to the public profile once a username exists, or the completion flow if not yet — see EditProfilePage's own doc comment. */}
+              <Link
+                href={identity.username ? `/profile/${identity.username}` : "/profile/edit"}
+                className="rounded-lg px-2 py-2 text-sm font-medium hover:bg-foreground/5"
+              >
+                My Profile
+              </Link>
             </div>
           )}
         </div>

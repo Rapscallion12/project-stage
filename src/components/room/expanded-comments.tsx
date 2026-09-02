@@ -5,8 +5,10 @@ import { addReaction } from "@/app/events/[id]/lobby/actions";
 import { voteForSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import { ParticipantAvatar } from "@/components/room/participant-avatar";
+import { ProfileLink } from "@/components/room/profile-link";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
+import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
 
 /** Two taps on the same row within this window count as a double-tap-to-like — long enough for a real double-tap, short enough not to pair up two unrelated taps. */
 const DOUBLE_TAP_MS = 350;
@@ -111,6 +113,7 @@ export function ExpandedComments({
   allowMicRequest = true,
   hasPendingRequest = false,
   onCancelPendingRequest,
+  profileDirectory = {},
 }: {
   open: boolean;
   onClose: () => void;
@@ -125,6 +128,8 @@ export function ExpandedComments({
   allowMicRequest?: boolean;
   hasPendingRequest?: boolean;
   onCancelPendingRequest?: () => void;
+  /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible comment author with a public profile — see `useProfileDirectory`'s own doc comment. Optional, defaulting to empty, so every existing caller/test that doesn't care can omit it. */
+  profileDirectory?: Record<string, ProfileDirectoryEntry>;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<LobbyMessage[]>([]);
@@ -262,6 +267,7 @@ export function ExpandedComments({
                   onLike={handleLike}
                   onVote={handleVote}
                   testId="expanded-top-request-row"
+                  profileEntry={message.author_profile_id ? profileDirectory[message.author_profile_id] : undefined}
                 />
               ))}
             </div>
@@ -294,6 +300,7 @@ export function ExpandedComments({
               onLike={handleLike}
               onVote={handleVote}
               testId="expanded-comment-row"
+              profileEntry={message.author_profile_id ? profileDirectory[message.author_profile_id] : undefined}
             />
           ))
         )}
@@ -325,6 +332,7 @@ function CommentRow({
   onLike,
   onVote,
   testId,
+  profileEntry,
 }: {
   message: LobbyMessage;
   reaction: ReactionState | undefined;
@@ -333,6 +341,8 @@ function CommentRow({
   onLike: (messageId: string) => void;
   onVote: (messageId: string) => void;
   testId: string;
+  /** Issue #29: this message author's own public profile, if `message.author_profile_id` has one. Undefined for a guest or an account without a username yet — the avatar stays non-navigable exactly as before. */
+  profileEntry?: ProfileDirectoryEntry;
 }) {
   const [, startTransition] = useTransition();
   const [optimisticallyLiked, setOptimisticallyLiked] = useState(false);
@@ -389,7 +399,9 @@ function CommentRow({
       onClick={handleTap}
       className={`flex gap-2 py-2 transition-transform ${justLiked ? "scale-[1.02]" : ""}`}
     >
-      <ParticipantAvatar name={message.author_display_name} size="sm" className="mt-0.5" />
+      <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${message.author_display_name}'s profile`} className="shrink-0">
+        <ParticipantAvatar name={message.author_display_name} imageUrl={profileEntry?.avatarUrl} size="sm" className="mt-0.5" />
+      </ProfileLink>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-medium text-white/90">{message.author_display_name}</span>

@@ -113,6 +113,7 @@ export function PortraitSpeakerView({
   messages,
   reactions,
   pendingRequests,
+  profileDirectory,
   onPrepareMedia,
   microphoneMuted,
   cameraMuted,
@@ -142,6 +143,7 @@ export function PortraitSpeakerView({
         stageRound={stageRound}
         viewerIdentity={identity}
         pendingRequests={pendingRequests}
+        profileDirectory={profileDirectory}
         soloMode
       />
 
@@ -198,6 +200,7 @@ export function PortraitSpeakerView({
         messages={messages}
         reactions={reactions}
         pendingRequests={pendingRequests}
+        profileDirectory={profileDirectory}
         micRequestMode={false}
         onMicRequestModeChange={() => {}}
         onHasPendingRequestChange={() => {}}

@@ -155,6 +155,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
     messages,
     reactions,
     pendingRequests,
+    profileDirectory,
     onOpenRoomInfo,
   } = props;
 
@@ -179,6 +180,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
         stageRound={stageRound}
         viewerIdentity={identity}
         pendingRequests={pendingRequests}
+        profileDirectory={profileDirectory}
         // Issue #18 UX finding: dims the stage behind the center-stage
         // "Going live" countdown — SpeakerStage's own existing scrim
         // mechanism (issue #21), reused rather than a second dimming
@@ -308,6 +310,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
             messages={messages}
             reactions={reactions}
             pendingRequests={pendingRequests}
+            profileDirectory={profileDirectory}
             micRequestMode={micRequestMode}
             onMicRequestModeChange={onMicRequestModeChange}
             onHasPendingRequestChange={onHasPendingRequestChange}

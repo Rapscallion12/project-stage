@@ -18,7 +18,7 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 
 Element.prototype.scrollTo = vi.fn();
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
@@ -64,6 +64,7 @@ const baseProps: RoomLayoutProps = {
   messages: [],
   reactions: {},
   pendingRequests: [],
+  profileDirectory: {},
   isPreviewBuild: false,
   simulatedGuestIds: new Set(),
   stageRound: null,

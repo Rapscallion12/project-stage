@@ -7,9 +7,11 @@ import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import { useSpeakerRoundCountdown } from "@/hooks/use-speaker-round-countdown";
 import { inactiveSince } from "@/lib/speaker-presence";
 import { ParticipantAvatar } from "@/components/room/participant-avatar";
+import { ProfileLink } from "@/components/room/profile-link";
 import type { MediaError } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
+import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
 
 /** Compact label for the tile's own placeholder — RoomControls still shows the full sentence below; this is just enough to explain the icon at a glance. */
 function mediaErrorShortLabel(error: NonNullable<MediaError>): string {
@@ -65,6 +67,7 @@ export function SpeakerTile({
   isPreviewBuild = false,
   isSimulated = false,
   emptySeatState,
+  profileEntry,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -173,6 +176,8 @@ export function SpeakerTile({
    *   itself now covers both cases — see `joinOpenSeat`).
    */
   emptySeatState?: "joining" | "selecting" | "waiting" | "fallback-open";
+  /** Issue #29: this seat's occupant's own public profile, if `speaker.profile_id` has one — see `useProfileDirectory`'s own doc comment. Undefined for a guest, a simulated identity, or an account that hasn't chosen a username yet; every one of those keeps today's exact non-navigable, initials-only avatar. */
+  profileEntry?: ProfileDirectoryEntry;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -327,7 +332,9 @@ export function SpeakerTile({
           data-testid="own-seat-live"
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/5 text-foreground"
         >
-          <ParticipantAvatar name={speaker.display_name} size="md" />
+          <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${speaker.display_name}'s profile`}>
+            <ParticipantAvatar name={speaker.display_name} imageUrl={profileEntry?.avatarUrl} size="md" />
+          </ProfileLink>
           <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
         </div>
       ) : isInactive ? (
@@ -335,7 +342,9 @@ export function SpeakerTile({
           data-testid="speaker-inactive"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
-          <ParticipantAvatar name={speaker.display_name} size="md" />
+          <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${speaker.display_name}'s profile`}>
+            <ParticipantAvatar name={speaker.display_name} imageUrl={profileEntry?.avatarUrl} size="md" />
+          </ProfileLink>
           <p className="text-xs" data-testid="audience-inactive-countdown">
             {reconnectSecondsRemaining === 0
               ? // Issue #18 expiration-enforcement finding: never a stuck
@@ -362,7 +371,9 @@ export function SpeakerTile({
           data-testid="no-video-placeholder"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
-          <ParticipantAvatar name={speaker.display_name} size="md" />
+          <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${speaker.display_name}'s profile`}>
+            <ParticipantAvatar name={speaker.display_name} imageUrl={profileEntry?.avatarUrl} size="md" />
+          </ProfileLink>
           <p className="text-xs">{isLocal && mediaError ? mediaErrorShortLabel(mediaError) : "Camera off"}</p>
         </div>
       )}

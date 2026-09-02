@@ -3,6 +3,113 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-02 — First profile/social-identity pass: routing, view-security, and follow-schema decisions (issue #29)
+
+**Problem**: build a lightweight but real social profile system —
+username, avatar, bio, social links, follow — without gating the core
+guest experience, without a parallel identity system alongside the
+existing `profiles`/guest-session model, and without exposing anything
+sensitive through a new public surface.
+
+**Decision 1 — route shape**: `/profile/[username]`, not `/@[username]`.
+
+- **Alternatives considered**: a literal `app/@[username]/page.tsx`
+  folder, matching the "@handle" convention many social apps use.
+- **Reason**: read Next.js's own bundled docs
+  (`node_modules/next/dist/docs/01-app/03-api-reference/03-file-
+  conventions/parallel-routes.md`) before writing routing code, per
+  AGENTS.md's standing instruction. The `@folder` convention is reserved
+  exclusively for parallel-route *slots* — a folder named `@[username]`
+  defines a slot named `[username]`, never a URL segment that matches a
+  literal `@`. `/@[username]` is structurally impossible as a literal
+  route in this App Router version, not just stylistically avoided.
+- **Tradeoff**: `/profile/jaceb` instead of the more Twitter/Instagram-
+  familiar `/jaceb` or `/@jaceb`. Accepted — a fabricated framework
+  workaround (e.g. a catch-all route with manual disambiguation against
+  every other top-level path) would be a much larger, riskier change for
+  a cosmetic win, and the pass's own instructions anticipated this
+  fallback explicitly.
+
+**Decision 2 — `public_profiles` view security, not a widened base-table
+grant.**
+
+- **Alternatives considered**: (a) add an `anon` `select` policy directly
+  to `profiles`; (b) a `security_invoker` view (the pattern already used
+  for `event_speakers_active`).
+- **Reason**: `profiles`' own RLS is deliberately authenticated-only — it
+  carries `reliability_score`/`reputation_score` and is the login-bound
+  identity row. `security_invoker` would only re-run the *base table's*
+  RLS as the querying role, which is still authenticated-only, so it
+  wouldn't actually expose anything to guests. A plain (non-invoker) view
+  with its own explicit column list (`id, username, display_name,
+  avatar_url, bio, social_links, created_at` — never `select *`) and its
+  own `grant select to anon, authenticated` is the correct mechanism: the
+  view's owner rights bypass the querying role's RLS on the underlying
+  table, and the view's own column list is the entire, sufficient
+  security boundary. This is the opposite security shape from
+  `event_speakers_active` on purpose — that view's base table already had
+  anon-inclusive RLS, so `security_invoker` was correct there; `profiles`'
+  base RLS deliberately isn't widened, so the newly-added view has to
+  carry the boundary itself.
+- **Tradeoff**: a second definition of "what's public about a profile"
+  (the view's column list) that must be kept in sync by hand if a new
+  sensitive column is ever added to `profiles` — accepted as the standard,
+  well-understood shape for "restricted public slice of a sensitive
+  table," not a novel risk.
+
+**Decision 3 — follows as a composite-primary-key table, not an
+application-level dedup check.**
+
+- **Decision**: `follows (follower_id, following_id)` PRIMARY KEY, plus a
+  `no_self_follow` CHECK constraint, plus RLS (`insert ... with check
+  (follower_id = auth.uid())`, matching delete). A duplicate follow
+  attempt is a `23505` unique-violation, caught by the repository and
+  treated as success (idempotent) rather than requiring a
+  select-before-insert.
+- **Reason**: matches this project's existing preference for the database
+  as the authoritative constraint rather than application logic — cannot
+  race, cannot drift from the schema, and needs no extra round trip.
+
+**Decision 4 — live avatar/profile-link, frozen historical display name
+(unchanged).**
+
+- **Problem**: does a later display-name/avatar edit retroactively change
+  already-sent comments and past speaker episodes?
+- **Decision**: `event_speakers.display_name` / `event_chat_messages.
+  author_display_name` stay exactly as they already were — historical
+  snapshots, untouched by this pass. Only the **avatar image** and the
+  **tap-to-profile link** are sourced live (via `useProfileDirectory`,
+  queried fresh on every room mount) for currently-visible identities.
+- **Reason**: the snapshot behavior for display names is a pre-existing,
+  intentional invariant (older passes) — this pass had no mandate to
+  revisit it, and rewriting historical rows on a profile edit would be
+  its own, much larger, unrequested feature. The avatar/link are net-new
+  (nothing existed before this pass), so there's no existing invariant to
+  break by making them live — and a live avatar is what a viewer actually
+  expects (a comment from last week shouldn't show a photo the user
+  removed for being embarrassing).
+
+**Decision 5 — Storage exception, scoped narrowly.**
+
+- **Decision**: `lib/avatar-upload.ts` calls Supabase Storage directly
+  (`createClient().storage...`), extending the documented "calls Supabase
+  directly" exception (previously Auth/Realtime/LiveKit only) to Storage
+  uploads specifically. `use-profile-directory.ts` similarly reads
+  `public_profiles` directly client-side, mirroring the existing
+  `useActiveSpeakers`/`useLobbyRealtime` exception for live, Realtime-
+  adjacent reads.
+- **Reason**: Storage objects aren't relational durable data in the sense
+  ARCHITECTURE.md's Vendor portability rule is protecting — the real
+  security boundary is Storage's own per-user-folder RLS, not a
+  repository function. The durable *row* write (`profiles.avatar_url`)
+  still goes through `updateOwnAvatarUrl` in the repository layer, so the
+  actual database write path is unaffected by this exception.
+- **Tradeoff**: a third named exception to audit if the backend ever
+  changes — accepted, since ARCHITECTURE.md already explicitly warns
+  against building a generic DI abstraction "for hypothetical scale,"
+  and this is the same class of exception as the three already
+  documented, not a new pattern.
+
 ## 2026-09-01 — Nineteenth corrective pass: a winning RTS candidate's own reservation never cleared, letting it silently block a later reopening of the same seat — proven production-reachable, fixed at the authoritative source (issue #21)
 
 **Context**: the eighteenth pass's own live verification found a stale

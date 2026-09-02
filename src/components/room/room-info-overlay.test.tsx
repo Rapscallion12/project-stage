@@ -12,7 +12,7 @@ const event: Pick<Event, "title" | "description"> = {
 };
 
 const guestIdentity: Identity = { type: "guest", id: "g1", displayName: "Cheerful Raven" };
-const accountIdentity: Identity = { type: "profile", id: "p1", displayName: "Jamie Rivera" };
+const accountIdentity: Identity = { type: "profile", id: "p1", displayName: "Jamie Rivera", username: null };
 
 /**
  * Issue #21, seventh corrective pass, Sections 8-15: the collapsed
@@ -52,6 +52,24 @@ describe("RoomInfoOverlay", () => {
     expect(screen.getByText("Jamie Rivera")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
+  });
+
+  describe("My Profile entry point (issue #29, Section 14)", () => {
+    it("links to /profile/edit for an account with no username chosen yet", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={accountIdentity} />);
+      expect(screen.getByRole("link", { name: "My Profile" })).toHaveAttribute("href", "/profile/edit");
+    });
+
+    it("links to the public profile once a username exists", () => {
+      const withUsername: Identity = { ...accountIdentity, username: "jamier" };
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={withUsername} />);
+      expect(screen.getByRole("link", { name: "My Profile" })).toHaveAttribute("href", "/profile/jamier");
+    });
+
+    it("never shows a My Profile link for a guest — no forced account/profile flow", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={guestIdentity} />);
+      expect(screen.queryByRole("link", { name: "My Profile" })).not.toBeInTheDocument();
+    });
   });
 
   it("closes on a backdrop click", () => {

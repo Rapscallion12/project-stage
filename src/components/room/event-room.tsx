@@ -19,6 +19,7 @@ import { useStageRound } from "@/hooks/use-stage-round";
 import { useStageRoundResolution } from "@/hooks/use-stage-round-resolution";
 import { useStageRoundReconciliation } from "@/hooks/use-stage-round-reconciliation";
 import { useSpeakerSelectionReconciliation } from "@/hooks/use-speaker-selection-reconciliation";
+import { useProfileDirectory } from "@/hooks/use-profile-directory";
 import { useSpeakerInvariantRecovery } from "@/hooks/use-speaker-invariant-recovery";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
@@ -523,6 +524,22 @@ export function EventRoom({
   // occupancy or the pending-request pool changes.
   const { getReconcileDiagnostics: getSelectionReconcileDiagnostics } = useSpeakerSelectionReconciliation(event.id, speakers, pendingRequests);
 
+  // Issue #29: every profile_id currently visible anywhere in this
+  // room's own live state — speakers, comment authors, RTS candidates —
+  // resolved once here (not per-surface) and passed straight through.
+  // `useProfileDirectory`'s own stable, deduplicated key means this is
+  // safe to recompute on every render without re-querying on every
+  // unrelated state change. Called unconditionally here, alongside this
+  // component's other hooks — every early return below (the "upcoming"
+  // phase, the neutral pre-mount state) happens *after* this point, so
+  // calling it any later would violate rules-of-hooks.
+  const visibleProfileIds = [
+    ...speakers.map((s) => s.profile_id),
+    ...messages.map((m) => m.author_profile_id),
+    ...pendingRequests.map((r) => r.profile_id),
+  ].filter((id): id is string => id !== null);
+  const profileDirectory = useProfileDirectory(visibleProfileIds);
+
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
   // media-presence transitions to the server, which owns the actual
@@ -589,6 +606,7 @@ export function EventRoom({
     countdownText,
     roomStatus,
     speakers,
+    profileDirectory,
     myIdentity,
     identity,
     isSpeaker,

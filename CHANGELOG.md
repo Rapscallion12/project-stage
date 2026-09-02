@@ -11,6 +11,30 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Added
+
+- **Profiles are real now** (issue #29, first profile/social-identity
+  pass): every registered account gets a public profile page at
+  `/profile/<username>` — a photo, a unique @username, a display name, a
+  short bio, and up to six social links (Instagram, TikTok, YouTube, X,
+  Twitch, personal website). A new "Edit profile" screen lets an account
+  holder choose their username, upload/remove a photo, and manage
+  everything above, with proper Save/Cancel and validation (including
+  rejecting unsafe link input like `javascript:`/`data:` URLs outright).
+  Registered users can now follow/unfollow each other, with live
+  follower/following counts visible to everyone, including guests — no
+  account needed just to look. Inside the live room, tapping a
+  registered speaker's or commenter's photo/name now opens their profile
+  directly from the speaker tiles and Discussion Expanded, without
+  accidentally triggering the vote/like/comment control underneath it. A
+  small "My Profile" link was added to the existing room account menu.
+  Guests are entirely unaffected — nothing about watching, commenting,
+  reacting, voting, requesting the mic, or speaking changed, and no
+  guest is ever prompted to create an account except by choosing to tap
+  Follow. Follower/following *lists* (not just the counts) are
+  deliberately deferred to a future pass. See DECISIONS.md and
+  SESSION_LOG.md.
+
 ### Changed
 
 - **Fixed a rare case where a Request-to-Speak candidate who just won a

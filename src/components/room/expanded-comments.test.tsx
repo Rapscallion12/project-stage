@@ -114,6 +114,81 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     });
   });
 
+  describe("profile navigation (issue #29, Section 15 — a registered commenter's avatar becomes tappable into their public profile)", () => {
+    it("wraps a comment row's avatar in a profile link when the author is in profileDirectory with a username", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ author_profile_id: "p1", author_display_name: "Jamie Rivera" })]}
+          profileDirectory={{ p1: { username: "jamier", avatarUrl: null } }}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      expect(within(row).getByRole("link")).toHaveAttribute("href", "/profile/jamier");
+    });
+
+    it("renders no link when the author isn't in profileDirectory (guest, or no username chosen yet)", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ author_profile_id: "p1", author_display_name: "Jamie Rivera" })]}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      expect(within(row).queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("renders no link for a guest author even if profileDirectory happens to hold an entry under a different id", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ author_profile_id: null, author_guest_id: "g1", author_display_name: "Curious Fox" })]}
+          profileDirectory={{ p1: { username: "jamier", avatarUrl: null } }}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      expect(within(row).queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("tapping the avatar link does not also trigger the row's own double-tap-to-like handler", () => {
+      const addReactionSpy = addReaction;
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", author_profile_id: "p1", author_display_name: "Jamie Rivera" })]}
+          profileDirectory={{ p1: { username: "jamier", avatarUrl: null } }}
+        />,
+      );
+      const row = screen.getByTestId("expanded-comment-row");
+      const link = within(row).getByRole("link");
+      // Two rapid clicks on the avatar link itself is exactly the
+      // gesture that would normally register as the row's own
+      // double-tap-to-like — Section 15's own explicit warning is that
+      // this must not happen when the tap lands on the identity link.
+      fireEvent.click(link);
+      fireEvent.click(link);
+      expect(addReactionSpy).not.toHaveBeenCalled();
+    });
+
+    it("wraps a Top Speaker Requests row's avatar in a profile link too", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", author_profile_id: "p1", author_display_name: "Dapper Rabbit", is_speaker_request: true })]}
+          pendingRequests={[makeRequest({ id: "r1", message_id: "m1", profile_id: "p1" })]}
+          profileDirectory={{ p1: { username: "dapperrabbit", avatarUrl: null } }}
+        />,
+      );
+      const row = screen.getByTestId("expanded-top-request-row");
+      expect(within(row).getByRole("link")).toHaveAttribute("href", "/profile/dapperrabbit");
+    });
+  });
+
   it("never applies the ambient feed's top-edge fade — this is a deliberate reading surface, not the livestream-style ambient feed (issue #21, fourth corrective pass)", () => {
     render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
     const scroll = screen.getByTestId("expanded-comments-scroll");

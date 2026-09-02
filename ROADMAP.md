@@ -1604,6 +1604,47 @@ score to (see ARCHITECTURE.md's Guest identity section).
       control — reputation must never let someone skip the queue's
       first-come structure entirely, only move up within it)
 
+## Phase 5 — Profile & social identity
+
+A lightweight but real social profile system (issue #29) — not a full
+social network. Guest-eligible by construction throughout: nothing here
+gates comment/react/vote/RTS/speak, per the progressive-authentication
+model. Only the Follow action itself may prompt signup, inline, never a
+redirect.
+
+- [x] Profile data model — unique case-insensitive `@username` (reserved-
+      name list, DB `CHECK` constraints), avatar, display name (already
+      existed), bio (≤160 chars, plain text, no markup/auto-hyperlinking),
+      extensible `social_links` jsonb map. `public_profiles` view is the
+      anon-readable slice; the base `profiles` table's RLS stays
+      authenticated-only, unchanged.
+- [x] `/profile/[username]` public profile page — avatar, display name,
+      @username, bio, social icons, follower/following counts, join date,
+      stage-appearance count (derived, not stored). Guest-viewable, no
+      account required.
+- [x] `/profile/edit` — avatar upload/remove (new `avatars` Storage
+      bucket, owner-scoped RLS, client-side resize/compression, fallback
+      initials avatar), display name, username (prompts existing accounts
+      to choose one on first visit rather than requiring it retroactively),
+      bio, social links. Explicit Save/Cancel, per-field validation.
+- [x] Social links — Instagram/TikTok/YouTube/X/Twitch/website; accepts a
+      handle, `@handle`, or full profile URL, normalized to one canonical
+      stored value; website is allow-listed to `http(s)` only (rejects
+      `javascript:`/`data:`/other unsafe schemes); architected so a new
+      platform is one more entry in `SOCIAL_PLATFORMS`, never a migration.
+- [x] Follow system — follow/unfollow, follower/following counts visible
+      to guests, DB-enforced no-self-follow + no-duplicates, idempotent.
+- [ ] Follower/following **lists** (not just counts) — deferred; counts
+      are correct and live, but browsing the actual list of followers is
+      out of this pass's scope. See SESSION_LOG.md.
+- [x] Live-room identity integration — a registered speaker's/commenter's
+      avatar becomes tappable into their profile in speaker tiles and
+      Discussion Expanded, without triggering the surrounding vote/like/
+      comment/speaker control underneath it. Guests and accounts without a
+      username yet stay non-navigable — no fake guest profile pages.
+- [x] "My Profile" entry point inside the existing room account menu
+      (`RoomInfoOverlay`) — no revived site-wide header inside the room.
+
 ## Explicitly not on this roadmap
 
 Per PRODUCT.md's out-of-scope list: AI host, AI clipping, donations/

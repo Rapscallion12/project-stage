@@ -9,6 +9,7 @@ import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { RoomStatus } from "@/lib/room-status";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
+import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
 
 /**
  * Shared props for the portrait/landscape presentation components —
@@ -94,6 +95,8 @@ export type RoomLayoutProps = {
   reactions: Record<string, ReactionState>;
   /** Issue #21, Phase 1: every currently-pending speaker request, ranked by live vote count — the live (never frozen) source for Expanded Comments' "Top Speaker Requests" section. See useActiveSpeakerRequests' own doc comment for why this stays live while Recent Comments freezes. */
   pendingRequests: RankedPendingRequest[];
+  /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible speaker/comment-author/RTS-candidate with a public profile — computed once in EventRoom (`useProfileDirectory`), passed straight through to SpeakerStage/ExpandedComments. */
+  profileDirectory: Record<string, ProfileDirectoryEntry>;
   /** Issue #18, Speaker View Phase 2: whether the local participant's own published microphone/camera are currently muted — see useLiveRoomConnection's own doc comment. */
   microphoneMuted: boolean;
   cameraMuted: boolean;

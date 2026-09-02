@@ -89,6 +89,7 @@ export function MobileLandscapeSpeakerView({
   messages,
   reactions,
   pendingRequests,
+  profileDirectory,
   onPrepareMedia,
   microphoneMuted,
   cameraMuted,
@@ -118,6 +119,7 @@ export function MobileLandscapeSpeakerView({
         stageRound={stageRound}
         viewerIdentity={identity}
         pendingRequests={pendingRequests}
+        profileDirectory={profileDirectory}
         soloMode
       />
 
@@ -174,6 +176,7 @@ export function MobileLandscapeSpeakerView({
         messages={messages}
         reactions={reactions}
         pendingRequests={pendingRequests}
+        profileDirectory={profileDirectory}
         micRequestMode={false}
         onMicRequestModeChange={() => {}}
         onHasPendingRequestChange={() => {}}

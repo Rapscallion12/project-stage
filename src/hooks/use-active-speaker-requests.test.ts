@@ -10,7 +10,7 @@ import {
 import type { SpeakerRequest, SpeakerRequestVote } from "@/lib/repositories/speaker-requests";
 import type { Identity } from "@/lib/identity";
 
-const profileIdentity: Identity = { type: "profile", id: "viewer-1", displayName: "Viewer" };
+const profileIdentity: Identity = { type: "profile", id: "viewer-1", displayName: "Viewer", username: null };
 
 function request(overrides: Partial<SpeakerRequest> = {}): SpeakerRequest {
   return {

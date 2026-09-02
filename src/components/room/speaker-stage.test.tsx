@@ -328,7 +328,7 @@ describe("SpeakerStage", () => {
 
   describe("small-room fallback display (issue #21, fifth corrective pass, Sections 8-15)", () => {
     const established = stageRoundFixture({ phase: "awaiting_pairing", round_number: 4 });
-    const viewerProfile: Identity = { type: "profile", id: "viewer-1", displayName: "Viewer" };
+    const viewerProfile: Identity = { type: "profile", id: "viewer-1", displayName: "Viewer", username: null };
 
     it("both seats empty + zero eligible requests: shows a tappable 'Stage open' CTA (Section 8, Case C)", () => {
       const onTapEmptySeat = vi.fn();

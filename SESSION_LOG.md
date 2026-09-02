@@ -4,6 +4,143 @@ Newest entry first.
 
 ---
 
+## 2026-09-02 — Session 61: First profile/social-identity pass — username, avatar, bio, social links, follow system, live-room identity linking (issue #29)
+
+**Goal**: an entirely new, large scope shift off issue #21's corrective-
+pass track — build a real but lightweight social profile system per a
+27-section specification. Explicit standing constraints: never gate the
+core guest experience (only Follow may prompt signup), audit existing
+identity architecture before building anything, stay inside the existing
+repository/RLS/migration conventions, and stop after a fresh preview —
+no merge to `main`.
+
+**Section 0 audit first**: read `lib/identity.ts`, the `profiles` table
+and its signup trigger, guest-session cookie handling, and every place
+comment/speaker/RTS identity is rendered, before writing anything new.
+Confirmed: `profiles` already existed (display name only, no username/
+avatar/bio), guests are structurally profile-less by design (unchanged),
+and the room already threads identity through several distinct render
+sites (`SpeakerTile`, `ExpandedComments`, ambient comments) that needed
+to be extended consistently rather than duplicated.
+
+**Data model** (migration `00000000000044`): extended `profiles` with
+`username` (unique, case-insensitive via a lowercase-only format check,
+reserved-name list, 3–20 chars), `avatar_url`, `bio` (≤160 chars, plain
+text), `social_links` (jsonb). New `public_profiles` view exposes an
+explicit, minimal column list to `anon`+`authenticated` — deliberately
+*not* `security_invoker`, since the base `profiles` RLS stays
+authenticated-only on purpose; new `follows` table (composite PK,
+`no_self_follow` check, RLS scoped to `auth.uid()`); new `avatars`
+Storage bucket (public read, owner-folder-scoped write). Full reasoning
+for each in DECISIONS.md.
+
+**Routing**: `/profile/[username]`, not `/@[username]` — confirmed
+directly against Next.js's own bundled docs that `@folder` is
+exclusively a parallel-route-slot convention before choosing the
+fallback the pass's own instructions anticipated. See DECISIONS.md.
+
+**Live-room integration**: new `ProfileLink` wraps whatever avatar
+markup a speaker tile/comment row already renders — a real `<a>` (via
+`next/link`) with `stopPropagation` on click, so tapping an identity
+never also fires the surrounding vote/like/comment/speaker control.
+Renders as a plain `<span>` (non-navigable, no visual "Guest" badge) for
+a guest or an account without a username yet — same treatment for both,
+deliberately. New `useProfileDirectory` hook resolves the set of
+currently-visible `profile_id`s (speakers + comment authors + pending
+requests) to `{username, avatarUrl}` once per room mount. Wired into
+`SpeakerTile` (3 of 4 avatar branches — the "tap to activate media"
+button and the simulated-speaker placeholder were deliberately left
+alone) and `ExpandedComments` (both the Recent Comments and Top Speaker
+Requests rows). **Ambient comments' tiny avatars were deliberately left
+non-navigable** — they render as `<button onClick>` rows, and nesting a
+real `<a>` inside a `<button>` is invalid HTML; the same message is one
+tap away from being profile-linkable in Expanded Comments, so this was
+judged the correct scope boundary rather than restructuring ambient
+comments' click semantics for this pass.
+
+**Identity semantics, made explicit**: `event_speakers.display_name` /
+`event_chat_messages.author_display_name` stay frozen historical
+snapshots, exactly as before this pass — a later display-name edit does
+not retroactively change already-sent messages or past speaker episodes.
+Only the avatar image and the tap-to-profile link are live (queried
+fresh via `useProfileDirectory` every render) — reasoned as safe since
+neither existed before this pass, so there was no existing snapshot
+invariant to break.
+
+**Follow system**: follow/unfollow with a DB-enforced no-self-follow
+check and idempotent duplicate handling (composite primary key ⇒ a
+duplicate insert is a caught `23505`, not an application-level check).
+Follower/following *counts* are correct, live, and guest-visible; actual
+follower/following *lists* are explicitly deferred to a future pass per
+the spec's own "implement if reasonably small scope, otherwise flag as
+deferred" instruction — counts alone were judged the right cut for this
+pass's size.
+
+**"My Profile" entry point**: one new link inside `RoomInfoOverlay`'s
+existing account-holder branch — routes to the public profile if a
+username is set, `/profile/edit` (a "complete your profile" prompt) if
+not. No revived site-wide header inside the room.
+
+**Testing**: new real-linked-database suite
+(`profiles-and-follows.test.ts`, 16 tests) covering username uniqueness/
+case-insensitivity/format/reserved-name rejection at the DB layer, bio
+length, cross-account RLS ownership rejection, the `public_profiles`
+view's own column boundary (confirms `reliability_score`/
+`reputation_score` never leak through it, confirms a username-less
+profile is excluded, confirms anon readability), follow/unfollow/
+duplicate-follow/self-follow/cross-account-follow-forgery rejection, and
+avatar Storage RLS ownership. New pure-function unit tests for
+`lib/username.ts` (12 tests) and `lib/social-links.ts` (16 tests,
+including explicit `javascript:`/`data:`/`file:`/`vbscript:`/`ftp:`
+rejection for the website field). New component tests: `ProfileLink`'s
+own stopPropagation contract (4 tests), profile-navigation coverage
+added to `speaker-tile.test.tsx` and `expanded-comments.test.tsx`
+(including an explicit "tapping the avatar link does not also trigger
+the row's own double-tap-to-like" case), and a "My Profile" entry-point
+describe block added to `room-info-overlay.test.tsx` (including "never
+shown for a guest"). All pre-existing tests for comment/speaker/RTS/
+mobile-layout/room-menu behavior pass completely unmodified except
+mechanical prop-threading additions (`profileDirectory: {}`) — no
+existing assertion was weakened to make this pass's changes fit.
+
+**A real issue-numbering correction mid-pass**: initially labeled every
+new doc comment/test description "issue #26," carried over from an
+earlier, since-summarized point in this same session. Discovered while
+writing this entry that GitHub issue #26 is a *different*, already-
+existing feature ("Join Live Audience fast path," unrelated, already
+merged into this branch from an earlier session) — confirmed via `gh
+issue view 26`. Created the correct issue, **#29**, added it to the
+project board, and corrected every reference across this pass's own
+changed files (mislabeled files not touched by this pass — `join/
+route.ts`, `hero.tsx`, `event-speakers.ts`, `events.ts` — were left
+alone, since their `#26` references are legitimately about the real
+issue #26). Re-ran lint/tsc after the correction to confirm nothing
+besides comment text changed.
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean (both new routes registered:
+   `/profile/[username]`, `/profile/edit`), full suite **90 files /
+   1221 tests, all passing** (up from 86/1162 before this pass — +4
+   files, +59 tests net of this pass's own new/removed tests). Sandbox
+   test room cleared before the final run.
+2. **Production interaction** — not yet performed this pass (see below;
+   the fresh preview deploy and its own smoke check happen after this
+   entry).
+3. **Real-device** — **UNVERIFIED — requires real-device testing.** See
+   the handoff for the full checklist (signup → complete profile →
+   avatar → save → reopen → edit → remove a social link → verify
+   persistence; a second account's follow/unfollow with count updates;
+   a live-room comment → tap avatar → profile opens → return without
+   corrupting room state; the guest flow proving zero forced signup —
+   iPhone-sized viewport and desktop, both).
+
+Not merged to `main`. Fresh preview to be deployed and linked in the
+handoff.
+
+---
+
 ## 2026-09-01 — Session 60: Nineteenth corrective pass — a winning RTS candidate's own reservation never cleared, silently blocking a later reopening of the same seat; proven production-reachable, fixed at the source (issue #21)
 
 **Goal**: the eighteenth pass's own flagged finding — a stale RTS

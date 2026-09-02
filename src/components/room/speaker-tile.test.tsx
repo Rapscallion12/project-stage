@@ -575,4 +575,40 @@ describe("SpeakerTile", () => {
       expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
     });
   });
+
+  describe("profile navigation (issue #29, Section 15 — a registered speaker's avatar becomes tappable into their public profile)", () => {
+    it("wraps the inactive-speaker avatar in a link to the profile when profileEntry has a username", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+          profileEntry={{ username: "jaceb", avatarUrl: null }}
+        />,
+      );
+      const link = screen.getByRole("link");
+      expect(link).toHaveAttribute("href", "/profile/jaceb");
+    });
+
+    it("renders no link at all when profileEntry is absent (guest speaker, or no username chosen yet)", () => {
+      render(
+        <SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} isInactive={true} />,
+      );
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("wraps the no-video-placeholder avatar in a profile link too", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={false}
+          profileEntry={{ username: "jaceb", avatarUrl: null }}
+        />,
+      );
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+      expect(screen.getByRole("link")).toHaveAttribute("href", "/profile/jaceb");
+    });
+  });
 });

@@ -161,7 +161,7 @@ vi.mock("@/components/room/desktop-room", () => ({
   ),
 }));
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
