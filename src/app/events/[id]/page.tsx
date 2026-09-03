@@ -3,6 +3,7 @@ import { EventRoom } from "@/components/room/event-room";
 import { getEventPhase } from "@/lib/events";
 import { resolveIdentity } from "@/lib/identity";
 import { getEventById } from "@/lib/repositories/events";
+import { getOwnProfile } from "@/lib/repositories/profiles";
 import { listActiveSpeakers } from "@/lib/repositories/event-speakers";
 import { listRecentMessages, listReactionsForMessages } from "@/lib/repositories/chat";
 import { getPendingRequestForIdentity, listPendingSpeakerRequests } from "@/lib/repositories/speaker-requests";
@@ -32,12 +33,17 @@ export default async function EventPage(props: PageProps<"/events/[id]">) {
   }
 
   const identity = await resolveIdentity();
-  const [speakers, messages, tokenResult, myPendingRequest, pendingRequests] = await Promise.all([
+  const [speakers, messages, tokenResult, myPendingRequest, pendingRequests, ownProfile] = await Promise.all([
     listActiveSpeakers(id),
     listRecentMessages(id, HISTORY_LIMIT),
     getLiveKitToken(id),
     getPendingRequestForIdentity(id, identity),
     listPendingSpeakerRequests(id),
+    // Visual identity pass, Room Info redesign (Section 5): the account
+    // section's own avatar — same `getOwnProfile` read every other
+    // profile surface already uses, not a separate identity store. Only
+    // fetched for an account holder; a guest identity has no profile row.
+    identity.type === "profile" ? getOwnProfile(identity.id) : Promise.resolve(null),
   ]);
   const reactionRows = await listReactionsForMessages(messages.map((m) => m.id));
 
@@ -59,6 +65,7 @@ export default async function EventPage(props: PageProps<"/events/[id]">) {
       <EventRoom
         event={event}
         identity={identity}
+        identityAvatarUrl={ownProfile?.avatar_url ?? null}
         initialPhase={getEventPhase(event)}
         initialToken={"token" in tokenResult ? tokenResult.token : null}
         initialSpeakers={speakers}

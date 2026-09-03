@@ -29,7 +29,7 @@ export function AccountMenuLinks({
   onNavigate?: () => void;
   linkClassName?: string;
 }) {
-  const className = cn("rounded-lg px-2 py-2 text-sm font-medium hover:bg-foreground/5", linkClassName);
+  const className = cn("rounded-lg px-2 py-2 text-sm font-medium hover:bg-surface-hover", linkClassName);
 
   if (!username) {
     return (

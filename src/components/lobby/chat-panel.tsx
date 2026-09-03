@@ -320,7 +320,7 @@ export function ChatPanel({
               "flex min-h-11 w-11 shrink-0 items-center justify-center rounded-full border text-base transition-colors disabled:opacity-50",
               micRequestMode
                 ? "border-accent bg-accent/15 text-accent"
-                : "border-border text-muted hover:bg-foreground/5",
+                : "border-border text-muted hover:bg-surface-hover",
             )}
           >
             🎤
@@ -378,7 +378,7 @@ export function ChatPanel({
               key={emoji}
               type="button"
               onClick={() => insertEmoji(emoji)}
-              className="rounded-md px-1.5 py-0.5 text-base hover:bg-foreground/5"
+              className="rounded-md px-1.5 py-0.5 text-base hover:bg-surface-hover"
               aria-label={`Insert ${emoji}`}
             >
               {emoji}

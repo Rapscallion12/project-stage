@@ -32,7 +32,7 @@ export function SocialLinksDisplay({ socialLinks }: { socialLinks: Record<string
             target="_blank"
             rel="noopener noreferrer"
             data-testid={`social-link-${platformId}`}
-            className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-foreground/5"
+            className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-surface-hover"
           >
             <span aria-hidden="true">{PLATFORM_ICONS[platform.id]}</span>
             <span className="max-w-[8rem] truncate">{platform.formatDisplay(storedValue)}</span>

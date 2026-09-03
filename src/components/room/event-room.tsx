@@ -99,6 +99,7 @@ const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
 export function EventRoom({
   event,
   identity,
+  identityAvatarUrl = null,
   initialPhase,
   initialToken,
   initialSpeakers,
@@ -110,6 +111,8 @@ export function EventRoom({
 }: {
   event: Event;
   identity: Identity;
+  /** Visual identity pass, Room Info redesign: the signed-in account's own avatar, for `RoomInfoOverlay`'s identity block — `null` for a guest or an account without one yet. Optional/defaulted so every existing test call site stays valid unchanged. */
+  identityAvatarUrl?: string | null;
   /** Computed server-side at request time — used until the client clock (useNow) ticks past hydration, so first paint is never wrong (e.g. someone opening an already-live link lands live immediately, not on a placeholder). */
   initialPhase: EventPhase;
   initialToken: string | null;
@@ -692,6 +695,7 @@ export function EventRoom({
         event={event}
         roomStatus={roomStatus}
         identity={identity}
+        identityAvatarUrl={identityAvatarUrl}
       />
       {isDevToolsAvailable() && (
         <RoomDiagnostics

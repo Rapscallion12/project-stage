@@ -284,8 +284,8 @@ function SpeakerVoteRow({
       ) : (
         <div data-testid="speaker-vote-sentiment" className="flex items-center gap-1.5">
           <div className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
-            <div className="h-full bg-emerald-500" style={{ width: `${continuePct}%` }} />
-            <div className="h-full bg-red-500" style={{ width: `${replacePct}%` }} />
+            <div className="h-full bg-vote-continue" style={{ width: `${continuePct}%` }} />
+            <div className="h-full bg-vote-replace" style={{ width: `${replacePct}%` }} />
           </div>
           <span className="shrink-0 text-[10px] text-white/70">
             {continuePct?.toFixed(0)}% | {replacePct?.toFixed(0)}%
@@ -301,7 +301,7 @@ function SpeakerVoteRow({
             onClick={() => onVote("continue")}
             aria-pressed={myChoice === "continue"}
             className={`flex-1 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
-              myChoice === "continue" ? "bg-emerald-500 text-white" : "bg-white/10 text-white/70"
+              myChoice === "continue" ? "bg-vote-continue text-white" : "bg-white/10 text-white/70"
             }`}
           >
             Continue
@@ -312,7 +312,7 @@ function SpeakerVoteRow({
             onClick={() => onVote("replace")}
             aria-pressed={myChoice === "replace"}
             className={`flex-1 rounded-full px-2 py-1 text-xs font-medium transition-colors ${
-              myChoice === "replace" ? "bg-red-500 text-white" : "bg-white/10 text-white/70"
+              myChoice === "replace" ? "bg-vote-replace text-white" : "bg-white/10 text-white/70"
             }`}
           >
             Replace

@@ -11,6 +11,34 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Changed
+
+- **New visual identity — moved off the near-black + orange combination**
+  (real user feedback: it read as an unwanted, specific resemblance to
+  an adult-content site). Virtual Stage now uses a cool blue-violet
+  accent instead, applied everywhere the old orange showed up — the
+  primary "Join Live Audience" button, links, the profile/account menus,
+  focus rings, the live room's own mic/comment/reaction controls, vote
+  bars stay their own distinct green/red (never re-themed to the new
+  accent — those colors mean something specific and different from
+  "brand"). Dark mode stays the primary look; both light and dark now
+  share one coherent, distinctive palette instead of the previous
+  near-black/orange pairing. See DECISIONS.md for the full color system
+  and an honest accessibility/contrast writeup.
+- **Redesigned the Room Info sheet** (real-iPhone feedback: it read as a
+  developer/settings drawer, not part of the product) — reorganized into
+  three clear groups instead of one flat list of text. Home and Browse
+  Events are now real icon-and-label rows that look and feel tappable,
+  not a plain-text breadcrumb. A long room description no longer pushes
+  navigation off the bottom of the screen — it clamps to two lines with
+  a "Show more" control. The signed-in account section now leads with
+  the account holder's own photo, name, and @username, with My Profile/
+  Edit Profile grouped tightly beneath it and Log out demoted to small,
+  clearly secondary text instead of a button competing with the
+  account holder's own name. The same layout and hierarchy now apply on
+  both the mobile bottom sheet and the desktop popover. See
+  DECISIONS.md/SESSION_LOG.md.
+
 ### Added
 
 - **The home page now has a real profile entry point** (issue #29,

@@ -51,7 +51,7 @@ export function RoomHeader({
             data-testid="room-info-trigger"
             onClick={onOpenRoomInfo}
             aria-label={`Room info and navigation for ${eventTitle}`}
-            className="shrink-0 rounded-full border border-border px-2 py-1 text-xs text-muted hover:bg-foreground/5 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            className="shrink-0 rounded-full border border-border px-2 py-1 text-xs text-muted hover:bg-surface-hover hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
             ☰
           </button>

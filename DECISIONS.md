@@ -3,6 +3,130 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-03 — Visual identity + Room Info UX pass: a new blue-violet brand palette, semantic color tokens, and a redesigned Room Info sheet (issue #29-adjacent, real-user feedback)
+
+**Problem**: real user feedback that the app's near-black + saturated-
+orange combination read as an unwanted, specific resemblance to an adult-
+content site — not a subjective aesthetic complaint, a real reason to
+move off that exact hue combination rather than nudge one hex value.
+Separately, real-iPhone feedback that the Room Info sheet read as a
+developer/settings drawer: no visual hierarchy, "Home" as unstyled text,
+the description able to push navigation below the fold, an account row
+with no relationship between the name and its own actions.
+
+**Decision 1 — a genuinely new hue (blue-violet/"electric indigo"), not
+a search-and-replace of the orange hex.**
+
+- **Alternatives considered**: Twitch purple, Discord blurple, Twitter/X
+  blue — all explicitly rejected by the pass's own instructions as "don't
+  clone another platform."
+- **Decision**: light mode accent `#3b4cd1`, dark mode / stage-overlay
+  accent `#5468ff` — a saturated blue leaning slightly violet, distinct
+  in hue from Discord's more desaturated, more violet blurple (~235° hue,
+  lower saturation) and Twitch's more magenta purple (~262° hue).
+- **Reason**: computed actual WCAG contrast ratios for every candidate
+  (see the `scripts/_contrast_check.mjs` scratch script used during this
+  pass, not committed) rather than eyeballing hex values. Light-mode
+  accent-vs-background is 6.35:1 and white-on-accent is 6.69:1 — both
+  comfortably pass AA, and light mode has no inherent tension (a darker,
+  richer shade improves contrast against *both* a light background and
+  white button text simultaneously). Dark mode is mathematically
+  different: **no single color can hit 4.5:1 contrast against both a
+  near-black background and white overlaid text at once** — the
+  luminance band required for one (≥0.189) and the other (≤0.183) don't
+  overlap. Dark-mode accent-vs-background lands at 4.52:1 (passes AA for
+  text/links/icons/focus rings sitting directly on the background);
+  white-on-accent (the solid primary button) lands at 4.37:1 — just under
+  the strict 4.5 AA threshold for normal-sized text, comfortably above
+  the 3:1 non-text/large-UI-component threshold. Reported honestly in
+  the accessibility check, not silently rounded up to "passes."
+- **Tradeoff**: light and dark mode use genuinely different accent hex
+  values (not the same color at different opacities) — this exactly
+  mirrors the relationship the *previous* orange tokens already had
+  (`#f97316` light vs `#fb923c` dark), so it's not a new pattern this
+  pass introduced, just the same existing relationship recolored.
+
+**Decision 2 — new elevation tiers (`surface`, `surface-elevated`,
+`surface-hover`), not just a recolored `background`.**
+
+- **Problem**: every card/panel/popover before this pass reused
+  `--background` directly — nothing distinguished "the page" from "a
+  raised panel on the page." The Room Info sheet floating over dark video
+  with a flat, undifferentiated background read as part of the general
+  page chrome, not a deliberate product surface.
+- **Decision**: `--surface` (cards/panels — Room Info's own sheet, the
+  home header's account dropdown), `--surface-elevated` (defined for
+  future use — nothing needed a third tier yet), `--surface-hover`
+  (interactive-row hover state, replacing the ad hoc `hover:bg-
+  foreground/5` pattern scattered across seven files). All three are new
+  concepts, not a rename of something that existed.
+- **Reason**: matches the pass's own explicit ask ("consolidate colors...
+  components should reference semantic roles") and gives the Room Info
+  redesign a real "raised card" feel without inventing per-component
+  shadow/border hacks.
+
+**Decision 3 — vote colors (`vote-continue`/`vote-replace`) are named
+tokens with the exact same values as before — a pure refactor, not a
+recolor.**
+
+- **Decision**: `speaker-vote-panel.tsx`'s hardcoded `bg-emerald-500`/
+  `bg-red-500` became `bg-vote-continue`/`bg-vote-replace`, defined as
+  `#10b981`/`#ef4444` — the identical Tailwind literals it already used.
+- **Reason**: the pass's own explicit instruction ("Brand accent is NOT
+  the same thing as state semantics... Continue = positive/green,
+  Replace = negative/red... do not turn every colored element blue-
+  violet"). Naming these as tokens serves the *audit* goal (a real
+  semantic name a reader can find, instead of an unexplained Tailwind
+  color literal) without changing a single rendered pixel.
+
+**Decision 4 — orange audit and disposition, by category** (the pass's
+own explicit classification requirement):
+
+| Usage | Classification | Disposition |
+|---|---|---|
+| `globals.css` `--accent` (light `#f97316`, dark `#fb923c`) | BRAND | Migrated to the new blue-violet accent — this was the actual source of every other orange in the app, since nearly everything else already referenced `text-accent`/`bg-accent` rather than hardcoding a color. |
+| `.stage-overlay`'s own `--accent` override | BRAND | Migrated identically — same reasoning, scoped to the video-chrome context. |
+| `ambient-comments.tsx`'s "requesting to speak" bubble/badge (hardcoded `rgb(251 146 60 / ...)`, `orange-400`/`orange-100` Tailwind classes) | BRAND | The one place brand emphasis was hardcoded outside the token system — migrated to `color-mix(in srgb, var(--accent) …%, transparent)` and `bg-accent/25`, so it now moves with the token automatically instead of needing a second edit next time the accent changes. |
+| `room-diagnostics.tsx`'s amber warning banner | STATE (warning) | Left unchanged — amber correctly signals "diagnostic/warning," not brand identity, and this is dev-only UI never shown in production. |
+| `session-simulator-panel.tsx`'s orange/amber buttons and labels | STATE/DECORATIVE, preview-only | Left unchanged — this is a testing tool gated to preview/dev builds (`isPreviewOrDevBuild()`), invisible to any real production visitor; recoloring it wasn't worth the risk of touching a file this large and load-bearing for a surface no user ever sees. |
+
+**Decision 5 — Room Info's account section gets the account holder's own
+avatar, sourced from `getOwnProfile` at the page level, not a widened
+shared `Identity` type.**
+
+- **Alternatives considered**: add `avatarUrl` to `lib/identity.ts`'s
+  `Identity` type (the existing "who is this request from" resolution
+  already used everywhere in the room).
+- **Reason**: `Identity` is constructed as object literals across ~11
+  test files — the first profile pass already had to mechanically touch
+  every one once (adding `username`); widening it a second time for a
+  field only `RoomInfoOverlay` needs would repeat that cost for no
+  reuse elsewhere. Instead, `events/[id]/page.tsx` (which already calls
+  `resolveIdentity()`) also calls `getOwnProfile(identity.id)` when
+  authenticated — the same repository function Edit Profile and the
+  public profile page already read — and threads the result down as a
+  new, independently optional `identityAvatarUrl` prop
+  (`EventRoom` → `RoomInfoOverlay`), defaulted to `null` so every
+  existing test call site of `EventRoom` stays valid unchanged.
+
+**Decision 6 — the description's "Show more" is a length heuristic, not
+a real overflow measurement.**
+
+- **Alternatives considered**: a `ResizeObserver`/`scrollHeight`
+  comparison to detect actual visual overflow at the current width.
+- **Decision**: a plain `description.length > 140` check.
+- **Reason**: a real measurement needs a ref, a layout effect, and
+  re-measurement on resize/font-load — meaningfully more code for a
+  cosmetic nicety. The heuristic's actual job is narrow and already
+  known: hide the toggle for an ordinary one-or-two-sentence event
+  description, show it for the dev-harness demo room's own multi-
+  sentence one — a 140-character threshold does that reliably in both
+  directions without needing pixel-accurate detection.
+- **Tradeoff**: an unusual real description sized just around the
+  threshold could show (or not show) "Show more" when a true measurement
+  would disagree slightly. Acceptable — worst case is one extra tap or
+  one un-clamped short paragraph, not a broken layout.
+
 ## 2026-09-02 — Profile UX polish pass: home avatar menu, shared account-menu links, clickable Edit Profile avatar (issue #29)
 
 **Problem**: real-iPhone testing of the first profile pass found the home

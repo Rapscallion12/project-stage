@@ -35,6 +35,18 @@ Supabase call scattered into a page or action.
 - [x] Repository, Next.js/TS/Tailwind scaffold, documentation suite
 - [x] Supabase client setup (browser + server) and session-refresh proxy
 - [x] `profiles` table + auto-provisioning trigger
+- [x] Visual identity — a real semantic color-token system
+      (`background`/`surface`/`surface-elevated`/`surface-hover`,
+      `foreground`/`secondary`/`muted`, `border`/`border-strong`,
+      `accent`/`accent-hover`/`accent-soft`, `success`/`warning`/
+      `danger`, `vote-continue`/`vote-replace`) replacing the original
+      near-black + saturated-orange pairing (moved off it on real user
+      feedback that it read as an unwanted, specific adult-content-site
+      association) with a distinctive blue-violet brand accent. State/
+      functional colors (vote continue/replace, warnings) were
+      deliberately preserved, not re-themed to the brand color. See
+      DECISIONS.md for the full palette, contrast math, and the orange-
+      usage audit.
 - [x] Landing page (guest-first — no signup/login funneling as the primary
       call to action; see DECISIONS.md for the correction that drove this)
 - [ ] "Join Live Audience" one-click fast path (issue #26) — `/join`
@@ -1655,6 +1667,15 @@ redirect.
       small camera-icon affordance) — the separate "Add photo" button is
       gone, and Remove Photo survives as small secondary text. The
       underlying upload/resize/storage pipeline is completely unchanged.
+- [x] **Room Info redesign** (real-iPhone feedback: the sheet read as a
+      developer/settings drawer): reorganized into room identity/
+      navigation/account groups with real visual hierarchy — Home and
+      Browse Events are icon+label+description rows, not plain text; a
+      long description clamps with "Show more"; the account section
+      leads with the account holder's own avatar/name/@username (shared
+      `getOwnProfile` read, no separate identity store), with Log out
+      demoted to small secondary text. Same architecture on the mobile
+      sheet and the desktop popover.
 
 ## Explicitly not on this roadmap
 

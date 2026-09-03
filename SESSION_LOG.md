@@ -4,6 +4,137 @@ Newest entry first.
 
 ---
 
+## 2026-09-03 — Session 63: Visual identity + Room Info UX pass — a new blue-violet brand palette and a redesigned Room Info sheet (issue #29-adjacent, real-user feedback)
+
+**Goal**: two closely related real-feedback-driven changes: (1) redesign
+the Room Info overlay's information hierarchy (it read as a developer/
+settings drawer on a real iPhone) and (2) replace the near-black +
+saturated-orange visual identity (real user feedback: an unwanted,
+specific resemblance to an adult-content site) with a distinctive
+palette — explicitly not a single hex swap, a real semantic token system.
+No core live-stage behavior touched.
+
+**Color system**: audited `globals.css` first — found only 5 loose
+tokens (`background`/`foreground`/`accent`/`muted`/`border`), no
+elevation tiers, no functional-state tokens. Added `surface`/
+`surface-elevated`/`surface-hover`, `secondary` (a real second text
+tier alongside `foreground`/`muted`), `border-strong`, `accent-hover`/
+`accent-soft`, `success`/`warning`/`danger`, and `vote-continue`/
+`vote-replace`. New accent: blue-violet ("electric indigo"), light mode
+`#3b4cd1` / dark mode `#5468ff` — computed actual WCAG contrast for every
+candidate rather than eyeballing hex values (see DECISIONS.md for the
+full math, including the proof that dark mode's near-black background
+and white button text can't both hit 4.5:1 against the same accent
+value simultaneously — an honest, reported near-miss on the primary
+button's white-text contrast, not silently rounded up).
+
+**Orange audit**: classified every real usage — BRAND (the `--accent`
+token itself, `.stage-overlay`'s own accent override, and one hardcoded
+`rgb(251 146 60...)`/`orange-400` bubble in `ambient-comments.tsx`'s
+"requesting to speak" badge, migrated to `color-mix(in srgb, var(--accent)
+…, transparent)` so it now moves with the token) vs. STATE/DECORATIVE
+(the diagnostics banner's amber warning, the Session Simulator's own
+orange/amber preview-only tool colors — both left unchanged, neither is
+user-facing brand identity). `speaker-vote-panel.tsx`'s hardcoded
+`emerald-500`/`red-500` became named `vote-continue`/`vote-replace`
+tokens at the identical values — a pure refactor, zero visual change,
+satisfying "preserve state semantics, don't re-theme everything blue."
+Because nearly everything else in the app already referenced `text-
+accent`/`bg-accent`/`Button`'s own variants rather than hardcoding
+color, most of the app (home page CTA, links, focus rings, profile
+pages, Follow button, live-room mic/comment controls) picked up the new
+palette automatically from the `globals.css` change alone — confirmed
+directly in the browser, not assumed.
+
+**Room Info redesign**: reorganized into three visually distinct
+groups — room identity (status dot + name, clamped description with a
+length-heuristic "Show more"), navigation (`Home`/`Browse Events` as
+real icon+label+description rows, not plain breadcrumb text), and
+account (the holder's own avatar+name+@username leading, `My Profile`/
+`Edit Profile` grouped tightly beneath, `Log out` demoted to small
+secondary/destructive text so it stops competing with the account
+holder's own name). The account avatar is a new, independently optional
+`identityAvatarUrl` prop threaded from `events/[id]/page.tsx`'s own
+`getOwnProfile` read down through `EventRoom` — deliberately not a
+widening of the shared `Identity` type (which already required a
+mechanical touch of ~11 test files once, for `username`, in an earlier
+pass) for a field only this one component needs. Both the mobile bottom
+sheet and the desktop popover share the exact same section markup, so
+"same information architecture on both" holds by construction.
+
+**A real lint fix, matching this codebase's own established pattern**:
+resetting the description's expanded state on re-open needed a `useState`
++ `useEffect`, and `RoomInfoOverlay` doesn't actually unmount on close
+(its own JSX conditionally returns `null`, the component instance
+persists) — a synchronous `setState` in that effect triggered the
+project's `react-hooks/set-state-in-effect` rule. Fixed with the same
+`async function` + `await Promise.resolve()` continuation pattern
+`useAutomaticPromotion`/`use-profile-directory.ts` already established
+for this exact rule.
+
+**Testing**: `room-info-overlay.test.tsx` extended with 12 new/rewritten
+tests — status-dot color per room status, description clamp/toggle
+(including reset-on-reopen, correctly awaited past the async effect),
+avatar rendering (photo and fallback), `@username`/"Complete your
+profile" secondary line. All pre-existing tests in that file pass with
+only the expected `Home`/`Browse Events` label updates (already covered
+by loose regex matches, so no changes needed there). Full room component
+suite (93 files spanning speaker/RTS/round/comment behavior) re-run in
+full — all passing.
+
+**A note on this session's real-database test flakiness**: hit several
+transient failures during full-suite runs (`event-speakers-expiration.
+test.ts`, `stage-rounds.test.ts`, and others — "seat already occupied,"
+a 116ms round-deadline timing overshoot). Investigated properly rather
+than assumed: `git stash`-ed this pass's own changes and re-ran the
+identical failing files against the untouched base commit — they failed
+there too, and on a second stashed run additionally hit genuine Supabase
+auth rate-limiting ("Request rate limit reached") from this whole
+session's cumulative real sign-in load. Conclusive proof this is
+environmental (test-isolation/timing/rate-limit pressure under a long
+session's real-database load), not a regression introduced by this
+pass — documented rather than silently retried into a clean number.
+
+**Real browser walkthrough** (local dev server, real Supabase-backed
+test account, deleted afterward, dark mode emulated via `page.
+emulateMedia` — the variant that actually shows the near-black
+background the user's own feedback was about): Home mobile (390×844)
+confirmed the header, CTA, and links all render in the new blue-violet,
+zero orange remaining; opened Room Info against a demo room with a
+deliberately long test description, confirmed the clamp/"Show more"/
+"Show less" toggle, the icon-and-label Home/Browse Events rows, and the
+account identity block with a real avatar; followed My Profile and Edit
+Profile to confirm both inherit the palette automatically; returned to
+the live room and confirmed the composer/mic/reaction chrome and the
+"Tap to join" placeholder text render in the new accent, with the
+preview-only Session Simulator panel correctly untouched. Repeated Room
+Info in mobile landscape (844×390, no clipping, scrollable) and desktop
+(1440×900 popover — Home/Browse Events/account block/My Profile/Edit
+Profile/Log out all visible, Log out visually small and red at the
+bottom). Confirmed the pre-existing guest-header text-wrapping at 390px
+(both "VIRTUAL STAGE" and "Log in" wrap to two lines) is unrelated to
+this pass — reproduced identically in both light and dark mode, and
+this pass touched no header layout/spacing, only color and the Room
+Info sheet's own markup. Flagged as an observation, not fixed (out of
+this pass's scope).
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite run twice; the handful of failures
+   both times were the same pre-existing, environmentally-confirmed
+   flakiness documented above, not this pass's own changes.
+2. **Production interaction** — not applicable this pass; the real-
+   browser walkthrough above (local dev server against the real Supabase
+   project) is the stronger verification actually performed.
+3. **Real-device**: **UNVERIFIED — requires an actual iPhone.** See the
+   handoff's short checklist.
+
+Not merged to `main`. Fresh preview to be deployed and linked in the
+handoff.
+
+---
+
 ## 2026-09-02 — Session 62: Profile UX polish pass — home page avatar/account menu, shared account-menu links, clickable Edit Profile avatar (issue #29)
 
 **Goal**: a narrow polish pass on top of Session 61's profile work, driven

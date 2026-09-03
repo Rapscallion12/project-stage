@@ -224,8 +224,14 @@ export function AmbientComments({
             onClick={onExpand}
             className="flex w-full max-w-[240px] shrink-0 animate-[ambient-comment-enter_250ms_ease-out] items-start gap-2 rounded-2xl px-2.5 py-1.5 text-left text-white"
             style={{
-              backgroundColor: message.is_speaker_request ? "rgb(251 146 60 / 0.22)" : "rgb(0 0 0 / 0.32)",
-              border: message.is_speaker_request ? "1px solid rgb(251 146 60 / 0.5)" : undefined,
+              // Visual identity pass: this was a hardcoded orange-400
+              // literal (BRAND usage — this bubble's own emphasis, not a
+              // semantic state) — now derived from the token via
+              // `color-mix` so it moves with `--accent` automatically,
+              // the same way every `bg-accent`/`text-accent` utility
+              // class already does, without needing a literal hex here.
+              backgroundColor: message.is_speaker_request ? "color-mix(in srgb, var(--accent) 22%, transparent)" : "rgb(0 0 0 / 0.32)",
+              border: message.is_speaker_request ? "1px solid color-mix(in srgb, var(--accent) 50%, transparent)" : undefined,
             }}
           >
             <ParticipantAvatar name={message.author_display_name} size="xs" className="mt-0.5 shrink-0" />
@@ -236,7 +242,7 @@ export function AmbientComments({
                   <span
                     data-testid="ambient-comment-request-badge"
                     title="Requesting to speak"
-                    className="shrink-0 rounded-full bg-orange-400/25 px-1.5 py-0.5 text-[9px] font-medium leading-none text-orange-100"
+                    className="shrink-0 rounded-full bg-accent/25 px-1.5 py-0.5 text-[9px] font-medium leading-none text-white"
                   >
                     requesting to speak
                   </span>

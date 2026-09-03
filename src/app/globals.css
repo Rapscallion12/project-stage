@@ -1,30 +1,123 @@
 @import "tailwindcss";
 
+/*
+ * Visual identity pass (issue #29-adjacent product/brand work, driven by
+ * real-user feedback that the previous near-black + saturated-orange
+ * combination read as an unwanted, specific adult-site association — not
+ * a subjective nitpick, a real reason to move off that exact hue/value
+ * combination rather than just nudging one hex). Full reasoning for every
+ * value below (contrast math, why this hue, why NOT Discord
+ * blurple/Twitch purple/Twitter blue) is in DECISIONS.md.
+ *
+ * Semantic roles, not brand-color aliases — this is the actual point of
+ * this token layer. `--accent` is the ONE token that carries "Virtual
+ * Stage brand identity" (primary CTA, links, selected nav, focus rings,
+ * profile/action emphasis) — everything else here is either a neutral
+ * (background/surface/text/border tiers) or a *functional* semantic color
+ * (success/warning/danger, and the vote-specific continue/replace pair)
+ * that must stay meaningful on its own terms and must NOT be re-themed to
+ * the brand accent just because it's also a color. Continue is green
+ * because "continue" reads as positive in every context, not because it
+ * happens to almost match the brand hue.
+ *
+ * Two elevation tiers beyond the page background (`surface`,
+ * `surface-elevated`) plus a `surface-hover` interaction state — added
+ * because nothing like this existed before (every card/panel/popover
+ * previously reused `--background` directly, e.g. the Room Info sheet
+ * floating over dark video with a flat, undifferentiated background) and
+ * the Room Info redesign this pass ships needs a real "raised card" feel
+ * to read as a deliberate product surface rather than a raw page
+ * background pasted into an overlay.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --accent: #f97316;
-  --muted: #6b7280;
-  --border: #e5e7eb;
+  --background: #f8f9fc;
+  --surface: #f1f2f7;
+  --surface-elevated: #ffffff;
+  --surface-hover: #eceef4;
+
+  --foreground: #14141c;
+  --secondary: #4b4b5a;
+  --muted: #6b6b7d;
+
+  --border: #e2e2ea;
+  --border-strong: #c9c9d6;
+
+  /* Primary brand accent — cool blue-violet ("electric indigo"), tuned
+     darker/richer for light backgrounds (see DECISIONS.md's contrast
+     table for why light and dark mode need genuinely different accent
+     values, not the same hex at two opacities). */
+  --accent: #3b4cd1;
+  --accent-hover: #2e3eb0;
+  --accent-soft: #e7e9fb;
+
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+
+  /* Vote semantics are deliberately NOT brand-colored, and deliberately
+     identical across every theme/context (light, dark, stage-overlay) —
+     these are the exact values `SpeakerVotePanel` already hardcoded
+     before this pass; naming them here is a pure refactor (components
+     now reference the token, not a literal Tailwind color), not a visual
+     change. See DECISIONS.md Section "orange audit" / vote colors. */
+  --vote-continue: #10b981;
+  --vote-replace: #ef4444;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+
   --color-foreground: var(--foreground);
-  --color-accent: var(--accent);
+  --color-secondary: var(--secondary);
   --color-muted: var(--muted);
+
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+
+  --color-vote-continue: var(--vote-continue);
+  --color-vote-replace: var(--vote-replace);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --accent: #fb923c;
-    --muted: #9ca3af;
-    --border: #27272a;
+    --background: #0a0a0f;
+    --surface: #15151d;
+    --surface-elevated: #1c1c26;
+    --surface-hover: #23232f;
+
+    --foreground: #f2f2f6;
+    --secondary: #c4c4d0;
+    --muted: #8b8b99;
+
+    --border: #2a2a36;
+    --border-strong: #3c3c4a;
+
+    /* Lighter/brighter than the light-mode accent on purpose — the same
+       relationship the previous orange tokens already had
+       (light: #f97316 vs dark: #fb923c), just recolored: a value tuned
+       for text/icons/focus-rings/links sitting directly on a near-black
+       background needs more luminance than one sitting on off-white. */
+    --accent: #5468ff;
+    --accent-hover: #6c7bff;
+    --accent-soft: rgb(84 104 255 / 16%);
+
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #f87171;
   }
 }
 
@@ -46,11 +139,15 @@ body {
  * `var(--foreground)`/`var(--muted)`/etc. directly, so redefining them on
  * this wrapper cascades to every descendant using them, the same way
  * `prefers-color-scheme: dark` already redefines them at `:root`.
+ *
+ * Accent recolored to match the new dark-mode brand blue (was orange);
+ * every other token here is unchanged by this pass — none of them were
+ * ever orange-derived, so there's nothing to migrate.
  */
 .stage-overlay {
   --background: transparent;
   --foreground: #ffffff;
-  --accent: #fb923c;
+  --accent: #5468ff;
   --muted: #d4d4d8;
   --border: rgb(255 255 255 / 30%);
   color: var(--foreground);

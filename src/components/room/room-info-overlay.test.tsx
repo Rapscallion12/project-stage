@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RoomInfoOverlay } from "./room-info-overlay";
 import type { Identity } from "@/lib/identity";
@@ -40,6 +40,41 @@ describe("RoomInfoOverlay", () => {
     expect(screen.getByRole("link", { name: /events/i })).toHaveAttribute("href", "/events");
   });
 
+  describe("room identity/status hierarchy (real-iPhone feedback: navigation shouldn't require scanning past the description)", () => {
+    it("shows a status dot colored for live vs. not-live", () => {
+      const { rerender } = render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="live" identity={guestIdentity} />);
+      expect(screen.getByTestId("room-status-dot")).toHaveClass("bg-vote-continue");
+
+      rerender(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={guestIdentity} />);
+      expect(screen.getByTestId("room-status-dot")).toHaveClass("bg-muted");
+    });
+
+    it("does not show a 'Show more' toggle for an ordinary short description", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="live" identity={guestIdentity} />);
+      expect(screen.queryByTestId("room-description-toggle")).not.toBeInTheDocument();
+    });
+
+    it("clamps a long description and reveals it via Show more / Show less", () => {
+      const longEvent = { title: "Dev Room", description: "x".repeat(200) };
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={longEvent} roomStatus="live" identity={guestIdentity} />);
+      const toggle = screen.getByTestId("room-description-toggle");
+      expect(toggle).toHaveTextContent("Show more");
+      fireEvent.click(toggle);
+      expect(toggle).toHaveTextContent("Show less");
+    });
+
+    it("resets the description to collapsed each time the sheet re-opens", async () => {
+      const longEvent = { title: "Dev Room", description: "x".repeat(200) };
+      const { rerender } = render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={longEvent} roomStatus="live" identity={guestIdentity} />);
+      fireEvent.click(screen.getByTestId("room-description-toggle"));
+      expect(screen.getByTestId("room-description-toggle")).toHaveTextContent("Show less");
+
+      rerender(<RoomInfoOverlay open={false} onClose={vi.fn()} event={longEvent} roomStatus="live" identity={guestIdentity} />);
+      rerender(<RoomInfoOverlay open={true} onClose={vi.fn()} event={longEvent} roomStatus="live" identity={guestIdentity} />);
+      await waitFor(() => expect(screen.getByTestId("room-description-toggle")).toHaveTextContent("Show more"));
+    });
+  });
+
   it("shows Log in / Sign up for a guest, never an account control", () => {
     render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={guestIdentity} />);
     expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
@@ -52,6 +87,40 @@ describe("RoomInfoOverlay", () => {
     expect(screen.getByText("Jamie Rivera")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
+  });
+
+  describe("account identity block (Room Info redesign — visual identity pass)", () => {
+    it("shows the account holder's avatar (photo when available) alongside their name", () => {
+      render(
+        <RoomInfoOverlay
+          open={true}
+          onClose={vi.fn()}
+          event={event}
+          roomStatus="waiting"
+          identity={accountIdentity}
+          identityAvatarUrl="https://example.com/a.jpg"
+        />,
+      );
+      const panel = screen.getByTestId("room-info-panel");
+      const img = panel.querySelector("img");
+      expect(img).toHaveAttribute("src", "https://example.com/a.jpg");
+    });
+
+    it("falls back to the shared initials avatar when no photo is set", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={accountIdentity} />);
+      expect(screen.getByTestId("participant-avatar-initials")).toBeInTheDocument();
+    });
+
+    it("shows '@username' beneath the name once a username exists", () => {
+      const withUsername: Identity = { ...accountIdentity, username: "jamier" };
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={withUsername} />);
+      expect(screen.getByText("@jamier")).toBeInTheDocument();
+    });
+
+    it("shows 'Complete your profile' beneath the name when no username is set yet", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={accountIdentity} />);
+      expect(screen.getByText("Complete your profile")).toBeInTheDocument();
+    });
   });
 
   describe("profile entry point (issue #29, Section 14; relabeled in the profile UX polish pass to share AccountMenuLinks with the home header)", () => {

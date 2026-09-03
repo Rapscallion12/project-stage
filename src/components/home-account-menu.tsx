@@ -84,7 +84,7 @@ export function HomeAccountMenu({
           role="menu"
           aria-label="Account"
           data-testid="home-account-menu-panel"
-          className="absolute right-0 top-full z-50 mt-2 flex w-56 flex-col gap-1 rounded-xl border border-border bg-background p-2 shadow-lg"
+          className="absolute right-0 top-full z-50 mt-2 flex w-56 flex-col gap-1 rounded-xl border border-border bg-surface p-2 shadow-lg"
         >
           <div className="truncate px-2 py-1.5 text-sm font-medium">{displayName}</div>
           <AccountMenuLinks username={username} onNavigate={() => setOpen(false)} />

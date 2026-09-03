@@ -2,11 +2,15 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import type { ComponentProps } from "react";
 
+// Visual identity pass: `hover:bg-accent-hover` (a deliberately distinct
+// shade, not `hover:opacity-90`'s generic dimming) — a real hover color
+// reads as an intentionally designed state, the same reasoning the new
+// `--accent-hover` token exists for at all (see globals.css/DECISIONS.md).
 const VARIANT_CLASSES = {
-  primary: "bg-accent text-white hover:opacity-90",
+  primary: "bg-accent text-white hover:bg-accent-hover",
   secondary:
-    "bg-transparent text-foreground border border-border hover:bg-foreground/5",
-  ghost: "bg-transparent text-foreground hover:bg-foreground/5",
+    "bg-transparent text-foreground border border-border hover:bg-surface-hover",
+  ghost: "bg-transparent text-foreground hover:bg-surface-hover",
 } as const;
 
 // min-h-11 (44px) keeps every button a comfortable touch target on mobile,
