@@ -11,6 +11,27 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Fixed
+
+- **Room Info's close button could become unreachable on iPhone in
+  landscape** (real-device bug report) — the sheet's header now stays
+  pinned in place while its content scrolls beneath it, so ✕ is always
+  visible and tappable no matter the orientation, viewport height, or
+  how long the room's description is. Also enlarged the close button to
+  this app's own 44px minimum touch-target size (it was 36px). Confirmed
+  across portrait, landscape, and rotating between them mid-sheet, on
+  several phone sizes plus desktop.
+- **The primary filled button's contrast in dark mode** — white text on
+  the "Join Live Audience"-style filled button now measures 4.80:1
+  (was 4.37:1, just under WCAG AA's 4.5:1 requirement). The general
+  brand blue used for links/icons/focus rings is unchanged; only the
+  filled-button background got a slightly richer, more accessible shade
+  of the same color. See DECISIONS.md for the full contrast math.
+- **The guest home header could wrap "VIRTUAL STAGE" or "Log in" onto
+  two lines** on narrower phones (~375-390px wide) — tightened spacing
+  and prevented wrapping outright at that width; unaffected above it,
+  and the signed-in header (a single avatar) was never affected.
+
 ### Changed
 
 - **New visual identity — moved off the near-black + orange combination**

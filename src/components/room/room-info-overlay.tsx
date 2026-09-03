@@ -46,6 +46,30 @@ import type { Event } from "@/lib/repositories/events";
  * information architecture to both" (this pass's own instruction) holds
  * by construction, not by keeping two structures in sync by hand.
  *
+ * **Sticky header, scrollable content** (responsive/accessibility polish
+ * pass — real-device bug: on iPhone landscape, the close ✕ was
+ * unreachable). Root cause: the previous version put the header (title +
+ * ✕) *inside* the same `overflow-y-auto` flex column as every other
+ * section — nothing pinned it, so once the sheet's natural content
+ * height exceeded its `max-h`, the header scrolled away with everything
+ * else. Landscape is where this actually bit: a ~390px-tall viewport
+ * leaves far less room than portrait's ~844px, so content overflowed
+ * `max-h` far more often, *and* mobile Safari's dynamic address bar
+ * (present far more of the time in landscape, and consuming a much
+ * larger fraction of an already-short viewport) meant a plain `vh`-sized
+ * sheet could be taller than the *actually visible* viewport even before
+ * counting scroll position. Two independent fixes, not one: (1) `dvh`
+ * instead of `vh` for `max-h`, so the cap tracks Safari's real visible
+ * viewport rather than its largest-possible one; (2) the header is now a
+ * structurally separate, non-scrolling flex child (`shrink-0`) *above* a
+ * dedicated scrollable content region (`min-h-0 flex-1 overflow-y-auto`)
+ * — the header physically cannot scroll out of view regardless of
+ * content height, orientation, or any viewport-unit edge case, which is
+ * the actual guarantee the first fix alone wouldn't have provided.
+ * `overscroll-behavior: contain` on the content region stops a
+ * fully-scrolled sheet from chaining its scroll into the stage
+ * underneath (a real iOS rubber-banding behavior, not a hypothetical).
+ *
  * `z-[60]`, deliberately above the preview-only Session Simulator panel's
  * own `z-50`.
  */
@@ -127,106 +151,126 @@ export function RoomInfoOverlay({
         // backdrop's own onClose — this is the standard modal-backdrop
         // pattern, not a second dismissal mechanism.
         onClick={(e) => e.stopPropagation()}
-        className="fixed inset-x-0 bottom-0 z-[60] flex max-h-[85vh] flex-col overflow-y-auto rounded-t-2xl border-t border-border bg-surface shadow-2xl lg:inset-x-auto lg:top-16 lg:right-4 lg:bottom-auto lg:max-h-[75vh] lg:w-80 lg:rounded-2xl lg:border"
-        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        className="fixed inset-x-0 bottom-0 z-[60] flex max-h-[85dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface shadow-2xl lg:inset-x-auto lg:top-16 lg:right-4 lg:bottom-auto lg:max-h-[75dvh] lg:w-80 lg:rounded-2xl lg:border"
       >
-        <div className="flex items-center justify-between px-4 pt-4 pb-1">
+        {/* Sticky header — a structurally separate, non-scrolling flex
+            child (`shrink-0`), never inside the scrollable region below.
+            This is what actually guarantees ✕ stays reachable regardless
+            of content height/orientation/viewport quirks — see this
+            component's own doc comment for the real-device bug this
+            fixes. */}
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">Room Info</h2>
           <button
             type="button"
             data-testid="room-info-close"
             onClick={onClose}
             aria-label="Close room info"
-            className="-mr-1.5 flex h-9 w-9 items-center justify-center rounded-full text-lg leading-none text-muted hover:bg-surface-hover hover:text-foreground"
+            // h-11 w-11 (44px) — the project's own established minimum
+            // touch target, not the 36px the previous version used.
+            className="-mr-2.5 flex h-11 w-11 items-center justify-center rounded-full text-lg leading-none text-muted hover:bg-surface-hover hover:text-foreground"
           >
             ✕
           </button>
         </div>
 
-        {/* Room identity — kept, but no longer the dominant thing on the
-            initial viewport ("should NOT consume most of the initial
-            mobile viewport"). */}
-        <div className="flex flex-col gap-1 px-4 pt-1 pb-3">
-          <div className="flex items-center gap-2">
-            <span
-              aria-hidden="true"
-              data-testid="room-status-dot"
-              className={cn("h-2 w-2 shrink-0 rounded-full", roomStatus === "live" ? "bg-vote-continue" : "bg-muted")}
-            />
-            <h1 className="min-w-0 truncate text-base font-semibold">{event.title}</h1>
-          </div>
-          <p className="text-xs font-medium text-muted">{ROOM_STATUS_LABEL[roomStatus]}</p>
-          {event.description && (
-            <div>
-              <p className={cn("mt-1 text-sm text-secondary", !descExpanded && "line-clamp-2")}>{event.description}</p>
-              {descriptionIsLong && (
-                <button
-                  type="button"
-                  data-testid="room-description-toggle"
-                  onClick={() => setDescExpanded((v) => !v)}
-                  className="mt-0.5 text-xs font-medium text-accent hover:underline"
-                >
-                  {descExpanded ? "Show less" : "Show more"}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Navigation — the primary escape route from the room. Icon +
-            label + short description per row, a real tap target with its
-            own hover/press affordance, not plain text. */}
-        <div className="flex flex-col gap-0.5 border-t border-border px-2 py-2">
-          <NavRow
-            href="/"
-            icon="🏠"
-            label="Home"
-            description="Virtual Stage"
-            ariaLabel="Return to the Virtual Stage home page"
-            testId="room-nav-home"
-          />
-          <NavRow
-            href="/events"
-            icon="📅"
-            label="Browse Events"
-            description="Find another live room"
-            ariaLabel="Browse other live events"
-            testId="room-nav-events"
-          />
-        </div>
-
-        {/* Account — identity block first, actions grouped tightly
-            beneath it, Log out demoted to small secondary text so it
-            never competes with the account holder's own name. */}
-        <div className="flex flex-col gap-3 border-t border-border px-4 py-3">
-          {identity.type === "guest" ? (
+        {/* Scrollable content — everything else. `min-h-0` is required
+            for a flex child to actually shrink below its content's
+            natural height and become a real scroll container instead of
+            pushing the panel's own `max-h` cap into overflow.
+            `overscroll-contain` stops a fully-scrolled sheet from
+            chaining scroll into the stage underneath. */}
+        <div
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        >
+          {/* Room identity — kept, but no longer the dominant thing on the
+              initial viewport ("should NOT consume most of the initial
+              mobile viewport"). */}
+          <div className="flex flex-col gap-1 px-4 pt-3 pb-3">
             <div className="flex items-center gap-2">
-              <ButtonLink href="/login" variant="ghost" className="flex-1">
-                Log in
-              </ButtonLink>
-              <ButtonLink href="/signup" variant="primary" className="flex-1">
-                Sign up
-              </ButtonLink>
+              <span
+                aria-hidden="true"
+                data-testid="room-status-dot"
+                className={cn("h-2 w-2 shrink-0 rounded-full", roomStatus === "live" ? "bg-vote-continue" : "bg-muted")}
+              />
+              <h1 className="min-w-0 truncate text-base font-semibold">{event.title}</h1>
             </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-3">
-                <ParticipantAvatar name={identity.displayName} imageUrl={identityAvatarUrl} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{identity.displayName}</p>
-                  <p className="truncate text-xs text-muted">{identity.username ? `@${identity.username}` : "Complete your profile"}</p>
+            <p className="text-xs font-medium text-muted">{ROOM_STATUS_LABEL[roomStatus]}</p>
+            {event.description && (
+              <div>
+                <p className={cn("mt-1 text-sm text-secondary", !descExpanded && "line-clamp-2")}>{event.description}</p>
+                {descriptionIsLong && (
+                  <button
+                    type="button"
+                    data-testid="room-description-toggle"
+                    onClick={() => setDescExpanded((v) => !v)}
+                    className="mt-0.5 text-xs font-medium text-accent hover:underline"
+                  >
+                    {descExpanded ? "Show less" : "Show more"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Navigation — the primary escape route from the room. Icon +
+              label + short description per row, a real tap target with
+              its own hover/press affordance, not plain text. This is
+              deliberately distinct from ✕ above: ✕ dismisses this sheet
+              and stays in the room; Home leaves the room entirely. */}
+          <div className="flex flex-col gap-0.5 border-t border-border px-2 py-2">
+            <NavRow
+              href="/"
+              icon="🏠"
+              label="Home"
+              description="Virtual Stage"
+              ariaLabel="Return to the Virtual Stage home page"
+              testId="room-nav-home"
+            />
+            <NavRow
+              href="/events"
+              icon="📅"
+              label="Browse Events"
+              description="Find another live room"
+              ariaLabel="Browse other live events"
+              testId="room-nav-events"
+            />
+          </div>
+
+          {/* Account — identity block first, actions grouped tightly
+              beneath it, Log out demoted to small secondary text so it
+              never competes with the account holder's own name. */}
+          <div className="flex flex-col gap-3 border-t border-border px-4 py-3">
+            {identity.type === "guest" ? (
+              <div className="flex items-center gap-2">
+                <ButtonLink href="/login" variant="ghost" className="flex-1">
+                  Log in
+                </ButtonLink>
+                <ButtonLink href="/signup" variant="primary" className="flex-1">
+                  Sign up
+                </ButtonLink>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-3">
+                  <ParticipantAvatar name={identity.displayName} imageUrl={identityAvatarUrl} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold">{identity.displayName}</p>
+                    <p className="truncate text-xs text-muted">{identity.username ? `@${identity.username}` : "Complete your profile"}</p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-col">
-                <AccountMenuLinks username={identity.username} linkClassName="-mx-2 rounded-lg px-2 py-2 text-sm font-medium" />
-              </div>
-              <form action={signOut}>
-                <button type="submit" className="self-start text-xs font-medium text-danger hover:underline">
-                  Log out
-                </button>
-              </form>
-            </>
-          )}
+                <div className="flex flex-col">
+                  <AccountMenuLinks username={identity.username} linkClassName="-mx-2 rounded-lg px-2 py-2 text-sm font-medium" />
+                </div>
+                <form action={signOut}>
+                  <button type="submit" className="self-start text-xs font-medium text-danger hover:underline">
+                    Log out
+                  </button>
+                </form>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

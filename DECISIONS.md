@@ -3,6 +3,113 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-04 — Responsive/accessibility polish pass: Room Info's unreachable close button, a real accent-filled contrast fix, and guest-header wrapping (issue #29-adjacent, real-device bug report)
+
+**Problem 1**: a real iPhone landscape bug report — the redesigned Room
+Info sheet had no visible/reachable close control. Portrait worked;
+landscape didn't.
+
+**Root cause, traced rather than assumed**: the previous structure put
+the header (title + ✕) *inside* the same single `overflow-y-auto` flex
+column as every other section — nothing pinned it. Landscape is where
+this actually surfaced for two compounding reasons: (1) a ~390px-tall
+viewport leaves far less room than portrait's ~844px, so the sheet's
+`max-h` cap was hit far more often, pushing the header into the same
+scrollable region as everything below it; (2) mobile Safari's dynamic
+address bar is present far more of the time in landscape, and consumes
+a much larger *fraction* of an already-short viewport — and critically,
+plain `vh` units in Safari are computed against the *largest possible*
+viewport (chrome hidden), not the currently-visible one, so a `vh`-sized
+sheet can genuinely be taller than what's visible even before any
+scrolling happens.
+
+**Decision — two independent fixes, not one**:
+
+1. **`dvh` instead of `vh`** for the sheet's `max-h` — tracks Safari's
+   actual visible viewport rather than its largest-possible one. This
+   alone narrows the problem but doesn't structurally guarantee anything.
+2. **A structurally separate sticky header** — the header is now a
+   `shrink-0` flex child *above* a dedicated `min-h-0 flex-1 overflow-
+   y-auto` content region, not a member of the same scroll container.
+   This is the fix that actually *guarantees* the close button can never
+   scroll out of view, regardless of content height, orientation, or any
+   future viewport-unit edge case — the first fix narrows how often the
+   problem could occur; this one makes the failure mode structurally
+   impossible rather than just less likely. `overscroll-behavior:
+   contain` on the content region also stops a fully-scrolled sheet from
+   chaining its scroll into the stage underneath (real iOS rubber-
+   banding, not hypothetical).
+- **Alternatives considered**: only switching to `dvh` (rejected — it
+  narrows the failure window but doesn't eliminate it if a future change
+  makes the sheet's content taller than even the correctly-computed
+  `dvh` cap); a `ResizeObserver`-based JS positioning hack (rejected —
+  the structural CSS fix is simpler, has no runtime cost, and can't
+  drift out of sync with a future layout change the way imperative
+  positioning code could).
+- Also bumped the close button from 36px (`h-9 w-9`) to the project's own
+  established 44px minimum (`h-11 w-11`) while touching this markup
+  anyway — a real, if secondary, accessibility gap the original redesign
+  should have caught.
+
+**Problem 2**: the previous pass's own honest report — dark-mode white
+text on the filled primary button's `--accent` background measured
+4.37:1, just under WCAG AA's 4.5:1 for normal-size text.
+
+**Decision — a new `--accent-filled`/`--accent-filled-hover` token pair,
+not a change to `--accent` itself.**
+
+- **Reason this needs a genuinely different value, not just a threshold
+  nudge**: the previous pass's own math already proved no single color
+  can simultaneously hit 4.5:1 contrast against a near-black background
+  (for text/links/icons sitting directly on it) *and* 4.5:1 for white
+  text sitting *on top of* that same color as a filled background — the
+  two required luminance bands (≥0.189 and ≤0.183) don't overlap. So
+  fixing the filled-button case without breaking the text/link case
+  requires two different values, not one adjusted value.
+- **Chosen values (dark mode only — light mode's existing `--accent`
+  already passes both directions comfortably, so `--accent-filled` is
+  just aliased to it there)**: `--accent-filled: #4f63f0` (white text on
+  it = **4.80:1**, passes AA — up from 4.37:1) and `--accent-filled-
+  hover: #3f50d9` (white-on-it = **6.25:1**, comfortably passes,
+  confirmed non-regressive for the hover state specifically). Both are
+  slightly darker/more saturated versions of the same brand hue, not a
+  different color — deliberately, so a filled button still reads as
+  unmistakably "the same blue-violet," just a richer shade of it.
+- **Hover direction is deliberately reversed from `--accent-hover`'s**:
+  text-link hovers brighten (`--accent-hover`, lighter than `--accent`);
+  filled-button hovers *darken* (`--accent-filled-hover`, darker than
+  `--accent-filled`) — brightening an already-marginal white-text
+  contrast on hover would make it worse, not better, so this button
+  needed the opposite direction from the link pattern it otherwise
+  mirrors.
+- **Scope**: only `Button`/`ButtonLink`'s `primary` variant changed
+  (`bg-accent` → `bg-accent-filled`). `--accent` itself, and every
+  `text-accent`/`bg-accent-soft`/focus-ring/icon usage elsewhere, is
+  completely unchanged — this is a filled-button-specific fix, not a
+  second global brand-color change, matching the pass's own explicit
+  "don't change the accent everywhere for one button pairing."
+
+**Problem 3**: real-device feedback that the guest home header's
+"VIRTUAL STAGE" and "Log in" wrapped onto two lines at ~375-390px.
+
+**Root cause**: no element in the header had `whitespace-nowrap`, and
+the four items (wordmark, Events, two full-padding buttons) at the
+original `px-6`/`gap-6`/`gap-3`/`px-5` spacing needed a few more px than
+the narrowest supported phones provide — under that pressure, flexbox's
+default `flex-shrink: 1` let the buttons compress below their text's
+natural width, and un-nowrapped text inside a shrunk container wraps.
+
+**Decision**: tightened spacing below the `sm` breakpoint only (restored
+above it, where there's room to spare) — `px-4 sm:px-6` on the header,
+`gap-3 sm:gap-6` / `gap-2 sm:gap-3` on the two groups, `px-3.5 sm:px-5`
+on the two guest buttons specifically (via `className` override,
+resolved correctly by `tailwind-merge` against `Button`'s own base
+`px-5`) — plus explicit `whitespace-nowrap` on the wordmark and both
+buttons, since tighter spacing alone doesn't *guarantee* no-wrap, only
+makes it less likely. Scoped entirely to `SiteHeader`'s guest branch;
+the authenticated branch (a single avatar) was never affected and
+remains untouched.
+
 ## 2026-09-03 — Visual identity + Room Info UX pass: a new blue-violet brand palette, semantic color tokens, and a redesigned Room Info sheet (issue #29-adjacent, real-user feedback)
 
 **Problem**: real user feedback that the app's near-black + saturated-

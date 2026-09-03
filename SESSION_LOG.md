@@ -4,6 +4,121 @@ Newest entry first.
 
 ---
 
+## 2026-09-04 — Session 64: Responsive/accessibility polish pass — Room Info's unreachable landscape close button, a real accent-filled contrast fix, guest-header wrapping (issue #29-adjacent, real-device bug report)
+
+**Goal**: a narrow fix pass on top of Session 63's Room Info redesign
+and visual identity work, driven by a real iPhone landscape bug report
+(the close button was completely unreachable) plus two already-known
+small items from the previous handoff's own honest self-report (a
+contrast near-miss, a header-wrapping observation). No redesign, no
+core live-stage changes.
+
+**Root-caused the landscape bug before touching anything**, per the
+pass's own explicit instruction: the previous `RoomInfoOverlay` put its
+header (title + ✕) inside the *same* single `overflow-y-auto` flex
+column as every other section — nothing pinned it. Landscape exposed
+this for two compounding reasons: a ~390px-tall viewport hits the
+sheet's `max-h` cap far more often than portrait's ~844px does, *and*
+mobile Safari's dynamic address bar — present far more of the time in
+landscape, consuming a much larger fraction of an already-short
+viewport — means plain `vh` units (computed against the largest-
+possible, chrome-hidden viewport) can size a sheet taller than what's
+actually visible before any scrolling even happens.
+
+**Fix, two independent layers**: switched `max-h-[85vh]`/`max-h-[75vh]`
+to `dvh` (tracks Safari's real visible viewport) — narrows the problem
+but doesn't structurally eliminate it — and restructured the sheet into
+a `shrink-0` sticky header above a `min-h-0 flex-1 overflow-y-auto`
+content region, which is the fix that actually *guarantees* the close
+button can't scroll out of view regardless of content height,
+orientation, or any future viewport quirk. Added `overscroll-behavior:
+contain` on the content region so a fully-scrolled sheet can't chain
+its scroll into the stage underneath. Bumped the close button from 36px
+to this project's own established 44px minimum while already touching
+the markup. `Home` and `✕` stayed deliberately distinct actions
+throughout (confirmed via a new test: tapping Home never calls
+`onClose`).
+
+**Contrast fix**: the previous pass's own honest report — dark-mode
+white-on-`--accent` for a filled button measured 4.37:1, just under AA's
+4.5:1 — got a real fix, not a rounding-up. Since no single color can hit
+4.5:1 against both a near-black background (for text/links) and white
+overlaid text (for a filled button) at once, a genuinely distinct token
+pair was needed: new `--accent-filled` (`#4f63f0`, white-on-it =
+**4.80:1**) and `--accent-filled-hover` (`#3f50d9`, white-on-it =
+**6.25:1** — hover *darkens* here, deliberately the opposite direction
+from `--accent-hover`'s brightening, since brightening would have made
+an already-marginal contrast worse). Light mode needed no change (its
+existing `--accent` already passes both directions comfortably, so
+`--accent-filled` is just aliased to it there). Scope: only `Button`/
+`ButtonLink`'s `primary` variant changed — `--accent` itself and every
+text/icon/focus-ring/soft-background usage elsewhere is untouched, so
+this is a filled-button-specific fix, not a second brand-color change.
+
+**Guest header wrapping fix**: root cause was simply too little space at
+~375-390px for four items (wordmark, Events, two full-padding buttons)
+at the original spacing, with no `whitespace-nowrap` anywhere to prevent
+the browser's default flex-shrink-then-wrap behavior. Tightened spacing
+below the `sm` breakpoint only (restored above it), added explicit
+`whitespace-nowrap` to the wordmark and both guest buttons. Scoped
+entirely to the guest branch of `SiteHeader` — the authenticated
+branch (a single avatar) was untouched and confirmed unaffected.
+
+**Testing**: `room-info-overlay.test.tsx` gained a dedicated "close
+control always reachable" describe block (structural sibling check
+confirming the header isn't nested inside the scrollable region, close
+button survives a long expanded description and a full signed-in
+account section, 44px touch target, `dvh` present in the class list) —
+5 new tests — plus a Home-vs-✕ distinctness test. New `button.test.tsx`
+(4 tests) guards the `accent-filled` token usage on the primary variant
+specifically. New `site-header.test.tsx` (4 tests, the first ever for
+this component — calling the async Server Component directly and
+rendering its resolved JSX, mocking `@/lib/supabase/server` and
+`getOwnProfile`) covers the `whitespace-nowrap` contract on the guest
+branch and confirms the authenticated branch is unaffected.
+
+**Real browser walkthrough** (local dev server, real Supabase-backed
+test account, deleted afterward): reproduced the exact reported
+scenario — a demo room with a deliberately long description, opened
+Room Info at 844×390 (the classic iPhone landscape size) — confirmed ✕
+visible immediately, confirmed it stays visible after scrolling the
+sheet's content all the way to the bottom (Log out and all), closed
+successfully with room/stage state intact. Repeated at 932×430. Tested
+orientation change *with the sheet open*: portrait (390×844) → rotate
+to landscape (844×390) — ✕ stayed visible and reachable, no
+remount, no lost state; and the reverse, landscape (932×430) → rotate
+to portrait (430×932) — same result. Confirmed Escape and backdrop-click
+dismissal both still work (existing mechanisms preserved, not just the
+new close button). Confirmed the desktop popover (1440×900) is
+unaffected — full content fits, Log out visible and red at the bottom.
+Confirmed the guest header at 375px and 390px: "VIRTUAL STAGE" and
+"Log in"/"Sign up" all stay on one line, no horizontal overflow;
+confirmed the authenticated header (single avatar) unaffected at the
+same widths. All test data cleaned up afterward.
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite run clean this time: **95 files /
+   1268 tests, zero failures** (up from 90-93/93 files with a handful of
+   pre-existing environmental flakes the last two sessions — this run
+   had none, consistent with those being transient rather than
+   structural).
+2. **Production interaction** — not applicable this pass; the real-
+   browser walkthrough above (local dev server against the real
+   Supabase project, reproducing the exact reported bug scenario) is the
+   stronger verification actually performed.
+3. **Real-device**: **UNVERIFIED — requires an actual iPhone**, per this
+   project's own three-tier discipline — automated and local-browser
+   confirmation are not a substitute for the real Safari/hardware
+   confirmation this bug was originally reported from. See the
+   handoff's three-item checklist.
+
+Not merged to `main`. Fresh preview to be deployed and linked in the
+handoff.
+
+---
+
 ## 2026-09-03 — Session 63: Visual identity + Room Info UX pass — a new blue-violet brand palette and a redesigned Room Info sheet (issue #29-adjacent, real-user feedback)
 
 **Goal**: two closely related real-feedback-driven changes: (1) redesign

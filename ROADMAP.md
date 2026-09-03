@@ -1676,6 +1676,18 @@ redirect.
       `getOwnProfile` read, no separate identity store), with Log out
       demoted to small secondary text. Same architecture on the mobile
       sheet and the desktop popover.
+- [x] **Responsive/accessibility polish pass** (real iPhone landscape bug
+      report): Room Info's close button could become unreachable in
+      landscape — its header is now structurally pinned above a
+      separately-scrolling content region (not just a `vh`→`dvh` unit
+      fix, though that changed too), so ✕ can never scroll away
+      regardless of orientation, viewport height, or description length;
+      also enlarged to a real 44px touch target. Fixed the dark-mode
+      filled-button contrast the previous pass had honestly flagged
+      (4.37:1 → 4.80:1) via a new `accent-filled` token distinct from
+      the general brand `accent`, so links/icons/focus rings keep their
+      existing color. Fixed the guest home header's text wrapping at
+      narrow phone widths.
 
 ## Explicitly not on this roadmap
 

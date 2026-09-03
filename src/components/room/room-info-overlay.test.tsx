@@ -34,6 +34,53 @@ describe("RoomInfoOverlay", () => {
     expect(panel).toHaveTextContent("Strangers, live, arguing about the important stuff.");
   });
 
+  describe("close control always reachable (real-device bug: unreachable ✕ in iPhone landscape)", () => {
+    it("the close button is a sibling of the scrollable content, not inside it — jsdom can't measure layout, but this is the actual structural fix: the header cannot scroll away with the content because it isn't part of the same scroll container", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="live" identity={guestIdentity} />);
+      const closeButton = screen.getByTestId("room-info-close");
+      const panel = screen.getByTestId("room-info-panel");
+      // The close button's own parent (the header row) must be a direct
+      // child of the panel — i.e. NOT nested inside whatever element
+      // owns `overflow-y-auto` scrolling for the content below it.
+      const header = closeButton.parentElement;
+      expect(header?.parentElement).toBe(panel);
+    });
+
+    it("stays present with a long, expanded description (the case that used to push it out of the scroll viewport)", () => {
+      const longEvent = { title: "Dev Room", description: "x".repeat(300) };
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={longEvent} roomStatus="live" identity={guestIdentity} />);
+      fireEvent.click(screen.getByTestId("room-description-toggle"));
+      expect(screen.getByTestId("room-info-close")).toBeInTheDocument();
+    });
+
+    it("stays present for a signed-in account with the full identity/links/Log out section rendered", () => {
+      const withUsername: Identity = { ...accountIdentity, username: "jamier" };
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="live" identity={withUsername} />);
+      expect(screen.getByTestId("room-info-close")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+    });
+
+    it("has a 44px (h-11 w-11) touch target, the project's own established minimum", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="live" identity={guestIdentity} />);
+      expect(screen.getByTestId("room-info-close")).toHaveClass("h-11", "w-11");
+    });
+
+    it("uses dvh (not vh) for its height cap, so the cap tracks Safari's actual visible viewport rather than its largest-possible one", () => {
+      render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="live" identity={guestIdentity} />);
+      const classes = screen.getByTestId("room-info-panel").className;
+      expect(classes).toMatch(/max-h-\[85dvh\]/);
+      expect(classes).toMatch(/lg:max-h-\[75dvh\]/);
+      expect(classes).not.toMatch(/max-h-\[85vh\]/);
+    });
+  });
+
+  it("Home (leave the room) and ✕ (dismiss the sheet) are distinct actions — tapping Home never calls onClose", () => {
+    const onClose = vi.fn();
+    render(<RoomInfoOverlay open={true} onClose={onClose} event={event} roomStatus="live" identity={guestIdentity} />);
+    fireEvent.click(screen.getByTestId("room-nav-home"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("shows Home and Events navigation links", () => {
     render(<RoomInfoOverlay open={true} onClose={vi.fn()} event={event} roomStatus="waiting" identity={guestIdentity} />);
     expect(screen.getByRole("link", { name: /home/i })).toHaveAttribute("href", "/");

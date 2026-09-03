@@ -27,12 +27,23 @@ export async function SiteHeader() {
   const profile = user ? await getOwnProfile(user.id) : null;
 
   return (
-    <header className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
-      <div className="flex items-center gap-6">
-        <Link href="/" className="text-sm font-semibold tracking-wide">
+    // Responsive/accessibility polish pass: real-device feedback found
+    // "VIRTUAL STAGE"/"Log in" wrapping onto two lines at ~375-390px
+    // guest-header widths — four items (wordmark, Events, two buttons)
+    // in one row with the *original* px-6/gap-6/gap-3/px-5 spacing simply
+    // needed a few more px than the narrowest supported phones have.
+    // Tightened spacing below `sm` (restored above it, where there's
+    // room to spare) plus explicit `whitespace-nowrap` on the wordmark
+    // and both guest buttons — nowrap alone doesn't fix width pressure
+    // (it would just overflow instead of wrapping), so both are needed
+    // together. The authenticated branch (`HomeAccountMenu`, a single
+    // avatar) was never at risk — nothing here touches it.
+    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-4 sm:px-6">
+      <div className="flex min-w-0 items-center gap-3 sm:gap-6">
+        <Link href="/" className="shrink-0 text-sm font-semibold tracking-wide whitespace-nowrap">
           VIRTUAL STAGE
         </Link>
-        <Link href="/events" className="text-sm text-muted hover:text-foreground">
+        <Link href="/events" className="shrink-0 text-sm text-muted whitespace-nowrap hover:text-foreground">
           Events
         </Link>
       </div>
@@ -43,11 +54,11 @@ export async function SiteHeader() {
           avatarUrl={profile?.avatar_url ?? null}
         />
       ) : (
-        <div className="flex items-center gap-3">
-          <ButtonLink href="/login" variant="ghost">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <ButtonLink href="/login" variant="ghost" className="shrink-0 px-3.5 whitespace-nowrap sm:px-5">
             Log in
           </ButtonLink>
-          <ButtonLink href="/signup" variant="primary">
+          <ButtonLink href="/signup" variant="primary" className="shrink-0 px-3.5 whitespace-nowrap sm:px-5">
             Sign up
           </ButtonLink>
         </div>

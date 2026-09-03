@@ -49,6 +49,13 @@
   --accent: #3b4cd1;
   --accent-hover: #2e3eb0;
   --accent-soft: #e7e9fb;
+  /* Responsive/accessibility polish pass: a filled CTA's white text on
+     `--accent` already passes AA in light mode (6.69:1) — no separate
+     value needed here, `accent-filled` is just `accent` itself. Dark
+     mode is where these genuinely diverge; see the dark block below and
+     DECISIONS.md for the full math. */
+  --accent-filled: var(--accent);
+  --accent-filled-hover: var(--accent-hover);
 
   --success: #16a34a;
   --warning: #d97706;
@@ -80,6 +87,8 @@
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-filled: var(--accent-filled);
+  --color-accent-filled-hover: var(--accent-filled-hover);
 
   --color-success: var(--success);
   --color-warning: var(--warning);
@@ -114,6 +123,24 @@
     --accent: #5468ff;
     --accent-hover: #6c7bff;
     --accent-soft: rgb(84 104 255 / 16%);
+    /* Responsive/accessibility polish pass: `--accent` itself is tuned
+       for TEXT sitting on the background (4.52:1) — white text ON TOP of
+       it (a filled button) only reaches 4.37:1, just under WCAG AA's
+       4.5:1 for normal-size text. No single color can pass 4.5:1 against
+       both a near-black background AND white overlaid text at once (the
+       two required luminance bands don't overlap — see DECISIONS.md) —
+       so a filled CTA needs a genuinely different, slightly darker/more
+       saturated shade of the same hue, not the same `--accent` value.
+       `#4f63f0`: white text on it = 4.80:1 (passes AA). Hover/pressed
+       darkens further (`#3f50d9`, white-on-it = 6.25:1) rather than
+       brightening like `--accent-hover` does — brightening a filled
+       button's already-marginal white-text contrast would make it
+       *worse*, not better, so this hover direction is deliberately
+       reversed from `--accent-hover`'s. Still unmistakably the same
+       brand hue — a richer, deeper version of it, not a different
+       color. */
+    --accent-filled: #4f63f0;
+    --accent-filled-hover: #3f50d9;
 
     --success: #22c55e;
     --warning: #f59e0b;
