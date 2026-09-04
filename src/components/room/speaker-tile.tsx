@@ -9,6 +9,7 @@ import { inactiveSince } from "@/lib/speaker-presence";
 import { ParticipantAvatar } from "@/components/room/participant-avatar";
 import { ProfileLink } from "@/components/room/profile-link";
 import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
+import { deriveParticipantMediaState } from "@/lib/participant-media-state";
 import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
@@ -210,20 +211,19 @@ export function SpeakerTile({
   // reached yet).
   const roundDisplay = useSpeakerRoundCountdown(speaker, isPreviewBuild);
 
+  // Media rendering bugfix pass (real-device report, issue #21): shared
+  // with SpeakerStage's own local self-view corner slot — see this
+  // helper's own doc comment for why this must be the *one* place
+  // hasVideo/hasAudio get derived, not a second inline computation here.
+  const { hasVideo, hasAudio } = deriveParticipantMediaState(participant);
+  // Still read directly for the attach effects below, which need the
+  // actual track/mute objects, not just the derived booleans.
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
-  const hasVideo = Boolean(cameraPublication?.track && !cameraPublication.isMuted);
   // Issue #22: this tile's own big video is never shown for the local
   // speaker's own seat — see this component's doc comment. Only affects
   // rendering; the underlying publication is untouched.
   const showBigVideo = hasVideo && !isLocal;
-  // Media Readiness pass (issue #21), Section 12: camera off, mic
-  // actually publishing — the audio-only visualizer's own gate. Reads
-  // the same `microphonePublication` this tile already uses for the
-  // remote-playback `<audio>` element below (and, for the local
-  // participant, `room.localParticipant`'s own publication) — no second
-  // source of truth for "is this seat's mic live."
-  const hasAudio = Boolean(microphonePublication?.track && !microphonePublication.isMuted);
 
   useEffect(() => {
     const track = cameraPublication?.track;
@@ -331,11 +331,18 @@ export function SpeakerTile({
           <ParticipantAvatar name={speaker.display_name} size="md" className="bg-accent/20" />
           <p className="px-4 text-center text-xs font-medium">Tap to enable camera &amp; mic</p>
         </button>
-      ) : isLocal && hasVideo ? (
-        // I'm live (hasVideo is true — a real, unmuted published track),
-        // just not shown here — see this component's doc comment. Framed
-        // neutrally/positively, not as "Camera off" (untrue: it's on,
-        // it's just deliberately not duplicated in this tile).
+      ) : isLocal && (hasVideo || hasAudio) ? (
+        // I'm live (hasVideo or hasAudio is true — a real, unmuted
+        // published track), just not shown here — see this component's
+        // doc comment. Framed neutrally/positively, not as "Camera off"
+        // (untrue: something's on, it's just deliberately not duplicated
+        // in this tile). Media rendering bugfix pass (issue #21): widened
+        // from hasVideo-only — the local speaker's own audio-only
+        // visualizer is likewise canonically shown in the self-preview
+        // corner slot (see SpeakerStage), never duplicated here; this
+        // tile stays the same neutral message for camera-on and
+        // camera-off-mic-on alike, matching how it already treated
+        // camera-on before this pass.
         <div
           data-testid="own-seat-live"
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/5 text-foreground"
@@ -364,15 +371,17 @@ export function SpeakerTile({
               : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
           </p>
         </div>
-      ) : hasAudio ? (
+      ) : !isLocal && hasAudio ? (
         // Media Readiness pass (issue #21), Section 12: camera off, mic
         // on — a fully valid post-join state (Section 11), never treated
-        // as a "camera off" dead end. Reached identically whether this
-        // tile is the local speaker's own seat, a remote speaker viewed
-        // by the audience, or a speaker viewing their co-speaker's tile
-        // (Section 15) — `microphonePublication.track` is already
-        // whichever real LiveKit audio track this viewer's own client
-        // holds for this seat.
+        // as a "camera off" dead end. `!isLocal` here is already
+        // guaranteed by the branch above (isLocal-and-hasAudio is caught
+        // there instead — see its own doc comment, media rendering
+        // bugfix pass) but stated explicitly since this is the
+        // remote-viewer/co-speaker path specifically:
+        // `microphonePublication.track` is whichever real, subscribed
+        // LiveKit audio track this viewer's own client holds for this
+        // seat.
         <AudioOnlyVisualizer
           track={microphonePublication!.track as LocalAudioTrack | RemoteAudioTrack}
           displayName={speaker.display_name}

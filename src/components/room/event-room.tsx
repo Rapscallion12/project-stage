@@ -730,6 +730,10 @@ export function EventRoom({
           needsMediaActivation={connection.needsMediaActivation}
           mediaError={connection.mediaError}
           participantCount={connection.participantCount}
+          speakers={speakers}
+          getParticipant={connection.getParticipant}
+          myIdentity={myIdentity}
+          reconnectingIdentities={reconnectingIdentities}
         />
       )}
       {/*

@@ -4,6 +4,128 @@ Newest entry first.
 
 ---
 
+## 2026-09-04 — Session 67: Media rendering bugfix pass — stale local self-preview after joining, missing audio-only visualizer (real-device report, issue #21)
+
+**Goal**: narrow bugfix on top of Session 66's Media Readiness + Audio
+Visualizer pass — real-device testing of that preview found two real
+bugs before it ever shipped: (1) the local speaker's own camera preview
+showed camera-off/no-video immediately after joining, only fixed by
+manually toggling the camera; (2) camera-off+mic-on never showed the
+audio-reactive visualizer at all. No redesign, no readiness/product
+semantics changed, RTS/voting/round/reservation architecture untouched.
+
+**Bug #1 root-caused by reading `livekit-client`'s own source**, not
+assumed: this pass's own new pre-claim media acquisition means
+`SelfPreview` can now mount *before* a claim (inside the candidate
+composition's `SpeakerStage`) and then *again*, fresh, the moment the
+role router swaps to Speaker View on claim — a second `attach()` call
+for the same already-flowing `LocalVideoTrack` on a brand-new `<video>`
+element. Confirmed *why* toggling the camera "fixed" it isn't a
+coincidence: `LocalVideoTrack.mute()` for a camera source genuinely stops
+the hardware track, and `unmute()` reacquires it and re-runs
+`attachToElement()` on every attached element — mechanically the same
+repaint, just via an unwanted real hardware reacquisition.
+`livekit-client`'s own `attachToElement()` already carries an equivalent
+"reset `srcObject` to force a repaint" workaround for a documented,
+similarly-shaped Safari/Firefox bug (cites Safari 15 in its own source) —
+independent confirmation this class of bug is real in this exact
+dependency, just not covered for this specific (non-browser-specific)
+trigger. **Fix**: `SelfPreview` now applies that same nudge itself,
+universally — one `requestAnimationFrame` after `attach()`, reset
+`srcObject` and replay. One file, no new dependency, no camera toggling.
+
+**Bug #2 root-caused as two separate, confirmed problems**: (1)
+structural — the local self-view visualizer was wired only into
+`SpeakerTile`, but Portrait/MobileLandscape Speaker View's `soloMode`
+never renders the local speaker's own tile at all (confirmed by reading
+`SpeakerStage`'s own `soloMode` logic) — the local visualizer was simply
+unreachable code on mobile. (2) `createAudioAnalyser` (confirmed by
+reading its actual implementation) constructs a brand-new `AudioContext`
+every call, which browsers commonly start suspended outside a user
+gesture — its own only recovery is a one-time `click` listener on
+`document.body`, so a viewer who never happens to click anywhere would
+see permanently-silent bars with real audio genuinely flowing.
+
+**Fix**: extracted `deriveParticipantMediaState` (new
+`lib/participant-media-state.ts`) — the one shared place `hasVideo`/
+`hasAudio` get derived from live LiveKit publications, now used by both
+`SpeakerTile` (remote/co-speaker tiles, unchanged behavior) and
+`SpeakerStage`'s own self-view corner slot, which now chooses between
+video (`SelfPreview`), a new compact variant of `AudioOnlyVisualizer`
+(same real bars, no avatar/name), or nothing — converging local and
+remote onto one canonical participant/publication-derived state, per
+explicit instruction. The corner slot still falls back to the raw
+`localVideoTrack` reference only for the pre-claim candidate self-preview
+(no publication exists yet to read). `AudioOnlyVisualizer` now explicitly
+calls `.resume()` on its own analyser's `AudioContext` immediately after
+creating it — a head start ahead of the click-fallback, not a
+replacement for it. Also widened `SpeakerTile`'s own "You're live" branch
+from `hasVideo`-only to `hasVideo || hasAudio` (issue #22's own rule that
+the tile never shows local media, video or otherwise, now applied
+consistently to audio-only too — it was briefly violated by Session 66's
+own visualizer branch, which this closes).
+
+**Diagnostics** (temporary, dev/preview-only, per explicit instruction):
+extended the existing `RoomDiagnostics` panel (already gated by
+`isDevToolsAvailable()`, already collapsed by default) with a "MEDIA
+RENDER DEBUG" section — per-seat publication existence/subscribed/muted/
+track-sid, `hasVideo`/`hasAudio`, inactive, and the actual render branch
+chosen. `AudioOnlyVisualizer` writes debug-only `data-*` attributes
+(track sid, rAF-active, context state, latest amplitude) to its own root
+element in the same rAF tick already mutating the bars — never a React
+re-render, never production UI. Both meant to be removed once the two
+bugs are confirmed fixed on a real device.
+
+**Testing**: new `audio-only-visualizer.test.tsx` (7 tests — AudioContext
+resume on suspended/running, cleanup on unmount, re-creation on track
+swap, full vs. compact identity treatment, dev-only debug attributes).
+`speaker-stage.test.tsx` gained a 5-test describe block for the corner
+slot's video/visualizer/nothing decision, including the specific
+regression this pass fixes (a stale `localVideoTrack` must not win once
+the publication itself reports the camera authoritatively muted).
+`self-preview.test.tsx` gained 3 tests for the repaint nudge itself
+(resets srcObject without a second attach/detach cycle, safe with no
+srcObject to reset, cancels its pending rAF on unmount).
+`speaker-tile.test.tsx`'s existing local-visualizer test was corrected
+to assert the new, actually-correct behavior (no visualizer in the big
+tile for local — the neutral "You're live" text, matching camera-on).
+
+**What this environment could and couldn't verify**: no camera/mic
+hardware, and no LiveKit URL configured in local dev — confirmed via a
+real (non-mocked) browser session that tapping an empty seat correctly
+dispatches a genuine `getUserMedia` call and blocks the claim while
+unresolved (the readiness gate itself, from Session 66, still holds) and
+that the new diagnostics panel renders without error against real
+(non-connected) participant data — but the actual attach/publish/
+analyser behavior these two fixes target needs real-device confirmation.
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite clean: **97 files / 1318 tests,
+   zero failures** (up from 96/1303).
+2. **Production interaction** — local dev server, real Supabase-backed
+   throwaway test account: confirmed the room (audience and seated-
+   speaker views) renders without error after these changes, and the
+   extended diagnostics panel renders its new "MEDIA RENDER DEBUG"
+   section correctly. The actual camera-preview/visualizer bugs
+   themselves require a real camera/mic and a real LiveKit connection —
+   neither is available in this environment (no hardware; no LiveKit URL
+   configured for local dev) — so the *fixes* could not be reproduced
+   live here, only reasoned from `livekit-client`'s own source and
+   applied narrowly.
+3. **Real-device: UNVERIFIED — requires real-device testing.** Checklist:
+   (1) join → confirm your own camera preview shows live video
+   *immediately*, no toggle needed; (2) toggle camera off → confirm the
+   voice-reactive visualizer appears in your own corner preview *and* on
+   remote viewers'/your co-speaker's tile, and audibly reacts while you
+   speak; (3) toggle camera back on → confirm video returns immediately,
+   repeated a few times with no stale state.
+
+Not merged to `main`.
+
+---
+
 ## 2026-09-04 — Session 66: Media Readiness + Audio Visualizer pass — gate real seat claims on verified camera+microphone, replace the dead camera-off tile with a real audio visualizer (issue #21)
 
 **Goal**: close the "unprepared candidate becomes seated, kicked later"

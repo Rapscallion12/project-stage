@@ -29,9 +29,15 @@ merged to `main`.
 - **Speakers with their camera off now show a live, voice-reactive
   visualizer instead of a dead "Camera off" tile** — a subtle waveform
   that responds to their actual transmitted audio (never a fake
-  animation), quiet when they're silent, visible to the audience and to
-  their co-speaker alike. Turning the camera back on swaps back to video
-  instantly, with no interruption to the stage or the audio itself.
+  animation), quiet when they're silent, visible to the audience, to
+  their co-speaker, and in your own self-view corner preview alike.
+  Turning the camera back on swaps back to video instantly, with no
+  interruption to the stage or the audio itself. (Real-device testing
+  caught two bugs in this and the readiness prompt above before either
+  shipped: your own camera preview could stay stuck on "camera off"
+  right after joining until manually toggling the camera, and the
+  visualizer never appeared for your own self-view at all — both fixed;
+  see DECISIONS.md for the root causes.)
 
 ### Fixed
 

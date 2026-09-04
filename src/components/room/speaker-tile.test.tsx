@@ -20,7 +20,7 @@ vi.mock("livekit-client", async (importOriginal) => {
     ...actual,
     createAudioAnalyser: vi.fn(() => ({
       calculateVolume: () => 0,
-      analyser: {} as AnalyserNode,
+      analyser: { context: { state: "running", resume: vi.fn(async () => {}) } } as unknown as AnalyserNode,
       cleanup: vi.fn(async () => {}),
     })),
   };
@@ -210,11 +210,14 @@ describe("SpeakerTile", () => {
       expect(container.querySelector("video")).toBeInTheDocument();
     });
 
-    it("reaches the visualizer identically for the local speaker's own seat (Section 15: self-view is not a separate code path)", () => {
+    it("never shows the big-tile visualizer for the local speaker's own seat — the canonical local self-view is SpeakerStage's corner slot (media rendering bugfix pass), not a second copy here", () => {
       const micTrack = fakeAudioTrack();
       const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
       render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} />);
-      expect(screen.getByTestId("audio-only-visualizer")).toBeInTheDocument();
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+      // Same neutral "You're live" treatment camera-on already used —
+      // widened to also cover camera-off-mic-on, not a new local state.
+      expect(screen.getByTestId("own-seat-live")).toBeInTheDocument();
     });
 
     it("inactivity still takes precedence over the visualizer if both are somehow true at once — the existing safety net is never shadowed", () => {

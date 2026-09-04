@@ -1730,6 +1730,23 @@ redirect.
       structurally unaffected (they claim via `claimSpeakerSeat`
       directly, never through the gated `claimOpenSeat`/
       `checkPromotionEligibility` actions this pass wraps).
+- [x] **Media rendering bugfix pass** (real-device report on the above):
+      the local camera preview could stay stuck on "camera off" right
+      after joining until manually toggling the camera — root-caused to
+      `SelfPreview` mounting a second time (a fresh `<video>` element)
+      when the role router swaps to Speaker View on claim, reattaching an
+      already-flowing track; fixed with the same "reset `srcObject` to
+      force a repaint" nudge `livekit-client` already uses for an
+      equivalent Safari/Firefox bug, applied universally. Separately, the
+      audio-only visualizer never appeared for the local speaker's own
+      self-view at all (Speaker View's `soloMode` never renders the local
+      seat's own tile) and could stay silent even with real audio
+      flowing (a suspended `AudioContext` `createAudioAnalyser` never
+      explicitly resumes). Fixed by extracting one shared
+      `deriveParticipantMediaState` derivation used by both `SpeakerTile`
+      and a new video-or-visualizer decision in `SpeakerStage`'s own
+      self-view corner slot, and by resuming the analyser's `AudioContext`
+      explicitly. See DECISIONS.md for the full root-cause trace.
 
 ## Explicitly not on this roadmap
 

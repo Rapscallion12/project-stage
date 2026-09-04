@@ -1,14 +1,40 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeakerStage } from "./speaker-stage";
-import type { LocalVideoTrack } from "livekit-client";
+import type { LocalVideoTrack, Participant, TrackPublication } from "livekit-client";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { Identity } from "@/lib/identity";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 
+// Media rendering bugfix pass (real-device report): jsdom has no real Web
+// Audio API — see speaker-tile.test.tsx's identical mock for why this is
+// a harmless stand-in, not something that tests the analyser's own math.
+vi.mock("livekit-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("livekit-client")>();
+  return {
+    ...actual,
+    createAudioAnalyser: vi.fn(() => ({
+      calculateVolume: () => 0,
+      analyser: { context: { state: "running", resume: vi.fn(async () => {}) } } as unknown as AnalyserNode,
+      cleanup: vi.fn(async () => {}),
+    })),
+  };
+});
+
 const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+
+/** A minimal stand-in for a real Participant — only getTrackPublication is ever called on it. */
+function fakeParticipant(publications: Partial<Record<"camera" | "microphone", Partial<TrackPublication>>>): Participant {
+  return {
+    getTrackPublication: (source: string) => {
+      if (source === "camera") return publications.camera as TrackPublication | undefined;
+      if (source === "microphone") return publications.microphone as TrackPublication | undefined;
+      return undefined;
+    },
+  } as unknown as Participant;
+}
 
 function pendingRequest(overrides: Partial<RankedPendingRequest> = {}): RankedPendingRequest {
   return {
@@ -154,6 +180,96 @@ describe("SpeakerStage", () => {
     expect(slot).toBeInTheDocument();
     expect(slot.className).toMatch(/\btop-3\b/);
     expect(slot.className).not.toMatch(/\bbottom-3\b/);
+  });
+
+  describe("self-view corner slot: video vs. audio-only visualizer vs. nothing (media rendering bugfix pass, real-device report)", () => {
+    const localIdentity = "profile:me";
+
+    it("shows real video (not the visualizer) once the local participant's own camera publication is genuinely published and unmuted, even though localVideoTrack was already held pre-claim", () => {
+      const participant = fakeParticipant({ camera: { track: {} as never, isMuted: false } });
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          getParticipant={() => participant}
+          localVideoTrack={fakeVideoTrack()}
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+      expect(screen.queryByTestId("self-preview-audio-only")).not.toBeInTheDocument();
+    });
+
+    it("still shows self-preview from the raw prepared localVideoTrack before anything is published — the pre-claim candidate self-preview (issue #22) is unaffected", () => {
+      // No camera publication exists at all yet (participant undefined,
+      // as an unconnected/unclaimed candidate's own identity would look
+      // up) — only the raw prepared track is held.
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          getParticipant={() => undefined}
+          localVideoTrack={fakeVideoTrack()}
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+    });
+
+    it("shows the audio-only visualizer instead of a dead localVideoTrack once the camera publication authoritatively reports muted (camera toggled off post-claim)", () => {
+      const participant = fakeParticipant({
+        camera: { track: {} as never, isMuted: true },
+        microphone: { track: {} as never, isMuted: false },
+      });
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          getParticipant={() => participant}
+          // A stale/already-held localVideoTrack must not win once the
+          // publication itself says the camera is authoritatively off —
+          // see this component's own doc comment on why the publication,
+          // not localVideoTrack, is the source of truth once published.
+          localVideoTrack={fakeVideoTrack()}
+        />,
+      );
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      expect(screen.getByTestId("self-preview-audio-only")).toBeInTheDocument();
+    });
+
+    it("renders nothing in the corner slot once camera is published-muted and mic has no live publication either", () => {
+      const participant = fakeParticipant({ camera: { track: {} as never, isMuted: true } });
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          getParticipant={() => participant}
+          localVideoTrack={fakeVideoTrack()}
+        />,
+      );
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("self-preview-audio-only")).not.toBeInTheDocument();
+    });
+
+    it("never shows the audio-only visualizer before the camera has ever been published — no premature fallback for an ordinary pre-claim candidate", () => {
+      render(
+        <SpeakerStage
+          speakers={[]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          getParticipant={() => undefined}
+          localVideoTrack={null}
+        />,
+      );
+      expect(screen.queryByTestId("self-preview-audio-only")).not.toBeInTheDocument();
+    });
   });
 
   it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath", () => {

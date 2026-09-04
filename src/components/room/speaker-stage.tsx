@@ -1,7 +1,9 @@
-import type { LocalVideoTrack, Participant } from "livekit-client";
+import type { LocalAudioTrack, LocalVideoTrack, Participant, RemoteAudioTrack } from "livekit-client";
 import { SpeakerTile } from "@/components/room/speaker-tile";
 import { SelfPreview } from "@/components/room/self-preview";
+import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
 import { getParticipantIdentity } from "@/lib/livekit/token";
+import { deriveParticipantMediaState } from "@/lib/participant-media-state";
 import { cn } from "@/lib/utils";
 import { useStageRoundCountdown } from "@/hooks/use-stage-round-countdown";
 import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
@@ -307,6 +309,32 @@ export function SpeakerStage({
     );
   }
 
+  // Media rendering bugfix pass (real-device report, issue #21): the
+  // local participant's own self-view corner slot now has to decide
+  // between video, an audio-only visualizer, and nothing — not just
+  // "video or nothing" (issue #22's original scope, from before a
+  // speaker could ever toggle their camera off while remaining a valid
+  // speaker). `cameraPublished` distinguishes "genuinely published to the
+  // Room" (authoritative — see deriveParticipantMediaState) from "not
+  // published yet" (a candidate's own prepared-but-unpublished
+  // localVideoTrack, still legitimately shown ahead of any claim — see
+  // SelfPreview's own doc comment on the pending → speaker transition).
+  // Once actually published, the publication is authoritative even if
+  // `localVideoTrack` itself is stale or still points at a since-stopped
+  // MediaStreamTrack (camera toggled off stops the underlying hardware
+  // track — see LocalVideoTrack.mute() in livekit-client — so falling
+  // back to localVideoTrack post-toggle would show a dead, black frame
+  // instead of the visualizer). Deliberately reads the *same*
+  // `deriveParticipantMediaState` helper `SpeakerTile` uses for every
+  // other seat — Section 4's own instruction: local and remote must
+  // converge on one canonical participant/publication-derived state,
+  // never a separate local-only boolean.
+  const localParticipant = getParticipant(myIdentity);
+  const localMediaState = deriveParticipantMediaState(localParticipant);
+  const cameraPublished = localMediaState.cameraTrack !== undefined;
+  const showSelfVideo = cameraPublished ? localMediaState.hasVideo : localVideoTrack !== null;
+  const showSelfAudioOnly = !showSelfVideo && cameraPublished && localMediaState.hasAudio;
+
   const renderSolo = soloMode && mySeatNumber !== null;
 
   return (
@@ -335,8 +363,31 @@ export function SpeakerStage({
         )}
       </div>
 
-      {/* Self-preview slot (issue #22) — hidden entirely, not just an empty placeholder, when there's no local media to show. */}
-      {localVideoTrack && <SelfPreview track={localVideoTrack} />}
+      {/* Self-preview slot (issue #22, extended by the media rendering
+          bugfix pass) — hidden entirely, not just an empty placeholder,
+          when there's no local media to show at all. Video takes the
+          slot when the camera's genuinely on (or not yet published,
+          during candidacy — see showSelfVideo's own derivation above);
+          the compact audio-only visualizer takes it instead once the
+          camera is authoritatively off but the mic is genuinely
+          publishing — the same corner box, same position, never a
+          second local-preview surface. */}
+      {showSelfVideo && localVideoTrack ? (
+        <SelfPreview track={localVideoTrack} />
+      ) : showSelfAudioOnly ? (
+        <div
+          data-testid="self-preview-audio-only"
+          className="absolute top-3 right-3 h-24 w-16 overflow-hidden rounded-md border-2 border-accent bg-black shadow-lg sm:h-28 sm:w-20"
+        >
+          <AudioOnlyVisualizer
+            track={localMediaState.microphoneTrack as LocalAudioTrack | RemoteAudioTrack}
+            compact
+          />
+          <span className="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 text-[10px] font-medium leading-tight text-white">
+            You
+          </span>
+        </div>
+      ) : null}
 
       {/* Shared round badge (issue #21 corrective pass) — see this component's own doc comment above the stageRound prop; rendered exactly once, here, never per-tile. */}
       {stageRoundDisplay && <StageRoundBadge display={stageRoundDisplay} />}
