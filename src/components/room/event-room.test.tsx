@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventRoom } from "./event-room";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 /**
@@ -42,6 +43,7 @@ const {
   mockRefetchSpeakers,
   mockJoinOpenSeat,
   mockCanPublish,
+  mockPrepareLocalMedia,
 } = vi.hoisted(() => ({
   mockHasMountedOnClient: vi.fn(() => false),
   mockIsDesktopViewport: vi.fn(() => false),
@@ -49,6 +51,14 @@ const {
   mockRefetchSpeakers: vi.fn(async () => {}),
   mockJoinOpenSeat: vi.fn(),
   mockCanPublish: vi.fn(() => false),
+  // Media Readiness pass (issue #21): defaults to fully-ready so every
+  // existing tap-empty-seat test below keeps exercising the join path
+  // unchanged — the readiness-gate describe block overrides this
+  // per-test via mockResolvedValueOnce/mockResolvedValue.
+  mockPrepareLocalMedia: vi.fn(async (): Promise<MediaReadinessState> => ({
+    camera: { ready: true, error: null },
+    microphone: { ready: true, error: null },
+  })),
 }));
 
 vi.mock("@/hooks/use-has-mounted-on-client", () => ({
@@ -80,16 +90,31 @@ vi.mock("@/hooks/use-lobby-realtime", () => ({
   }),
 }));
 vi.mock("@/hooks/use-live-room-connection", () => ({
+  // Media Readiness pass (issue #21): a real, pure function (not a
+  // vi.fn()) — handleTapEmptySeat imports this directly from the same
+  // module useLiveRoomConnection itself lives in, so the mock factory
+  // must re-export it too, same reasoning as every other named export
+  // this file's tests actually exercise.
+  describeMediaReadinessFailure: (readiness: { camera: { ready: boolean }; microphone: { ready: boolean } }) => {
+    const cameraFailed = !readiness.camera.ready;
+    const micFailed = !readiness.microphone.ready;
+    if (cameraFailed && micFailed) return "Camera and microphone access are required to join the stage.";
+    if (cameraFailed) return "Camera access is required to join the stage.";
+    if (micFailed) return "Microphone access is required to join the stage.";
+    return "";
+  },
   useLiveRoomConnection: () => ({
     status: "connected",
     participantCount: 1,
     mediaError: null,
     canPublish: mockCanPublish(),
     needsMediaActivation: false,
-    activateMedia: vi.fn(async () => {}),
+    activateMedia: vi.fn(async () => MEDIA_READY),
+    mediaReadiness: { camera: { ready: true, error: null }, microphone: { ready: true, error: null } },
+    acquiringMedia: false,
     getParticipant: () => undefined,
     localVideoTrack: null,
-    prepareLocalMedia: vi.fn(async () => {}),
+    prepareLocalMedia: mockPrepareLocalMedia,
     releaseLocalMedia: vi.fn(),
     microphoneMuted: false,
     cameraMuted: false,
@@ -161,6 +186,7 @@ vi.mock("@/components/room/desktop-room", () => ({
   ),
 }));
 
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -421,6 +447,100 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
         expect(screen.getByText("Both seats are currently full.")).toBeInTheDocument();
       });
       expect(mockRefetchSpeakers).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Media Readiness pass (issue #21): direct-join (handleTapEmptySeat) is gated on verified camera+microphone readiness, not just an uncontested seat", () => {
+    beforeEach(() => {
+      // Issue #18's own "ownership contradiction"/"ordinary rejection"
+      // tests immediately above also tap the empty seat, which also
+      // calls prepareLocalMedia (handleTapEmptySeat's own gate) — their
+      // own afterEach clears joinOpenSeat/refetchSpeakers but not this
+      // mock, so its call count carries into whichever test runs next.
+      // Cleared here (not just this describe's own afterEach) so every
+      // test's own toHaveBeenCalledTimes assertion starts from zero
+      // regardless of what ran before this describe block.
+      mockPrepareLocalMedia.mockClear();
+    });
+    afterEach(() => {
+      mockJoinOpenSeat.mockClear();
+      mockRefetchSpeakers.mockClear();
+      mockPrepareLocalMedia.mockReset();
+      mockPrepareLocalMedia.mockResolvedValue({
+        camera: { ready: true, error: null },
+        microphone: { ready: true, error: null },
+      });
+    });
+
+    it("never calls joinOpenSeat when camera readiness fails — no real seat claim before both devices are verified", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockPrepareLocalMedia.mockResolvedValueOnce({
+        camera: { ready: false, error: "permission-denied" },
+        microphone: { ready: true, error: null },
+      });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockPrepareLocalMedia).toHaveBeenCalledTimes(1);
+      });
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByText(/camera access is required/i)).toBeInTheDocument();
+    });
+
+    it("never calls joinOpenSeat when microphone readiness fails", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockPrepareLocalMedia.mockResolvedValueOnce({
+        camera: { ready: true, error: null },
+        microphone: { ready: false, error: "no-device" },
+      });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockPrepareLocalMedia).toHaveBeenCalledTimes(1);
+      });
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByText(/microphone access is required/i)).toBeInTheDocument();
+    });
+
+    it("never calls joinOpenSeat when both camera and microphone readiness fail", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockPrepareLocalMedia.mockResolvedValueOnce({
+        camera: { ready: false, error: "no-device" },
+        microphone: { ready: false, error: "no-device" },
+      });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockPrepareLocalMedia).toHaveBeenCalledTimes(1);
+      });
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByText(/camera and microphone access are required/i)).toBeInTheDocument();
+    });
+
+    it("calls joinOpenSeat once both camera and microphone report ready — the real claim proceeds normally when readiness succeeds", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockJoinOpenSeat.mockResolvedValue({ ok: true });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockJoinOpenSeat).toHaveBeenCalledWith("e1");
+      });
     });
   });
 

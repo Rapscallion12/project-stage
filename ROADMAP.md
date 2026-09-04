@@ -1700,6 +1700,36 @@ redirect.
       one. Mobile/tablet completely unaffected; `RoomInfoOverlay`'s own
       content untouched (its trigger's role narrowed to secondary detail
       now that basic navigation doesn't route through it on desktop).
+- [x] **Media Readiness + Audio Visualizer pass** (issue #21): a
+      candidate could reach a real speaker seat before camera+microphone
+      were ever verified — the only safety net was a 30s *post-seating*
+      grace timer that noticed both-off only after the fact. Added a
+      hard pre-claim invariant instead: `claimOpenSeat` (direct-join) and
+      `useAutomaticPromotion`'s auto-promotion claim both now withhold
+      the real seat claim until `prepareLocalMedia` reports camera *and*
+      microphone ready, reusing the existing selection/reservation/
+      candidate-lifecycle machinery unchanged (no new replacement queue,
+      no new client-only authorization system) — a bounded 45s readiness
+      timeout releases through the *existing* `cancel()`/
+      `withdrawSpeakerRequest` path if the candidate never grants media.
+      New `StageReadinessPrompt` ("Ready to speak?", per-device status,
+      Try Again, permission-blocked settings hint) fills the same
+      countdown-overlay/pending-control slots `CountdownOverlay`/
+      `RoomControls` already owned. Camera/mic acquisition itself changed
+      from one combined `createLocalTracks` call to two independent
+      `createLocalAudioTrack`/`createLocalVideoTrack` calls so one
+      device's failure never blocks the other's success or forces a
+      needless re-acquisition on retry. New `AudioOnlyVisualizer`
+      (camera off, mic actually publishing) uses `livekit-client`'s own
+      `createAudioAnalyser` utility against the real LiveKit audio track
+      — never fake/random motion — replacing the dead "Camera off" tile
+      area for local self-view, remote-viewed-by-audience, and
+      speaker-viewing-co-speaker alike. The existing post-seating
+      both-off inactivity grace period is completely untouched — this
+      pass only closes the *before*-join gap. Simulator seats are
+      structurally unaffected (they claim via `claimSpeakerSeat`
+      directly, never through the gated `claimOpenSeat`/
+      `checkPromotionEligibility` actions this pass wraps).
 
 ## Explicitly not on this roadmap
 

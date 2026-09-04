@@ -4,6 +4,7 @@ import { MobileLandscapeSpeakerView } from "./mobile-landscape-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
@@ -22,6 +23,7 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
   setGuestName: vi.fn(),
 }));
 
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -82,10 +84,12 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: true,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
@@ -282,7 +286,7 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
     });
 
     it("tapping it calls the same activateMedia already wired through this view's props", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(
         <MobileLandscapeSpeakerView {...baseProps} needsMediaActivation={true} activateMedia={activateMedia} />,
       );

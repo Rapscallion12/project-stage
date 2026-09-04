@@ -13,6 +13,9 @@ import {
   type EventSpeaker,
 } from "@/lib/repositories/event-speakers";
 import { inactiveSince } from "@/lib/speaker-presence";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 const hasServiceCredentials = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
@@ -130,7 +133,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(row)}
         />,
@@ -156,7 +159,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(row)}
         />,
@@ -188,7 +191,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(reconnectedRow)}
         />,
@@ -263,7 +266,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={false}
           bothMediaMuted={true}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(row)}
         />,

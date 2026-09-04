@@ -5,7 +5,7 @@ import { useActiveSpeakers } from "@/hooks/use-active-speakers";
 import { useActiveSpeakerRequests } from "@/hooks/use-active-speaker-requests";
 import { useAutomaticPromotion } from "@/hooks/use-automatic-promotion";
 import { useIsDesktopViewport } from "@/hooks/use-desktop-viewport";
-import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
+import { useLiveRoomConnection, describeMediaReadinessFailure } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
@@ -224,8 +224,25 @@ export function EventRoom({
     // use them (retry, or the composer fallback), same as
     // prepareLocalMedia already leaves them for a composer request that
     // hasn't been promoted yet.
-    void connection.prepareLocalMedia();
+    //
+    // Media Readiness pass (issue #21): the promise itself is captured
+    // here, synchronously, in the same gesture-safe call as above — but
+    // the *readiness check* it resolves to is awaited inside
+    // startJoiningSeat's transition below, not here. This is the same
+    // seat-claim invariant this pass adds to useAutomaticPromotion's RTS
+    // path: no real claim (joinOpenSeat) fires unless both camera and
+    // microphone actually produced usable tracks. A denied/unavailable
+    // device now surfaces the same descriptive joinSeatMessage this
+    // function already uses for every other non-claim outcome, instead
+    // of claiming the seat and letting the existing post-seating grace
+    // timer discover the problem 30 seconds later.
+    const readinessPromise = connection.prepareLocalMedia();
     startJoiningSeat(async () => {
+      const readiness = await readinessPromise;
+      if (!readiness.camera.ready || !readiness.microphone.ready) {
+        setJoinSeatMessage(describeMediaReadinessFailure(readiness));
+        return;
+      }
       const result = await joinOpenSeat(event.id);
       if (result.ok) {
         // Issue #18 real-device finding (2026-08-28): previously relied
@@ -429,6 +446,8 @@ export function EventRoom({
     phase,
     needsMediaActivation: connection.needsMediaActivation,
     mediaError: connection.mediaError,
+    cameraReady: connection.mediaReadiness.camera.ready,
+    microphoneReady: connection.mediaReadiness.microphone.ready,
     onHasPendingRequestChange: setHasPendingRequest,
     // Issue #18 real-device finding (2026-08-28): the same immediate,
     // direct refetch as handleTapEmptySeat's own successful join above —
@@ -633,6 +652,8 @@ export function EventRoom({
     needsMediaActivation: connection.needsMediaActivation,
     activateMedia: connection.activateMedia,
     mediaError: connection.mediaError,
+    mediaReadiness: connection.mediaReadiness,
+    acquiringMedia: connection.acquiringMedia,
     localVideoTrack: connection.localVideoTrack,
     onPrepareMedia: connection.prepareLocalMedia,
     reconnectingIdentities,

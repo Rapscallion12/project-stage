@@ -8,7 +8,7 @@ import {
 } from "./use-live-room-connection";
 import { RoomEvent, Track } from "livekit-client";
 
-const { createLocalTracks, RoomMock, roomInstances } = vi.hoisted(() => {
+const { createLocalAudioTrack, createLocalVideoTrack, RoomMock, roomInstances } = vi.hoisted(() => {
   const roomInstances: Array<{
     connect: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
@@ -53,12 +53,12 @@ const { createLocalTracks, RoomMock, roomInstances } = vi.hoisted(() => {
     }
   }
 
-  return { createLocalTracks: vi.fn(), RoomMock, roomInstances };
+  return { createLocalAudioTrack: vi.fn(), createLocalVideoTrack: vi.fn(), RoomMock, roomInstances };
 });
 
 vi.mock("livekit-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("livekit-client")>();
-  return { ...actual, createLocalTracks, Room: RoomMock };
+  return { ...actual, createLocalAudioTrack, createLocalVideoTrack, Room: RoomMock };
 });
 
 describe("shouldPublish", () => {
@@ -228,7 +228,8 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
 
   it("exposes the acquired camera track as localVideoTrack once prepareLocalMedia resolves", async () => {
     const video = fakeVideoTrack();
-    createLocalTracks.mockResolvedValue([fakeAudioTrack(), video]);
+    createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+    createLocalVideoTrack.mockResolvedValue(video);
     const { result } = renderHook(() => useLiveRoomConnection(null));
 
     expect(result.current.localVideoTrack).toBeNull();
@@ -239,7 +240,8 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
   });
 
   it("is idempotent — a second call doesn't re-acquire once tracks are already held", async () => {
-    createLocalTracks.mockResolvedValue([fakeAudioTrack(), fakeVideoTrack()]);
+    createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+    createLocalVideoTrack.mockResolvedValue(fakeVideoTrack());
     const { result } = renderHook(() => useLiveRoomConnection(null));
 
     await act(async () => {
@@ -248,13 +250,15 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
     await act(async () => {
       await result.current.prepareLocalMedia();
     });
-    expect(createLocalTracks).toHaveBeenCalledTimes(1);
+    expect(createLocalAudioTrack).toHaveBeenCalledTimes(1);
+    expect(createLocalVideoTrack).toHaveBeenCalledTimes(1);
   });
 
   it("on acquisition failure, surfaces mediaError and holds no track", async () => {
     const error = new Error("simulated NotAllowedError");
     error.name = "NotAllowedError";
-    createLocalTracks.mockRejectedValue(error);
+    createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+    createLocalVideoTrack.mockRejectedValue(error);
     const { result } = renderHook(() => useLiveRoomConnection(null));
 
     await act(async () => {
@@ -264,10 +268,53 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
     expect(result.current.mediaError).toEqual({ source: "camera", reason: "permission-denied" });
   });
 
-  it("a failed acquisition doesn't block a later retry from succeeding", async () => {
-    createLocalTracks.mockRejectedValueOnce(new Error("simulated failure"));
+  // Media Readiness pass (issue #21), Section 4/24: camera and microphone
+  // are now acquired via two independent calls (createLocalAudioTrack/
+  // createLocalVideoTrack), not one combined createLocalTracks — so a
+  // camera-only failure must not block a successful, already-held
+  // microphone track, and vice versa. See mediaReadiness's own doc
+  // comment.
+  it("a camera-only failure leaves the microphone acquired and reports only the camera as unready", async () => {
+    const error = new Error("simulated NotAllowedError");
+    error.name = "NotAllowedError";
+    createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+    createLocalVideoTrack.mockRejectedValue(error);
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    let readiness;
+    await act(async () => {
+      readiness = await result.current.prepareLocalMedia();
+    });
+    expect(readiness).toEqual({
+      camera: { ready: false, error: "permission-denied" },
+      microphone: { ready: true, error: null },
+    });
+  });
+
+  it("a microphone-only failure leaves the camera acquired and reports only the microphone as unready", async () => {
+    const error = new Error("simulated NotFoundError");
+    error.name = "NotFoundError";
+    createLocalAudioTrack.mockRejectedValue(error);
+    createLocalVideoTrack.mockResolvedValue(fakeVideoTrack());
+    const { result } = renderHook(() => useLiveRoomConnection(null));
+
+    let readiness;
+    await act(async () => {
+      readiness = await result.current.prepareLocalMedia();
+    });
+    expect(readiness).toEqual({
+      camera: { ready: true, error: null },
+      microphone: { ready: false, error: "no-device" },
+    });
+  });
+
+  it("a failed acquisition doesn't block a later retry from succeeding, and never re-acquires the device that already succeeded", async () => {
+    const cameraError = new Error("simulated failure");
+    cameraError.name = "NotReadableError";
+    createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+    createLocalVideoTrack.mockRejectedValueOnce(cameraError);
     const video = fakeVideoTrack();
-    createLocalTracks.mockResolvedValueOnce([fakeAudioTrack(), video]);
+    createLocalVideoTrack.mockResolvedValueOnce(video);
     const { result } = renderHook(() => useLiveRoomConnection(null));
 
     await act(async () => {
@@ -279,13 +326,17 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
       await result.current.prepareLocalMedia();
     });
     expect(result.current.localVideoTrack).toBe(video);
-    expect(createLocalTracks).toHaveBeenCalledTimes(2);
+    expect(createLocalVideoTrack).toHaveBeenCalledTimes(2);
+    // The microphone already succeeded on the first attempt — the retry
+    // must not re-acquire it.
+    expect(createLocalAudioTrack).toHaveBeenCalledTimes(1);
   });
 
   it("releaseLocalMedia stops held tracks and clears localVideoTrack", async () => {
     const video = fakeVideoTrack();
     const audio = fakeAudioTrack();
-    createLocalTracks.mockResolvedValue([audio, video]);
+    createLocalAudioTrack.mockResolvedValue(audio);
+    createLocalVideoTrack.mockResolvedValue(video);
     const { result } = renderHook(() => useLiveRoomConnection(null));
 
     await act(async () => {
@@ -311,7 +362,8 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
   });
 
   it("after releasing, a later prepareLocalMedia re-acquires fresh tracks rather than staying inert", async () => {
-    createLocalTracks.mockResolvedValue([fakeAudioTrack(), fakeVideoTrack()]);
+    createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+    createLocalVideoTrack.mockResolvedValue(fakeVideoTrack());
     const { result } = renderHook(() => useLiveRoomConnection(null));
 
     await act(async () => {
@@ -324,14 +376,15 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
       await result.current.prepareLocalMedia();
     });
 
-    expect(createLocalTracks).toHaveBeenCalledTimes(2);
+    expect(createLocalVideoTrack).toHaveBeenCalledTimes(2);
     expect(result.current.localVideoTrack).not.toBeNull();
   });
 
   describe("activateMedia (real-device finding: refresh recovery left self-preview empty)", () => {
     it("reconstructs localVideoTrack — the old setCameraEnabled-only fallback never did", async () => {
       const video = fakeVideoTrack();
-      createLocalTracks.mockResolvedValue([fakeAudioTrack(), video]);
+      createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+      createLocalVideoTrack.mockResolvedValue(video);
       const { result } = renderHook(() => useLiveRoomConnection(null));
 
       expect(result.current.localVideoTrack).toBeNull();
@@ -342,20 +395,22 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
     });
 
     it("acquires media exactly the same way prepareLocalMedia does — no separate acquisition path", async () => {
-      createLocalTracks.mockResolvedValue([fakeAudioTrack(), fakeVideoTrack()]);
+      createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+      createLocalVideoTrack.mockResolvedValue(fakeVideoTrack());
       const { result } = renderHook(() => useLiveRoomConnection(null));
 
       await act(async () => {
         await result.current.activateMedia();
       });
-      expect(createLocalTracks).toHaveBeenCalledTimes(1);
-      expect(createLocalTracks).toHaveBeenCalledWith({ audio: true, video: true });
+      expect(createLocalAudioTrack).toHaveBeenCalledTimes(1);
+      expect(createLocalVideoTrack).toHaveBeenCalledTimes(1);
     });
 
     it("on failure, leaves needsMediaActivation-driving state so the tile's retry affordance stays available (the old design permanently hid it after one failed attempt)", async () => {
       const error = new Error("simulated NotAllowedError");
       error.name = "NotAllowedError";
-      createLocalTracks.mockRejectedValue(error);
+      createLocalAudioTrack.mockResolvedValue(fakeAudioTrack());
+      createLocalVideoTrack.mockRejectedValue(error);
       const { result } = renderHook(() => useLiveRoomConnection(null));
 
       await act(async () => {
@@ -367,11 +422,13 @@ describe("useLiveRoomConnection — candidate media readiness (issue #22)", () =
       // itself reads false too — the meaningful assertion is that nothing
       // here latched mediaActivated permanently true on a failed attempt,
       // confirmed indirectly: a later activateMedia call still re-attempts
-      // acquisition rather than silently no-op'ing.
+      // acquisition rather than silently no-op'ing. The microphone already
+      // succeeded, so only the camera is retried.
       await act(async () => {
         await result.current.activateMedia();
       });
-      expect(createLocalTracks).toHaveBeenCalledTimes(2);
+      expect(createLocalVideoTrack).toHaveBeenCalledTimes(2);
+      expect(createLocalAudioTrack).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -530,7 +587,7 @@ describe("useLiveRoomConnection — mic/camera mute toggles mute in place, never
     expect(result.current.microphoneMuted).toBe(false);
   });
 
-  it("createLocalTracks is never called by either toggle — no new getUserMedia acquisition", async () => {
+  it("createLocalAudioTrack/createLocalVideoTrack are never called by either toggle — no new getUserMedia acquisition", async () => {
     const track = fakeLocalTrack(false);
     const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
     roomInstances[0].localParticipant.getTrackPublication.mockImplementation(() => ({ track }));
@@ -542,7 +599,8 @@ describe("useLiveRoomConnection — mic/camera mute toggles mute in place, never
       await result.current.toggleCamera();
     });
 
-    expect(createLocalTracks).not.toHaveBeenCalled();
+    expect(createLocalAudioTrack).not.toHaveBeenCalled();
+    expect(createLocalVideoTrack).not.toHaveBeenCalled();
   });
 });
 
@@ -558,7 +616,7 @@ describe("useLiveRoomConnection — self-preview reconciliation (issue #18)", ()
     roomInstances.length = 0;
   });
 
-  it("reconciles localVideoTrack from an existing unmuted camera publication once canPublish becomes true, without calling createLocalTracks", async () => {
+  it("reconciles localVideoTrack from an existing unmuted camera publication once canPublish becomes true, without calling createLocalAudioTrack/createLocalVideoTrack", async () => {
     const track = { attach: vi.fn(), detach: vi.fn() };
     const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
     const room = roomInstances[0];
@@ -573,7 +631,8 @@ describe("useLiveRoomConnection — self-preview reconciliation (issue #18)", ()
     });
 
     expect(result.current.localVideoTrack).toBe(track);
-    expect(createLocalTracks).not.toHaveBeenCalled();
+    expect(createLocalAudioTrack).not.toHaveBeenCalled();
+    expect(createLocalVideoTrack).not.toHaveBeenCalled();
   });
 
   it("logs a dev-mode error when it reconciles — a loud signal if this ever fires on a real device", async () => {
@@ -612,7 +671,8 @@ describe("useLiveRoomConnection — self-preview reconciliation (issue #18)", ()
   it("does not reconcile — and does not overwrite — when localVideoTrack is already held", async () => {
     const existingTrack = { kind: Track.Kind.Video, stop: vi.fn() };
     const otherTrack = { attach: vi.fn(), detach: vi.fn() };
-    createLocalTracks.mockResolvedValue([existingTrack]);
+    createLocalAudioTrack.mockResolvedValue({ kind: Track.Kind.Audio, stop: vi.fn() });
+    createLocalVideoTrack.mockResolvedValue(existingTrack);
     const { result } = renderHook(() => useLiveRoomConnection({ livekitUrl: "wss://example.com", token: "t1" }));
     const room = roomInstances[0];
 

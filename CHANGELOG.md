@@ -11,6 +11,28 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Added
+
+- **You can no longer take a speaker seat without a verified camera and
+  microphone** — previously a candidate could be seated with a dead
+  camera or mic, only noticed 30 seconds later by the existing
+  post-seating grace timer. A lightweight "Ready to speak?" prompt now
+  appears at the moment you'd go live, checks both devices, and shows
+  per-device status (Camera/Microphone: Ready / Needs permission / Not
+  available / In use elsewhere) with a real Try Again and a settings
+  hint if your browser blocked the permission dialog. Once both are
+  ready, joining continues automatically — no extra confirmation step.
+  If you never grant access, your reservation is released after a
+  bounded wait so the next eligible speaker isn't stuck behind you.
+  Already-seated speakers are completely unaffected — camera-off with
+  mic-on has always been (and remains) a fully valid on-stage state.
+- **Speakers with their camera off now show a live, voice-reactive
+  visualizer instead of a dead "Camera off" tile** — a subtle waveform
+  that responds to their actual transmitted audio (never a fake
+  animation), quiet when they're silent, visible to the audience and to
+  their co-speaker alike. Turning the camera back on swaps back to video
+  instantly, with no interruption to the stage or the audio itself.
+
 ### Fixed
 
 - **Desktop room: global navigation was hidden behind a hamburger menu,

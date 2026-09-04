@@ -7,6 +7,7 @@ import { AmbientComments } from "@/components/room/ambient-comments";
 import { ExpandedComments } from "@/components/room/expanded-comments";
 import { SpeakerVotePanel } from "@/components/room/speaker-vote-panel";
 import { CountdownOverlay } from "@/components/room/countdown-overlay";
+import { StageReadinessPrompt } from "@/components/room/stage-readiness-prompt";
 import { PortraitSpeakerView } from "@/components/room/portrait-speaker-view";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { ChatPanel } from "@/components/lobby/chat-panel";
@@ -146,6 +147,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
     needsMediaActivation,
     activateMedia,
     mediaError,
+    mediaReadiness,
+    acquiringMedia,
     localVideoTrack,
     onPrepareMedia,
     reconnectingIdentities,
@@ -186,6 +189,9 @@ export function PortraitRoom(props: RoomLayoutProps) {
         // mechanism (issue #21), reused rather than a second dimming
         // layer. 0 the rest of the time, same as every other caller.
         scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
+        // Media Readiness pass (issue #21): treated the same as any other
+        // promotionCountdown-active state below — this reuses the exact
+        // same scrimOpacity signal, not a second one.
       />
 
       {/* Minimal top chrome — status pill (left) + guest identity chip (right), both floating over the video, neither reserving space from it. */}
@@ -249,7 +255,24 @@ export function PortraitRoom(props: RoomLayoutProps) {
         // the one rendering anymore (the role router above swaps to
         // PortraitSpeakerView), so there's no frame where this and
         // Speaker View can coexist.
-        <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+        promotionCountdown === 0 && !(mediaReadiness.camera.ready && mediaReadiness.microphone.ready) ? (
+          // Media Readiness pass (issue #21): the seat-claim gate itself
+          // — useAutomaticPromotion is deliberately withholding the real
+          // claim at countdown 0 until both devices are verified (see its
+          // own doc comment). Takes over the same center-stage overlay
+          // slot CountdownOverlay used for every other countdown tick,
+          // never both at once.
+          <div className="pointer-events-auto absolute inset-0 z-10 flex items-center justify-center gap-2 px-6 text-center">
+            <StageReadinessPrompt
+              mediaReadiness={mediaReadiness}
+              acquiringMedia={acquiringMedia}
+              onPrepareMedia={onPrepareMedia}
+              onCancel={onCancelPromotion}
+            />
+          </div>
+        ) : (
+          <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+        )
       ) : (
         <>
           <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
@@ -278,6 +301,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
                   activateMedia={activateMedia}
                   onPrepareMedia={onPrepareMedia}
                   mediaError={mediaError}
+                  mediaReadiness={mediaReadiness}
+                  acquiringMedia={acquiringMedia}
                   connectionStatus={connectionStatus}
                   phase={phase}
                   countdownText={countdownText}

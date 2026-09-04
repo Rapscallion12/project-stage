@@ -4,7 +4,7 @@ import { SelfPreview } from "@/components/room/self-preview";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { cn } from "@/lib/utils";
 import { useStageRoundCountdown } from "@/hooks/use-stage-round-countdown";
-import type { MediaError } from "@/hooks/use-live-room-connection";
+import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
@@ -151,7 +151,7 @@ export function SpeakerStage({
   /** Which seat (if any) the viewer holds — computed once in EventRoom alongside `isSpeaker`, from the same data. Only ever non-null when `isSpeaker` is also true. */
   mySeatNumber: 1 | 2 | null;
   needsMediaActivation: boolean;
-  activateMedia: () => Promise<void>;
+  activateMedia: () => Promise<MediaReadinessState>;
   mediaError: MediaError;
   orientation: Orientation;
   /** Issue #27: tapping either empty seat tile — omitted entirely (not just disabled) when the viewer already holds a seat, since a seated speaker has no use for it. */

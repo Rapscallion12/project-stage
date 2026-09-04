@@ -1,6 +1,6 @@
 import { mediaErrorMessage } from "@/components/room/room-controls";
 import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
-import type { MediaError } from "@/hooks/use-live-room-connection";
+import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 
 /**
  * Speaker View's only entry point back to `activateMedia()` (issue #18,
@@ -99,7 +99,7 @@ export function SpeakerMediaActivationPrompt({
   needsMediaActivation: boolean;
   /** Issue #18 unified inactive-speaker finding: true once media is activated but both camera and microphone are muted — see `lib/speaker-presence.ts`'s `isLocalMediaInactive`. Always false while `needsMediaActivation` is true (nothing to mute if nothing's published). */
   bothMediaMuted: boolean;
-  activateMedia: () => Promise<void>;
+  activateMedia: () => Promise<MediaReadinessState>;
   mediaError: MediaError;
   inactiveSince: string | null;
 }) {

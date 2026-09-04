@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExpandedComments } from "./expanded-comments";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 const { sendMessage, submitSpeakerRequest, addReaction, voteForSpeakerRequest } = vi.hoisted(() => ({
   sendMessage: vi.fn(),
@@ -57,7 +60,7 @@ const baseProps = {
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
   onHasPendingRequestChange: vi.fn(),
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
 };
 
 describe("ExpandedComments (issue #21, Discussion Expanded)", () => {

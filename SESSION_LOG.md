@@ -4,6 +4,162 @@ Newest entry first.
 
 ---
 
+## 2026-09-04 — Session 66: Media Readiness + Audio Visualizer pass — gate real seat claims on verified camera+microphone, replace the dead camera-off tile with a real audio visualizer (issue #21)
+
+**Goal**: close the "unprepared candidate becomes seated, kicked later"
+gap — neither `useAutomaticPromotion`'s auto-promotion claim nor
+`handleTapEmptySeat`'s direct join had any media-readiness precondition;
+the only existing safety net (`MEDIA_ACTIVATION_GRACE_MS`, 30s) only
+fires *after* seating. Also: replace the dead "Camera off" tile for a
+seat with camera off but mic actually publishing (a fully valid,
+intentional post-join state) with a real, audio-reactive visualizer.
+
+**Current media flow audited first**, per explicit instruction, not
+assumed: traced RTS submit → candidate selection/reservation
+(`ensureActiveSelectionRound`) → `useAutomaticPromotion`'s countdown →
+unconditional `claimOpenSeat` → `event_speakers` row → LiveKit token
+mint (`shouldPublish`) → `SpeakerTile`/`SpeakerStage` rendering →
+`MEDIA_ACTIVATION_GRACE_MS` post-seating eviction. Confirmed directly
+(not assumed) that both `claimOpenSeat` call sites fire with zero media
+precondition, and that `simulator-actions.ts` calls `claimSpeakerSeat`
+(the repository function) directly — never through the client-facing
+actions this pass gates — so the simulator is structurally unaffected by
+construction, no new bypass code needed.
+
+**Three concepts kept distinct**, per instruction: (A) requesting to
+speak (RTS submit, untouched), (B) becoming a speaker (the seat claim —
+now gated), (C) media state after already being a speaker (existing
+mute/inactivity system, untouched). Gate placed at (B), immediately
+before both `claimOpenSeat` call sites, not at RTS-submit time — see
+DECISIONS.md for the reasoning.
+
+**`prepareLocalMedia` rewritten**: camera and microphone are now acquired
+via two independent calls (`createLocalAudioTrack`/`createLocalVideoTrack`,
+dispatched synchronously via `Promise.allSettled` — still gesture-safe)
+instead of one combined `createLocalTracks({audio, video})`. This is what
+makes a camera-only or mic-only failure distinguishable, and what makes a
+retry only re-acquire the device that actually failed rather than
+re-prompting for one that already succeeded. New exported
+`MediaReadinessState` (`{camera: {ready, error}, microphone: {ready,
+error}}`), kept alongside the existing aggregate `mediaError` (issue #22),
+not replacing it. New `describeMediaReadinessFailure` helper for the
+direct-join path's single-line failure text.
+
+**Seat-claim gate, both paths**: `handleTapEmptySeat` now awaits
+`prepareLocalMedia()`'s result *inside* the existing `startJoiningSeat`
+transition (captured synchronously, for the Safari gesture requirement)
+before calling `joinOpenSeat` — a failed readiness never calls it at all,
+surfacing the specific device(s) that failed via the existing
+`joinSeatMessage` convention. `useAutomaticPromotion` gained
+`cameraReady`/`microphoneReady` params; its claim effect now no-ops at
+`countdown === 0` until both are true (countdown stays frozen at 0 — an
+already-established display state, not a new one) instead of firing
+unconditionally. A new bounded 45s effect calls the *existing* `cancel()`
+(the same "Cancel"/"Withdraw" → `withdrawSpeakerRequest` path) if
+readiness never succeeds — no new replacement-queue mechanism.
+
+**New `StageReadinessPrompt`** ("Ready to speak?" / "Camera & microphone
+required", per-device Camera/Microphone status rows, Enable/Try Again
+button, a settings hint specifically for permission-denied): one
+component, a `compact` flag for two render contexts — `RoomControls`'
+existing pending-candidate block (desktop, replacing "Going live in 0…"
+for exactly that instant) and `PortraitRoom`/`MobileLandscapeRoom`'s
+center-stage overlay slot (replacing `CountdownOverlay` at countdown 0
+while unready). Once both devices report ready, this stops rendering and
+the already-gated claim fires on its own — no extra confirmation modal.
+
+**New `AudioOnlyVisualizer`**: audited the installed LiveKit surface
+first — `@livekit/components-react` (which ships `BarVisualizer`) isn't
+installed; `createAudioAnalyser` (confirmed exported from the installed
+`livekit-client@^2.21.0`) is the lower-level primitive it's presumably
+built on, used directly instead of adding a new dependency. Bar heights
+are written straight to DOM refs inside a `requestAnimationFrame` loop,
+never via `setState`. Driven by `microphonePublication.track` — the same
+prop for local self-view, audience-of-remote, and speaker-viewing-partner,
+no separate local/remote implementation. Wired into `SpeakerTile` as a
+new branch (camera off, mic live+unmuted), after the inactivity check
+(inactivity still wins if both are somehow true) and before the
+simulated-speaker placeholder.
+
+**Explicitly untouched, confirmed by reading the actual code, not
+assumed**: RTS ranking/tie-break, replacement reservation, shared
+rounds/Final 30, seat lifecycle semantics, guest participation, comments,
+voting, desktop header, Room Info, Supabase/LiveKit architecture, the
+post-seating both-off inactivity grace period (`MEDIA_ACTIVATION_GRACE_MS`
+itself is a completely separate timer from this pass's new 45s
+readiness timeout), simulator behavior (unaffected by construction, not
+by a new gate).
+
+**Testing** (Section 24's explicit list): new coverage in
+`use-live-room-connection.test.ts` (camera-only failure, mic-only
+failure, retry re-acquires only the failed device, idempotency) —
+also fixed a real pre-existing staleness bug found while doing this: the
+whole file's media-acquisition mocks still referenced the old, no-longer-
+called `createLocalTracks`, silently passing only because nothing
+asserted on the resulting `localVideoTrack`/`mediaError` state in most
+cases; one test (`does not reconcile — and does not overwrite —...`)
+was a real, currently-failing regression once the rewrite from the
+previous session's own carryover work was accounted for, now fixed.
+`use-automatic-promotion.test.ts` gained a dedicated readiness-gate
+describe block (never claims before both ready; camera-only/mic-only/
+both-false readiness; retry success fires the withheld claim without a
+new tap; retry failure releases via the existing cancel() path once the
+45s timeout elapses; a successful retry inside the window never
+triggers the timeout). `event-room.test.tsx` gained a direct-join
+readiness-gate describe block (camera-only/mic-only/both-failure never
+call `joinOpenSeat`, each with its specific failure text; success calls
+it normally). `speaker-tile.test.tsx` gained an audio-only-visualizer
+describe block (renders for camera-off+mic-on; ordinary placeholder for
+both-off; real video takes over once camera returns; identical for the
+local speaker's own seat; inactivity still wins if both are somehow
+true at once).
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite clean: **96 files / 1303 tests,
+   zero failures** (up from 96/1286).
+2. **Production interaction** — local dev server, real Supabase-backed
+   throwaway test account (`npm run dev:harness -- seat`, deleted
+   afterward), real browser (not a unit-test mock): logged in as the
+   seated test account, clicked "Leave the stage" to vacate the seat,
+   then tapped the now-empty seat as that same signed-in account —
+   confirmed the tile immediately switched to disabled "Joining…" (not
+   an instant claim) and a real `navigator.mediaDevices.getUserMedia`
+   call was dispatched (confirmed directly via `page.evaluate` in the
+   same origin) — and, critically, confirmed the seat was **never**
+   claimed while that call stayed unresolved: no `event_speakers` row
+   appeared, both tiles stayed on "Joining…" indefinitely rather than
+   either tile becoming occupied. This is the actual invariant this pass
+   exists to prove (no claim before verified readiness) exercised against
+   a real browser API call, not a mocked one. This environment's browser
+   automation has no fake-camera/mic device flag and no way to answer the
+   native OS/browser permission dialog (invisible to the accessibility
+   tree), so the actual grant path, the deny→recovery path, and the
+   visualizer's real audio reactivity could not be observed this way —
+   see the Real-device item below for what that leaves outstanding. Once
+   pushed, also confirmed the preview deployment itself is live and
+   responding (see the link above).
+3. **Real-device: UNVERIFIED — requires real-device/real-browser testing**
+   with an actual camera and microphone. Checklist: (1) tap an empty seat
+   or let an RTS win reach the "Ready to speak?" prompt, grant camera+mic
+   when the browser asks, confirm you actually go live with no extra
+   confirmation step; (2) deny/block camera or mic, confirm you stay off
+   stage with the specific "Camera & microphone required" message (not a
+   raw browser error) and a working Try Again; (3) once live, turn your
+   camera off — confirm the audio-only visualizer appears and visibly
+   reacts while you speak, settles while silent, and disappears the
+   instant the camera comes back on; (4) on a second device/browser as
+   audience, confirm you see that same visualizer reacting to the
+   speaker's real transmitted audio, not just on the speaker's own
+   screen; (5) mobile Safari specifically at ~390×844/844×390 — the
+   permission flow, denial state, and visualizer must not clip, cause
+   accidental navigation, or ignore safe areas.
+
+Not merged to `main`.
+
+---
+
 ## 2026-09-04 — Session 65: Desktop room navigation pass — a persistent desktop-only header restoring one-click Home/Events/account access (real-desktop regression report)
 
 **Goal**: a narrow desktop-only layout fix. Real-desktop feedback: hiding

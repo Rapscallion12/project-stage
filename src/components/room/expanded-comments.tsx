@@ -9,6 +9,7 @@ import { ProfileLink } from "@/components/room/profile-link";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 
 /** Two taps on the same row within this window count as a double-tap-to-like — long enough for a real double-tap, short enough not to pair up two unrelated taps. */
 const DOUBLE_TAP_MS = 350;
@@ -124,7 +125,7 @@ export function ExpandedComments({
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   allowMicRequest?: boolean;
   hasPendingRequest?: boolean;
   onCancelPendingRequest?: () => void;

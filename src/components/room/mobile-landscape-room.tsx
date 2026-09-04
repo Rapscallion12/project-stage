@@ -6,6 +6,7 @@ import { AmbientComments } from "@/components/room/ambient-comments";
 import { ExpandedComments } from "@/components/room/expanded-comments";
 import { SpeakerVotePanel } from "@/components/room/speaker-vote-panel";
 import { CountdownOverlay } from "@/components/room/countdown-overlay";
+import { StageReadinessPrompt } from "@/components/room/stage-readiness-prompt";
 import { SpeakerViewTopChrome } from "@/components/room/speaker-view-top-chrome";
 import { MobileLandscapeSpeakerView } from "@/components/room/mobile-landscape-speaker-view";
 import { ChatPanel } from "@/components/lobby/chat-panel";
@@ -107,6 +108,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
     needsMediaActivation,
     activateMedia,
     mediaError,
+    mediaReadiness,
+    acquiringMedia,
     localVideoTrack,
     onPrepareMedia,
     reconnectingIdentities,
@@ -156,7 +159,20 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
         // PortraitRoom — landscape uses the same available stage area
         // rather than any dedicated/legacy layout. See CountdownOverlay
         // and PortraitRoom's own doc comment.
-        <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+        promotionCountdown === 0 && !(mediaReadiness.camera.ready && mediaReadiness.microphone.ready) ? (
+          // Media Readiness pass (issue #21): same gate as PortraitRoom's
+          // identical branch — see its own comment.
+          <div className="pointer-events-auto absolute inset-0 z-10 flex items-center justify-center gap-2 px-6 text-center">
+            <StageReadinessPrompt
+              mediaReadiness={mediaReadiness}
+              acquiringMedia={acquiringMedia}
+              onPrepareMedia={onPrepareMedia}
+              onCancel={onCancelPromotion}
+            />
+          </div>
+        ) : (
+          <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+        )
       ) : (
         <>
           <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">

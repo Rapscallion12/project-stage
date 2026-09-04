@@ -4,6 +4,7 @@ import { PortraitSpeakerView } from "./portrait-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
@@ -23,6 +24,7 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
   addReaction,
 }));
 
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -83,10 +85,12 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: true,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
@@ -342,7 +346,7 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
     });
 
     it("tapping it calls the same activateMedia already wired through this view's props", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(<PortraitSpeakerView {...baseProps} needsMediaActivation={true} activateMedia={activateMedia} />);
       screen.getByTestId("speaker-view-activate-media").click();
       expect(activateMedia).toHaveBeenCalledTimes(1);
@@ -370,10 +374,10 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
     });
 
     it("opening and closing it never changes role, mic/camera, or LiveKit-adjacent state — no callback passed through this view fires", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       const toggleMicrophone = vi.fn(async () => {});
       const toggleCamera = vi.fn(async () => {});
-      const onPrepareMedia = vi.fn(async () => {});
+      const onPrepareMedia = vi.fn(async () => MEDIA_READY);
       render(
         <PortraitSpeakerView
           {...baseProps}
@@ -402,7 +406,7 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
     });
 
     it("double-tapping a comment to like it has no role/media/LiveKit side effects for a seated speaker", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       const toggleMicrophone = vi.fn(async () => {});
       const toggleCamera = vi.fn(async () => {});
       render(

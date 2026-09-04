@@ -6,6 +6,9 @@ import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { Identity } from "@/lib/identity";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 function pendingRequest(overrides: Partial<RankedPendingRequest> = {}): RankedPendingRequest {
   return {
@@ -83,7 +86,7 @@ const baseProps = {
   isSpeaker: false,
   mySeatNumber: null as 1 | 2 | null,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
   onTapEmptySeat: vi.fn(),
   isJoiningSeat: false,

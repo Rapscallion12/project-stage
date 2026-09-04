@@ -4,6 +4,7 @@ import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
@@ -28,6 +29,7 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
   setGuestName,
 }));
 
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -66,10 +68,12 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: false,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
@@ -493,7 +497,7 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
 
     it("closing the sheet returns to the ordinary Watch Mode view, with no role/media/seat side effects", () => {
       const onTapEmptySeat = vi.fn();
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       const toggleMicrophone = vi.fn(async () => {});
       const toggleCamera = vi.fn(async () => {});
       render(

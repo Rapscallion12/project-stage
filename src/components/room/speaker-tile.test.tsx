@@ -4,6 +4,29 @@ import type { Participant, Track, TrackPublication } from "livekit-client";
 import { SpeakerTile } from "./speaker-tile";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+// Media Readiness pass (issue #21): jsdom has no real Web Audio API
+// (AudioContext/AnalyserNode), so createAudioAnalyser — the one function
+// AudioOnlyVisualizer calls — is mocked here to a harmless stand-in. This
+// file exercises SpeakerTile's own state selection (which placeholder
+// renders when), not the analyser's real frame-by-frame math, which has
+// no meaningful jsdom-testable behavior of its own (no real audio
+// hardware, no real rAF-driven canvas) — see AudioOnlyVisualizer's own
+// doc comment.
+vi.mock("livekit-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("livekit-client")>();
+  return {
+    ...actual,
+    createAudioAnalyser: vi.fn(() => ({
+      calculateVolume: () => 0,
+      analyser: {} as AnalyserNode,
+      cleanup: vi.fn(async () => {}),
+    })),
+  };
+});
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -28,6 +51,10 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
 }
 
 function fakeVideoTrack(): Track {
+  return { attach: vi.fn(), detach: vi.fn() } as unknown as Track;
+}
+
+function fakeAudioTrack(): Track {
   return { attach: vi.fn(), detach: vi.fn() } as unknown as Track;
 }
 
@@ -153,6 +180,54 @@ describe("SpeakerTile", () => {
     expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
   });
 
+  describe("audio-only visualizer (Media Readiness pass, issue #21, Section 12): camera off, mic actually publishing", () => {
+    it("shows the audio-only visualizer, not the generic 'Camera off' placeholder, when camera is off but the microphone track is live and unmuted", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(screen.getByTestId("audio-only-visualizer")).toBeInTheDocument();
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("still shows the ordinary 'Camera off' placeholder when the microphone is also off/muted — both-off is unaffected by this pass", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: true } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+    });
+
+    it("shows real video instead once the camera comes back on — the visualizer never coexists with, or blocks, the video branch", () => {
+      const micTrack = fakeAudioTrack();
+      const cameraTrack = fakeVideoTrack();
+      const participant = fakeParticipant({
+        microphone: { track: micTrack, isMuted: false },
+        camera: { track: cameraTrack, isMuted: false },
+      });
+      const { container } = render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+      expect(container.querySelector("video")).toBeInTheDocument();
+    });
+
+    it("reaches the visualizer identically for the local speaker's own seat (Section 15: self-view is not a separate code path)", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} />);
+      expect(screen.getByTestId("audio-only-visualizer")).toBeInTheDocument();
+    });
+
+    it("inactivity still takes precedence over the visualizer if both are somehow true at once — the existing safety net is never shadowed", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
+      render(
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={false} isInactive={true} />,
+      );
+      expect(screen.getByTestId("speaker-inactive")).toBeInTheDocument();
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+    });
+  });
+
   it("still shows the speaker's name and seat even if they have media issues (DB stays authoritative)", () => {
     const participant = fakeParticipant({ camera: { track: undefined } });
     render(<SpeakerTile speaker={speaker({ display_name: "Priya" })} participant={participant} isLocal={false} />);
@@ -178,7 +253,7 @@ describe("SpeakerTile", () => {
           participant={undefined}
           isLocal={true}
           needsMediaActivation={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
         />,
       );
       expect(screen.getByTestId("tile-activate-media")).toHaveTextContent("Tap to enable camera & mic");
@@ -186,7 +261,7 @@ describe("SpeakerTile", () => {
     });
 
     it("calls activateMedia directly from the tile's own click handler — the real user gesture Safari requires", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(
         <SpeakerTile
           speaker={speaker()}
@@ -207,7 +282,7 @@ describe("SpeakerTile", () => {
           participant={undefined}
           isLocal={false}
           needsMediaActivation={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
         />,
       );
       expect(screen.queryByTestId("tile-activate-media")).not.toBeInTheDocument();
@@ -261,7 +336,7 @@ describe("SpeakerTile", () => {
           participant={undefined}
           isLocal={true}
           needsMediaActivation={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
         />,
       );
       expect(screen.getByTestId("tile-activate-media")).toBeInTheDocument();

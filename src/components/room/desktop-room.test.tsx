@@ -4,6 +4,7 @@ import { DesktopRoom } from "./desktop-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
   leaveSpeakerSeat: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 
 Element.prototype.scrollTo = vi.fn();
 
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -56,10 +58,12 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: false,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},

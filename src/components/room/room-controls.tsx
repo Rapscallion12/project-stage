@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { leaveSpeakerSeat } from "@/app/events/[id]/room/actions";
-import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
+import { StageReadinessPrompt } from "@/components/room/stage-readiness-prompt";
+import type { ConnectionStatus, MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventPhase } from "@/lib/events";
 
 /**
@@ -81,6 +82,8 @@ export function RoomControls({
   activateMedia,
   onPrepareMedia,
   mediaError,
+  mediaReadiness,
+  acquiringMedia,
   connectionStatus,
   phase,
   countdownText,
@@ -93,10 +96,13 @@ export function RoomControls({
   onCancelPromotion: () => void;
   canPublish: boolean;
   needsMediaActivation: boolean;
-  activateMedia: () => Promise<void>;
+  activateMedia: () => Promise<MediaReadinessState>;
   /** Issue #22: retries camera/mic acquisition for a still-pending candidate whose prepareLocalMedia failed — same gesture requirement as activateMedia. */
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   mediaError: MediaError;
+  /** Media Readiness pass (issue #21): per-device readiness for the stage-readiness gate — see `StageReadinessPrompt`. */
+  mediaReadiness: MediaReadinessState;
+  acquiringMedia: boolean;
   connectionStatus: ConnectionStatus;
   /** Issue #17: requesting the mic works from lobby_open onward, but going live is still gated to "ready" — enforced server-side (checkPromotionEligibility/claimOpenSeat), not just here. */
   phase: EventPhase;
@@ -179,6 +185,25 @@ export function RoomControls({
         </Button>
       </div>
     );
+
+    // Media Readiness pass (issue #21): the countdown reaching exactly 0
+    // with either device still unready is the seat-claim gate itself —
+    // useAutomaticPromotion (EventRoom) deliberately withholds the actual
+    // claim in this state (see its own doc comment). Rendered in place of
+    // the normal "Going live in 0…" pill/panel for both compact and full
+    // layouts, not as a fifth confirmation step stacked on top of it.
+    const mediaReady = mediaReadiness.camera.ready && mediaReadiness.microphone.ready;
+    if (promotionCountdown === 0 && !mediaReady) {
+      return (
+        <StageReadinessPrompt
+          mediaReadiness={mediaReadiness}
+          acquiringMedia={acquiringMedia}
+          onPrepareMedia={onPrepareMedia}
+          onCancel={onCancelPromotion}
+          compact={compact}
+        />
+      );
+    }
 
     if (compact) {
       return (

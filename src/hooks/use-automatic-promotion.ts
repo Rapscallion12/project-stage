@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   checkPromotionEligibility,
   claimOpenSeat,
@@ -15,6 +15,16 @@ import type { EventPhase } from "@/lib/events";
 const POLL_INTERVAL_MS = 4000;
 export const PROMOTION_COUNTDOWN_SECONDS = 3;
 const MEDIA_ACTIVATION_GRACE_MS = 30_000;
+/**
+ * Media Readiness pass (issue #21): bounded window a candidate gets, once
+ * the countdown reaches zero, to grant camera+microphone before this hook
+ * gives up on them and releases the reservation for the next eligible
+ * candidate — see the readiness-timeout effect below. Distinct from
+ * `MEDIA_ACTIVATION_GRACE_MS` above, which governs an *already-seated*
+ * speaker going silent (both muted) — that grace period is untouched by
+ * this pass (Section 17: it solves a different, after-join problem).
+ */
+const MEDIA_READINESS_TIMEOUT_MS = 45_000;
 
 /**
  * Issue #23: replaces the manual "Claim your seat" button with automatic,
@@ -75,6 +85,22 @@ export function useAutomaticPromotion(params: {
   phase: EventPhase;
   needsMediaActivation: boolean;
   mediaError: MediaError;
+  /**
+   * Media Readiness pass (issue #21): whether camera/microphone tracks
+   * have actually been verified for *this* candidacy — see
+   * `MediaReadinessState` (use-live-room-connection.ts). The claim effect
+   * below will not fire `claimOpenSeat` until both are true, closing the
+   * "unprepared candidate becomes seated, kicked later" gap the grace
+   * period at `MEDIA_ACTIVATION_GRACE_MS` used to be the only defense
+   * against. The caller is responsible for actually prompting the
+   * candidate to grant media (see `MediaReadinessPrompt`) — this hook
+   * only reacts to the resulting readiness, it never calls
+   * `prepareLocalMedia` itself (that acquisition must originate from a
+   * real click, not a timer, for the Safari gesture requirement this
+   * codebase already documents elsewhere).
+   */
+  cameraReady: boolean;
+  microphoneReady: boolean;
   onHasPendingRequestChange: (value: boolean) => void;
   /** Issue #18 real-device finding (2026-08-28): called immediately once `claimOpenSeat` reports success — see the claim effect below for why this can't wait solely on `isSpeaker` eventually flipping via Realtime the way it used to. */
   onClaimSucceeded: () => void;
@@ -87,9 +113,12 @@ export function useAutomaticPromotion(params: {
     phase,
     needsMediaActivation,
     mediaError,
+    cameraReady,
+    microphoneReady,
     onHasPendingRequestChange,
     onClaimSucceeded,
   } = params;
+  const mediaReady = cameraReady && microphoneReady;
   const [countdown, setCountdown] = useState<number | null>(null);
   // Issue #18 UX finding fix: true for exactly as long as a Cancel is in
   // flight (from the moment the user taps it until `withdrawSpeakerRequest`
@@ -148,6 +177,15 @@ export function useAutomaticPromotion(params: {
   useEffect(() => {
     if (countdown === null) return;
     if (countdown <= 0) {
+      // Media Readiness pass (issue #21): the hard seat-claim invariant —
+      // `claimOpenSeat` below must never fire for this candidacy until
+      // both devices are verified. Countdown simply stays frozen at 0
+      // (already an established, legitimate display state per the long
+      // comment below) while unready; `MediaReadinessPrompt` is what the
+      // candidate actually sees and acts on during this window, and the
+      // readiness-timeout effect further down is what stops this from
+      // holding the reservation forever if they never do.
+      if (!mediaReady) return;
       // The real, independently-revalidated claim — see
       // checkPromotionEligibility's doc comment for why this can't
       // itself be trusted from the countdown having merely reached zero.
@@ -192,7 +230,7 @@ export function useAutomaticPromotion(params: {
     }
     const timeout = setTimeout(() => setCountdown((seconds) => (seconds === null ? null : seconds - 1)), 1000);
     return () => clearTimeout(timeout);
-  }, [countdown, eventId, onClaimSucceeded]);
+  }, [countdown, eventId, onClaimSucceeded, mediaReady]);
 
   // Issue #18 UX finding fix: the single reconciliation point for this
   // hook's own `countdown` state, keyed to the one authoritative
@@ -216,7 +254,7 @@ export function useAutomaticPromotion(params: {
     return () => clearTimeout(timeout);
   }, [isSpeaker, needsMediaActivation, mediaError, eventId]);
 
-  function cancel() {
+  const cancel = useCallback(() => {
     setIsCancelling(true);
     setCountdown(null);
     // Both state updates below happen in this one `.then()` callback,
@@ -230,7 +268,27 @@ export function useAutomaticPromotion(params: {
       if (!("error" in result)) onHasPendingRequestChange(false);
       setIsCancelling(false);
     });
-  }
+  }, [eventId, onHasPendingRequestChange]);
 
-  return { countdown, cancel };
+  // Media Readiness pass (issue #21), Section 18: a candidate must not
+  // hold the reservation forever just because they never grant media (or
+  // keep failing/retrying). Once the countdown has actually reached zero
+  // and readiness still isn't both-true, this starts a single bounded
+  // timer; if it elapses before `mediaReady` flips true, it releases the
+  // reservation through the *existing* authoritative candidate-release
+  // path — the same `cancel()`/`withdrawSpeakerRequest` "Cancel" already
+  // uses — which is what actually frees the seat for the next eligible
+  // candidate (no new replacement-queue mechanism). Any progress
+  // (`mediaReady` becoming true, or the countdown/candidacy resetting for
+  // an unrelated reason) clears and restarts this the same way the
+  // 1-second countdown timeout above already does.
+  useEffect(() => {
+    if (countdown !== 0 || mediaReady) return;
+    const timeout = setTimeout(() => {
+      cancel();
+    }, MEDIA_READINESS_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [countdown, mediaReady, cancel]);
+
+  return { countdown, cancel, mediaReady };
 }

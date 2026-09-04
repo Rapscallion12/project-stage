@@ -1,5 +1,5 @@
 import type { LocalVideoTrack, Participant } from "livekit-client";
-import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
+import type { ConnectionStatus, MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { EventPhase } from "@/lib/events";
 import type { Identity } from "@/lib/identity";
@@ -85,12 +85,16 @@ export type RoomLayoutProps = {
   /** True once canPublish but camera/mic hasn't been activated in this tab — RoomControls shows an explicit tap-to-enable affordance for this (see activateMedia's own doc comment for why it can't just happen automatically). */
   needsMediaActivation: boolean;
   /** Must be invoked directly from a click handler — see useLiveRoomConnection's activateMedia. */
-  activateMedia: () => Promise<void>;
+  activateMedia: () => Promise<MediaReadinessState>;
   mediaError: MediaError;
+  /** Media readiness pass: per-device camera/microphone readiness — see useLiveRoomConnection's own doc comment on MediaReadinessState. */
+  mediaReadiness: MediaReadinessState;
+  /** Media readiness pass: true while a prepareLocalMedia()/activateMedia() acquisition is in flight. */
+  acquiringMedia: boolean;
   /** Issue #22: the local participant's own held camera track (prepared ahead of promotion, or already published), or null when there's nothing to preview — see SpeakerStage/SelfPreview. */
   localVideoTrack: LocalVideoTrack | null;
   /** Issue #22: acquires camera+mic once, ahead of any seat — triggered from the mic-request composer's own submit gesture (see ChatPanel), never automatically. */
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   /** Real-device reconnect-grace-period finding: LiveKit identities currently believed disconnected-but-within-grace — see useSpeakerReconnectGrace and SpeakerTile's own isReconnecting doc comment. */
   reconnectingIdentities: ReadonlySet<string>;
   messages: LobbyMessage[];

@@ -72,6 +72,8 @@ export function DesktopRoom({
   needsMediaActivation,
   activateMedia,
   mediaError,
+  mediaReadiness,
+  acquiringMedia,
   localVideoTrack,
   onPrepareMedia,
   reconnectingIdentities,
@@ -137,6 +139,8 @@ export function DesktopRoom({
             activateMedia={activateMedia}
             onPrepareMedia={onPrepareMedia}
             mediaError={mediaError}
+            mediaReadiness={mediaReadiness}
+            acquiringMedia={acquiringMedia}
             connectionStatus={connectionStatus}
             phase={phase}
             countdownText={countdownText}

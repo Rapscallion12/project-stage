@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MessageItem } from "@/components/lobby/message-item";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 
 const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
 
@@ -157,7 +158,7 @@ export function ChatPanel({
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   compact?: boolean;
   allowMicRequest?: boolean;
   /** Issue #18 UX finding: drives the mic button's third (pending) visual state — see this component's own doc comment. */

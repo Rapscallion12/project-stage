@@ -3,6 +3,136 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-04 — Media Readiness + Audio Visualizer pass: gate real seat claims on verified camera+microphone, replace the dead camera-off tile with a real audio visualizer (issue #21)
+
+**Problem**: neither of the two paths that seat a real speaker
+(`useAutomaticPromotion`'s auto-promotion claim, and `handleTapEmptySeat`'s
+direct join for an uncontested seat) had any media-readiness precondition
+— `claimOpenSeat` fired unconditionally. The only existing safety net,
+`MEDIA_ACTIVATION_GRACE_MS` (30s), only starts *after* the candidate is
+already seated, so an unprepared candidate could occupy a seat, publish
+nothing, and only get evicted half a minute later. Separately, a speaker
+with camera off (mic on — a fully valid, intentional state) rendered as a
+dead "Camera off" placeholder tile, wasting screen space that could
+usefully show *something* reflecting that they're actually speaking.
+
+**Decision — gate at claim time, not at RTS-submit time.** Three
+distinct concepts, kept distinct: (A) requesting to speak (RTS submit —
+untouched), (B) becoming a speaker (the seat claim itself — now gated),
+(C) media state after already being a speaker (existing mute/inactivity
+system — untouched). The gate sits at (B), immediately before
+`claimOpenSeat` fires in both paths, not earlier at RTS-submit time —
+submitting a request shouldn't require media any more than requesting
+never guaranteed a seat in the first place; the correct point to demand
+verified devices is the instant a real claim is about to happen.
+
+- **Alternatives considered**: gating at RTS-submit time instead (reject
+  a request outright if media isn't ready). Rejected — RTS is a queue
+  position, not a guarantee of imminent seating (could be minutes away);
+  demanding camera/mic access that early needlessly narrows who can even
+  join the queue, and a device that was fine at submit time could still
+  fail by the time a seat opens, so the real gate still has to live at
+  claim time regardless.
+
+**Decision — two independent track-acquisition calls, not one combined
+call.** `prepareLocalMedia` (the hook) switched from a single
+`createLocalTracks({audio, video})` (all-or-nothing) to
+`Promise.allSettled([createLocalAudioTrack(), createLocalVideoTrack()])`
+— both still dispatched synchronously within the same gesture-safe call
+(both `getUserMedia`-backed calls are *created* before either `await`
+yields, preserving the Safari user-gesture requirement this codebase has
+documented since issue #15). This is what makes camera-succeeds-mic-fails
+(and the reverse) actually distinguishable, and what makes a retry after
+a partial failure only re-acquire the device that actually failed rather
+than re-prompting for a device that already succeeded — a materially
+better retry UX than the old combined call could ever produce, at the
+cost of two `getUserMedia` calls in flight instead of one (immaterial in
+practice; the browser handles both concurrently).
+
+**Decision — new `MediaReadinessState`, kept alongside the existing
+aggregate `mediaError`, not replacing it.** `mediaError` (issue #22) is
+still the *aggregate*, most-recent-failure signal the post-join
+activation prompt already reads. `MediaReadinessState` is a new,
+per-device `{camera: {ready, error}, microphone: {ready, error}}` the
+pre-join gate needs (it has to know *which* device failed to render two
+separate status rows) — deriving the gate's UI from the aggregate would
+have lost that distinction. Both are kept in sync from the same
+`prepareLocalMedia` call, not two independent acquisition paths.
+
+**Decision — reuse the existing candidate-release path for a stalled
+reservation, no new replacement mechanism.** `useAutomaticPromotion`
+already had `cancel()` (the existing "Cancel"/"Withdraw" action, wired to
+`withdrawSpeakerRequest`) — a new bounded 45s effect calls that same
+`cancel()` if `countdown === 0` and readiness still isn't both-true. This
+is the identical mechanism a user-initiated Cancel already uses; the next
+eligible candidate's own polling picks up the freed reservation exactly
+as it already does for any other cancellation. No new replacement queue,
+no new authority.
+
+- **Alternatives considered**: inventing a dedicated "candidate skip" RPC.
+  Rejected — `withdrawSpeakerRequest`/the existing selection-reconciliation
+  poll already fully cover "this reservation is no longer good, find the
+  next eligible candidate"; a second mechanism for the identical outcome
+  would only be duplicate authority to keep in sync.
+
+**Decision — `AudioOnlyVisualizer` built on `livekit-client`'s own
+`createAudioAnalyser`, not `@livekit/components-react`'s `BarVisualizer`
+or a hand-rolled Web Audio implementation.** Confirmed via direct
+inspection (`node_modules/@livekit/`) that `@livekit/components-react`
+(which ships `BarVisualizer`) isn't installed — adding it would be a new
+dependency and would conflict with this project's established
+no-component-library convention (see ARCHITECTURE.md's vendor
+portability section). `createAudioAnalyser` (confirmed exported from the
+already-installed `livekit-client@^2.21.0` via its own
+`dist/src/room/utils.d.ts`) is the lower-level primitive
+`BarVisualizer` itself is presumably built on — using it directly gets
+the same real-audio-driven analysis LiveKit's own SDK provides, with zero
+new dependencies. Bar heights are written straight to DOM refs inside a
+`requestAnimationFrame` loop, never through `setState`, so a room full of
+camera-off speakers never triggers a React re-render per audio frame —
+the same "mutate refs directly in rAF" performance pattern already
+established elsewhere in this codebase.
+
+**Decision — the visualizer is derived from whichever track the *viewer's
+own client* already holds, not a local-only special case.** `SpeakerTile`
+passes `microphonePublication.track` — for the local speaker viewing
+themselves, that's `room.localParticipant`'s own published mic track; for
+the audience or a co-speaker, it's the subscribed remote track. One
+render branch, one prop, no separate local/remote visualizer
+implementations to keep in sync.
+
+**Security boundary — documented explicitly, not overstated.** Browser
+media tracks are inherently client-side; the database cannot cryptographically
+prove a camera exists. What changed is entirely a *client-enforced*
+precondition on *when* the client is willing to call `claimOpenSeat` —
+the real security boundary is unchanged and remains exactly where it was:
+`claimOpenSeat`/`checkPromotionEligibility` server-side (via
+`getActiveSeatForIdentity`/the atomic reservation RPC) are what actually
+decide whether *this* identity may claim *this* seat, regardless of what
+the client claims about its own media state. LiveKit's own publish
+permission grant (`shouldPublish`, minted server-side from current
+`event_speakers` occupancy — see the LiveKit authorization model in
+ARCHITECTURE.md) is the second, independent layer that was already true
+before this pass and remains untouched by it.
+
+**Simulator unaffected by construction, not by a new bypass.** Confirmed
+via `grep` that `simulator-actions.ts` calls `claimSpeakerSeat` (the
+repository function) directly — it never routes through the client-facing
+`claimOpenSeat`/`checkPromotionEligibility` actions this pass gates, so
+no new dev-only bypass code was needed for the simulator to keep working
+exactly as before.
+
+**Tradeoffs**: the RTS/auto-promotion path gets the full readiness-gate
+UI (`StageReadinessPrompt` — per-device status, Try Again, settings
+hint); the direct-join path (`handleTapEmptySeat`, issue #27's
+uncontested-empty-seat tap) reuses the simpler, already-established
+`joinSeatMessage` inline-alert convention instead of a second full gate
+UI, on the reasoning that direct-join is the less common path (fires only
+for a genuinely uncontested empty seat) and building two full gate UIs
+risked not finishing this pass at all — both paths enforce the identical
+hard invariant (no claim without verified readiness) regardless of which
+UI surfaces the failure.
+
 ## 2026-09-04 — Desktop room navigation pass: a persistent desktop-only header restoring one-click Home/Events/account access (real-desktop regression report)
 
 **Problem**: hiding the site-wide `SiteHeader` for the whole time a room

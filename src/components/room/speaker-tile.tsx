@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Track, type Participant } from "livekit-client";
+import { Track, type LocalAudioTrack, type Participant, type RemoteAudioTrack } from "livekit-client";
 import { cn } from "@/lib/utils";
 import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
 import { useSpeakerRoundCountdown } from "@/hooks/use-speaker-round-countdown";
 import { inactiveSince } from "@/lib/speaker-presence";
 import { ParticipantAvatar } from "@/components/room/participant-avatar";
 import { ProfileLink } from "@/components/room/profile-link";
-import type { MediaError } from "@/hooks/use-live-room-connection";
+import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
+import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
 import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
@@ -75,7 +76,7 @@ export function SpeakerTile({
   /** Issue #15 real-device follow-up: true once the local participant has canPublish but hasn't tapped to activate media yet. Only ever meaningful when isLocal is true — a remote tile never shows this. */
   needsMediaActivation?: boolean;
   /** Must be invoked directly from this tile's own onClick — see useLiveRoomConnection's activateMedia doc comment for why. */
-  activateMedia?: () => Promise<void>;
+  activateMedia?: () => Promise<MediaReadinessState>;
   mediaError?: MediaError;
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
@@ -216,6 +217,13 @@ export function SpeakerTile({
   // speaker's own seat — see this component's doc comment. Only affects
   // rendering; the underlying publication is untouched.
   const showBigVideo = hasVideo && !isLocal;
+  // Media Readiness pass (issue #21), Section 12: camera off, mic
+  // actually publishing — the audio-only visualizer's own gate. Reads
+  // the same `microphonePublication` this tile already uses for the
+  // remote-playback `<audio>` element below (and, for the local
+  // participant, `room.localParticipant`'s own publication) — no second
+  // source of truth for "is this seat's mic live."
+  const hasAudio = Boolean(microphonePublication?.track && !microphonePublication.isMuted);
 
   useEffect(() => {
     const track = cameraPublication?.track;
@@ -356,6 +364,21 @@ export function SpeakerTile({
               : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
           </p>
         </div>
+      ) : hasAudio ? (
+        // Media Readiness pass (issue #21), Section 12: camera off, mic
+        // on — a fully valid post-join state (Section 11), never treated
+        // as a "camera off" dead end. Reached identically whether this
+        // tile is the local speaker's own seat, a remote speaker viewed
+        // by the audience, or a speaker viewing their co-speaker's tile
+        // (Section 15) — `microphonePublication.track` is already
+        // whichever real LiveKit audio track this viewer's own client
+        // holds for this seat.
+        <AudioOnlyVisualizer
+          track={microphonePublication!.track as LocalAudioTrack | RemoteAudioTrack}
+          displayName={speaker.display_name}
+          imageUrl={profileEntry?.avatarUrl}
+          username={profileEntry?.username ?? null}
+        />
       ) : isSimulated ? (
         <div
           data-testid="simulated-speaker-placeholder"
