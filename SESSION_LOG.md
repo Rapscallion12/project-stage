@@ -4,6 +4,115 @@ Newest entry first.
 
 ---
 
+## 2026-09-04 — Session 65: Desktop room navigation pass — a persistent desktop-only header restoring one-click Home/Events/account access (real-desktop regression report)
+
+**Goal**: a narrow desktop-only layout fix. Real-desktop feedback: hiding
+the site-wide header for the whole time a room is mounted (seventh
+corrective pass, issue #21) was correct for mobile's scarce vertical
+space, but the same blanket rule also hid ordinary Home/Events/account
+navigation on desktop, where there's no comparable pressure — the room
+read as an isolated tool rather than part of the product. No redesign,
+no live-stage logic touched.
+
+**Root cause confirmed, not assumed**: read `RoomHeader`/`DesktopRoom`/
+`globals.css`'s `body.room-active > header` rule directly — the site
+header truly is hidden unconditionally for the whole time any room
+composition is mounted, with no viewport carve-out; `RoomInfoOverlay`
+was the only path back to Home/Events/account on every composition,
+including desktop.
+
+**No new breakpoint** — audited `useIsDesktopViewport()` first (`min-
+width: 1024px`, Tailwind's `lg`) and confirmed it's already the exact
+gate that decides whether `DesktopRoom` (the sidebar+stage composition)
+mounts at all. The new header is built as part of `DesktopRoom` itself,
+so there's no scenario it could render at a width that gate wasn't
+already built for — introducing a second, independent threshold would
+only risk future drift between the two. Verified directly in the
+browser: 1024px (still desktop, comfortable), 1000px (correctly falls
+back to the compact `MobileLandscapeRoom` composition, header absent
+entirely).
+
+**New `DesktopRoomHeader`**: one full-width row, rendered as a sibling
+*above* `DesktopRoom`'s existing stage+sidebar `flex-row` (not nested
+inside either column) — the structural choice that guarantees alignment
+with both without coordinating two separately-sized header halves by
+hand. Left: Virtual Stage/Home + Events, both real navigable links.
+Center/flexible: the room's own identity — reuses `RoomHeader` itself
+(unmodified rendering, just embedded with its own border/padding
+stripped via two small new optional props — `className` and
+`roomInfoAriaLabel`, both defaulted so every existing caller is
+unaffected) rather than a second copy of that logic. Right: viewer
+count, then the account control — `HomeAccountMenu`, the exact same
+component the home page header already uses, not a new implementation;
+guests get the identical Log in/Sign up pair `SiteHeader`'s own guest
+branch renders. One new prop, `identityAvatarUrl` on `RoomLayoutProps`,
+mirrors the identical plumbing `RoomInfoOverlay` already had via
+`EventRoom`.
+
+**`RoomInfoOverlay`'s own content is completely untouched**, per the
+pass's own explicit instruction — it still shows its full description/
+navigation/account section on desktop, now redundant with the persistent
+header but harmlessly so. Its trigger's accessible name changed from
+"Room info and navigation for X" to "Room details for X" (via the new
+`roomInfoAriaLabel` override) — accurate now that navigation no longer
+routes through it on desktop, without touching what it actually renders.
+
+**Testing**: new `desktop-room-header.test.tsx` (10 tests — Home/Events
+links, room identity, viewer count, guest vs. authenticated account
+state, the shared My Profile/Edit Profile/Log out/Complete Profile
+behavior, Room Info's recontextualized accessible name, keyboard
+reachability). `desktop-room.test.tsx` gained 6 integration tests
+(Home/Events/avatar render as part of the real composition, guest state,
+header spans full width as a sibling of the stage+sidebar row not nested
+inside either, sidebar width classes unaffected) — all 12 pre-existing
+tests in that file pass completely unmodified, confirming the
+restructuring preserved every existing contract (heading name,
+`room-info-trigger` testid, sidebar responsive width). Added an explicit
+mobile-regression test to both `portrait-room.test.tsx` and
+`mobile-landscape-room.test.tsx` — confirms `desktop-room-header`
+never renders and the compact trigger stays the only entry point.
+
+**Real browser walkthrough** (local dev server, real Supabase-backed
+test account, deleted afterward, dark mode emulated): confirmed the
+header at 1440×900, 1920×1080, 1366×768, exactly at the 1024px
+breakpoint edge, and 1000px (correctly falls back to compact mobile-
+landscape chrome, no header at all). Clicked "Virtual Stage" from inside
+a room — landed on Home directly, no hamburger involved; re-entered,
+clicked "Events" — landed on Browse Events directly. Opened the account
+avatar menu — same My Profile/Edit Profile/Log out behavior confirmed
+live, logged out successfully from inside the room. Re-entered as a
+guest — confirmed Virtual Stage/Events/viewer count still shown, Log
+in/Sign up in place of the avatar, no forced account UI, guest-name
+editor in the sidebar unaffected. Opened Room Info from the new
+header's own trigger — confirmed unchanged content, correctly
+positioned beneath the new persistent header with no overlap. Confirmed
+the Session Simulator panel (position, buttons, expanded/minimized
+state) and the Discussion sidebar's own alignment were unaffected at
+every size tested. Confirmed mobile portrait (390×844) shows the
+compact status-pill trigger only, no persistent nav — the existing
+unrelated guest-identity pill visible there is pre-existing chrome this
+pass never touched. All test data cleaned up afterward.
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite clean: **96 files / 1286 tests,
+   zero failures** (up from 95/1268).
+2. **Production interaction** — not applicable this pass; the real-
+   browser walkthrough above (local dev server against the real
+   Supabase project) is the stronger verification actually performed.
+3. **Real-device**: not flagged as requiring iPhone testing this pass —
+   this is a desktop-only change; mobile is provably unaffected (the
+   new header is structurally absent below the existing 1024px gate,
+   confirmed by both the regression tests and a real-browser check), so
+   there is nothing here a phone could exercise differently from the
+   desktop-browser confirmation already performed.
+
+Not merged to `main`. Fresh preview to be deployed and linked in the
+handoff.
+
+---
+
 ## 2026-09-04 — Session 64: Responsive/accessibility polish pass — Room Info's unreachable landscape close button, a real accent-filled contrast fix, guest-header wrapping (issue #29-adjacent, real-device bug report)
 
 **Goal**: a narrow fix pass on top of Session 63's Room Info redesign

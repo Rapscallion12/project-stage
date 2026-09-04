@@ -1688,6 +1688,18 @@ redirect.
       the general brand `accent`, so links/icons/focus rings keep their
       existing color. Fixed the guest home header's text wrapping at
       narrow phone widths.
+- [x] **Desktop room navigation pass** (real-desktop regression report):
+      hiding the site-wide header for the whole time a room is mounted
+      was correct for mobile but was also silently hiding Home/Events/
+      account on desktop, where there's no comparable space pressure.
+      Desktop now gets a compact, persistent `DesktopRoomHeader` —
+      Virtual Stage/Home, Events, room name/status, viewer count, and
+      the same shared account-avatar menu, all one click away — rendered
+      as a full-width row above the stage+sidebar split, reusing the
+      existing 1024px desktop-composition breakpoint rather than a new
+      one. Mobile/tablet completely unaffected; `RoomInfoOverlay`'s own
+      content untouched (its trigger's role narrowed to secondary detail
+      now that basic navigation doesn't route through it on desktop).
 
 ## Explicitly not on this roadmap
 

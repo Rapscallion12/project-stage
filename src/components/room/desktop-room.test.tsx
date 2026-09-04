@@ -118,4 +118,44 @@ describe("DesktopRoom (renamed from LandscapeRoom, real-device finding: desktop 
     fireEvent.click(screen.getByTestId("room-info-trigger"));
     expect(onOpenRoomInfo).toHaveBeenCalledTimes(1);
   });
+
+  describe("desktop navigation pass (real-desktop regression: global nav was hidden behind the hamburger on desktop, not just mobile)", () => {
+    it("renders a persistent Home link, one click back to Virtual Stage — no hamburger required", () => {
+      render(<DesktopRoom {...baseProps} />);
+      expect(screen.getByRole("link", { name: "Virtual Stage home" })).toHaveAttribute("href", "/");
+    });
+
+    it("renders a persistent Events link", () => {
+      render(<DesktopRoom {...baseProps} />);
+      expect(screen.getByRole("link", { name: "Browse events" })).toHaveAttribute("href", "/events");
+    });
+
+    it("renders the account/avatar menu for a signed-in identity, reusing the same shared HomeAccountMenu", () => {
+      render(<DesktopRoom {...baseProps} />);
+      expect(screen.getByTestId("home-account-menu")).toBeInTheDocument();
+    });
+
+    it("shows guest Log in/Sign up, never a forced account UI, for a guest identity", () => {
+      const guestIdentity: Identity = { type: "guest", id: "g1", displayName: "Cheerful Raven" };
+      render(<DesktopRoom {...baseProps} identity={guestIdentity} />);
+      expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument();
+      expect(screen.queryByTestId("home-account-menu")).not.toBeInTheDocument();
+    });
+
+    it("the header spans the full width, above the stage+sidebar row — not nested inside either column", () => {
+      const { container } = render(<DesktopRoom {...baseProps} />);
+      const header = screen.getByTestId("desktop-room-header");
+      const outer = container.firstElementChild;
+      // Sibling of the stage+sidebar row, not a descendant of the sidebar
+      // (`.border-l`) or nested inside the stage column.
+      expect(header.parentElement).toBe(outer);
+    });
+
+    it("does not change stage/sidebar layout — the sidebar width classes are unaffected", () => {
+      const { container } = render(<DesktopRoom {...baseProps} />);
+      const sidebar = container.querySelector(".border-l");
+      expect(sidebar?.className).toMatch(/\bw-64\b/);
+      expect(sidebar?.className).toMatch(/\bxl:w-80\b/);
+    });
+  });
 });

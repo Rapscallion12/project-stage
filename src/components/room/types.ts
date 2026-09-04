@@ -29,6 +29,8 @@ export type RoomLayoutProps = {
   myIdentity: string;
   /** The caller's actual identity — used for RoomControls' guest/account branching, distinct from `myIdentity` above. */
   identity: Identity;
+  /** Desktop navigation pass: the signed-in account's own avatar, for `DesktopRoomHeader`'s account menu — `null` for a guest or an account without one yet. Threaded through from `EventRoom`'s own `identityAvatarUrl` prop (see its doc comment); PortraitRoom/MobileLandscapeRoom receive it too but don't use it. */
+  identityAvatarUrl?: string | null;
   isSpeaker: boolean;
   /** Issue #18 consistency fix: which seat (if any) the viewer holds — computed once in EventRoom, alongside isSpeaker, from the same data (see lib/participant-role.ts). Only ever non-null when isSpeaker is also true. Passed to SpeakerStage so it never has to re-derive this itself. */
   mySeatNumber: 1 | 2 | null;

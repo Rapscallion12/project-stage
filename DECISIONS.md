@@ -3,6 +3,96 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-04 — Desktop room navigation pass: a persistent desktop-only header restoring one-click Home/Events/account access (real-desktop regression report)
+
+**Problem**: hiding the site-wide `SiteHeader` for the whole time a room
+is mounted (`body.room-active > header { display: none }`, seventh
+corrective pass, issue #21) was a correct, deliberate call for mobile —
+vertical space is genuinely scarce there. But it was a *blanket* rule
+applied to every viewport, including desktop, where there's no
+comparable space pressure. On desktop, the result was that Home/Events/
+account — ordinary, load-bearing navigation — were reachable only by
+opening a hamburger and scanning a bottom-sheet-shaped overlay, making
+the room read as an isolated tool rather than part of the product.
+
+**Decision — desktop-only, reusing the existing `DesktopRoom` gate, not
+a new breakpoint.**
+
+- **Alternatives considered**: a new, independent media query/width
+  threshold specifically for "when does the header show," possibly
+  `768px` or some other guessed value.
+- **Reason for rejecting a new breakpoint**: `DesktopRoom` (the sidebar-
+  plus-stage composition, distinct from `MobileLandscapeRoom`/
+  `PortraitRoom`) already only mounts once `useIsDesktopViewport()`
+  (`min-width: 1024px`, Tailwind's own `lg`) is true — this is the
+  *actual* existing decision about "does this viewport have the width to
+  spare for a persistent side-by-side layout." The new header
+  (`DesktopRoomHeader`) is built as part of `DesktopRoom` itself, not a
+  separately-gated component — there is no scenario where it could ever
+  render at a width `DesktopRoom`'s own sidebar/stage split wasn't
+  already built for, so introducing a second, independent threshold
+  would only risk the two disagreeing at some future breakpoint tweak.
+  Verified directly in the browser at 1024px (still desktop, comfortable
+  fit) and 1000px (correctly falls back to the compact
+  `MobileLandscapeRoom` composition, header entirely absent).
+
+**Decision — one full-width header row, above the stage+sidebar split,
+not two coordinated column headers.**
+
+- **Alternatives considered**: a header split into a left half (over the
+  stage column) and a right half (over the chat sidebar), each
+  positioned/sized to visually line up with its own column.
+- **Reason**: a single row rendered as a sibling *above* the existing
+  `flex-row` (stage column + sidebar) is structurally guaranteed to
+  align with both — there's no coordinate math that could drift out of
+  sync with the columns below it, unlike two independently-sized header
+  halves that would need to be kept in step with the stage column's
+  `flex-1` width and the sidebar's own `w-64`/`xl:w-80` responsive width
+  by hand.
+
+**Decision — the room-identity portion reuses `RoomHeader` itself
+(extended with a `className` override and a `roomInfoAriaLabel`
+override), not a duplicate implementation.**
+
+- **Reason**: `RoomHeader` already renders exactly the room title/
+  status/viewer-count/room-info-trigger block every composition needs —
+  writing a second copy of that logic inside the new header would be the
+  "repeatedly hardcoding" anti-pattern this project's own conventions
+  already push against. `className` (merged via `cn()`/`tailwind-merge`)
+  lets `DesktopRoomHeader` strip `RoomHeader`'s own border/padding so it
+  reads as one continuous row rather than a header nested inside a
+  header; `roomInfoAriaLabel` lets the desktop context say "Room details
+  for X" instead of the original "Room info and navigation for X" —
+  accurate now that navigation no longer routes through this trigger on
+  desktop. Both are new optional props, defaulted to preserve every
+  existing caller (`PortraitRoom`/`MobileLandscapeRoom`) unchanged.
+
+**Decision — the account control reuses `HomeAccountMenu` verbatim, not
+a room-specific account menu.**
+
+- **Reason**: this is literally the same component the home page header
+  already renders — same dropdown, same My Profile/Edit Profile/Log out/
+  Complete Profile behavior, same accessibility. Building a second
+  account-menu implementation for the room would be exactly the
+  duplicated-identity-UI risk the pass's own instructions explicitly
+  warned against. The one new plumbing requirement — an
+  `identityAvatarUrl` on `RoomLayoutProps` — mirrors the identical prop
+  `RoomInfoOverlay` already receives via `EventRoom`, sourced from the
+  same `getOwnProfile` read.
+
+**Decision — `RoomInfoOverlay`'s own content is completely untouched.**
+
+- **Reason**: the pass's own explicit instruction ("Do NOT touch: room
+  info content hierarchy"). On desktop, `RoomInfoOverlay` still shows
+  its full description/status/navigation/account section — now
+  redundant with the new persistent header for Home/Events/account, but
+  harmlessly so, and changing its content conditionally by viewport
+  would itself be a content-hierarchy change this pass was told not to
+  make. What changed is only that reaching Home/Events/account no longer
+  *requires* opening it — Room Info's own trigger accessible name now
+  says "Room details," reflecting that its role narrowed to secondary/
+  contextual information, without touching what it actually renders.
+
 ## 2026-09-04 — Responsive/accessibility polish pass: Room Info's unreachable close button, a real accent-filled contrast fix, and guest-header wrapping (issue #29-adjacent, real-device bug report)
 
 **Problem 1**: a real iPhone landscape bug report — the redesigned Room

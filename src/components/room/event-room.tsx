@@ -612,6 +612,7 @@ export function EventRoom({
     profileDirectory,
     myIdentity,
     identity,
+    identityAvatarUrl,
     isSpeaker,
     mySeatNumber,
     participantRole,

@@ -515,4 +515,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(toggleCamera).not.toHaveBeenCalled();
     });
   });
+
+  it("desktop navigation pass regression check: never shows the desktop persistent nav header — compact room-identity/menu trigger stays the only entry point on mobile", () => {
+    render(<PortraitRoom {...baseProps} />);
+    expect(screen.queryByTestId("desktop-room-header")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Virtual Stage home" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-account-menu")).not.toBeInTheDocument();
+  });
 });

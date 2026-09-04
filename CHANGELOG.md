@@ -13,6 +13,21 @@ merged to `main`.
 
 ### Fixed
 
+- **Desktop room: global navigation was hidden behind a hamburger menu,
+  even though desktop has plenty of room for it** (real-desktop
+  regression report) — hiding the site-wide header for the whole time a
+  room is open was the right call for mobile (little vertical space to
+  spare there), but the same rule was also silently hiding Home/Events/
+  account access on desktop, where there's no such pressure. Desktop now
+  shows a compact, persistent header above the stage and Discussion
+  sidebar — Virtual Stage/Home, Events, the room's own name/status, a
+  viewer count, and the account avatar (or Log in/Sign up for a guest),
+  all one click away, using the exact same account menu already
+  established elsewhere. Room Info's own ☰ button is still there for
+  the room's description and other detail — it just no longer has to
+  double as basic navigation. Mobile and tablet are completely
+  unaffected — this only ever appears at the same width the room's
+  existing sidebar layout already requires.
 - **Room Info's close button could become unreachable on iPhone in
   landscape** (real-device bug report) — the sheet's header now stays
   pinned in place while its content scrolls beneath it, so ✕ is always
