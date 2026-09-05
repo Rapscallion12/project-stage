@@ -22,6 +22,10 @@ const MOCK_STAGE_REACTIONS_BASE: ReactionsController = {
   heatFraction: 0,
   inCooldown: false,
   canSend: true,
+  // A third-party viewer, distinct from every speaker identity used below
+  // (p1/p2/alice/bob/me/remote/someone-else/etc.) — the safe default for
+  // tests that don't specifically care about the sender/others split.
+  myIdentity: "profile:viewer",
 };
 
 // Media rendering bugfix pass (real-device report): jsdom has no real Web
@@ -1180,6 +1184,147 @@ describe("SpeakerStage", () => {
       fireEvent.click(screen.getByTestId("stage-round-timer"));
       expect(screen.getAllByTestId("speaker-tile")[0]).toHaveTextContent("Bob");
       vi.unstubAllGlobals();
+    });
+
+    describe("Side mode: sender/others split + region follows local visual swap (real-device follow-up)", () => {
+      function reactionsWith(overrides: Partial<typeof MOCK_STAGE_REACTIONS_BASE> = {}) {
+        return { ...MOCK_STAGE_REACTIONS_BASE, displayMode: "side" as const, myIdentity: "profile:viewer", ...overrides };
+      }
+
+      it("On Speaker mode (default): a reaction from anyone renders on the targeted speaker's own tile", () => {
+        const stageReactions = {
+          ...MOCK_STAGE_REACTIONS_BASE,
+          incoming: [
+            { id: "r1", targetIdentity: "profile:alice", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-random", ts: Date.now() },
+          ],
+        };
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageReactions={stageReactions} />,
+        );
+        const tiles = screen.getAllByTestId("speaker-tile");
+        expect(tiles[0]).toHaveTextContent("🔥"); // Alice, first slot, unswapped
+        expect(screen.queryByTestId("reaction-side-lane-top")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("reaction-side-lane-bottom")).not.toBeInTheDocument();
+      });
+
+      it("Side mode: another viewer's reaction to the speaker currently on top renders in the top region, not the bottom, and not on-speaker", () => {
+        const stageReactions = reactionsWith({
+          incoming: [
+            { id: "r1", targetIdentity: "profile:alice", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else-entirely", ts: Date.now() },
+          ],
+        });
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageReactions={stageReactions} />,
+        );
+        expect(screen.getByTestId("reaction-side-lane-top")).toHaveTextContent("🔥");
+        expect(screen.getByTestId("reaction-side-lane-bottom")).not.toHaveTextContent("🔥");
+        expect(screen.getAllByTestId("speaker-tile").every((t) => !t.textContent?.includes("🔥"))).toBe(true);
+      });
+
+      it("Side mode: another viewer's reaction to the speaker currently on bottom renders in the bottom region", () => {
+        const stageReactions = reactionsWith({
+          incoming: [
+            { id: "r1", targetIdentity: "profile:bob", emoji: "😂", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else-entirely", ts: Date.now() },
+          ],
+        });
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageReactions={stageReactions} />,
+        );
+        expect(screen.getByTestId("reaction-side-lane-bottom")).toHaveTextContent("😂");
+        expect(screen.getByTestId("reaction-side-lane-top")).not.toHaveTextContent("😂");
+      });
+
+      it("Side mode: MY OWN reaction renders on-speaker at my tap location, never in either side lane, never duplicated", () => {
+        const stageReactions = reactionsWith({
+          incoming: [
+            { id: "r1", targetIdentity: "profile:alice", emoji: "❤️", x: 0.64, y: 0.31, senderIdentity: "profile:viewer", ts: Date.now() },
+          ],
+        });
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageReactions={stageReactions} />,
+        );
+        const hearts = screen.getAllByText("❤️");
+        expect(hearts).toHaveLength(1); // exactly once, on-speaker — never also in a side lane
+        const tiles = screen.getAllByTestId("speaker-tile");
+        expect(tiles[0]).toHaveTextContent("❤️");
+        expect(screen.getByTestId("reaction-side-lane-top")).not.toHaveTextContent("❤️");
+        expect(screen.getByTestId("reaction-side-lane-bottom")).not.toHaveTextContent("❤️");
+      });
+
+      it("Side mode + local timer swap: an incoming reaction targeting Alice follows her to the bottom region once she's swapped there", () => {
+        const stageReactions = reactionsWith({
+          incoming: [
+            { id: "r1", targetIdentity: "profile:alice", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else-entirely", ts: Date.now() },
+          ],
+        });
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageRound={stageRoundFixture()} isPreviewBuild stageReactions={stageReactions} />,
+        );
+        // Before swap: Alice is on top.
+        expect(screen.getByTestId("reaction-side-lane-top")).toHaveTextContent("🔥");
+
+        fireEvent.click(screen.getByTestId("stage-round-timer"));
+        expect(screen.getAllByTestId("speaker-tile")[0]).toHaveTextContent("Bob"); // confirms the swap actually happened
+
+        // After swap: same reaction, same authoritative target (Alice),
+        // now follows her to the bottom region — never re-targeted to
+        // "whichever seat is on top."
+        expect(screen.getByTestId("reaction-side-lane-bottom")).toHaveTextContent("🔥");
+        expect(screen.getByTestId("reaction-side-lane-top")).not.toHaveTextContent("🔥");
+      });
+
+      it("Hidden mode: neither my own reaction nor another viewer's renders anywhere — on-speaker or side", () => {
+        const stageReactions = {
+          ...MOCK_STAGE_REACTIONS_BASE,
+          showReactions: false,
+          displayMode: "side" as const,
+          myIdentity: "profile:viewer",
+          incoming: [
+            { id: "r1", targetIdentity: "profile:alice", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:viewer", ts: Date.now() },
+            { id: "r2", targetIdentity: "profile:bob", emoji: "😂", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else-entirely", ts: Date.now() },
+          ],
+        };
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageReactions={stageReactions} />,
+        );
+        expect(screen.queryByText("🔥")).not.toBeInTheDocument();
+        expect(screen.queryByText("😂")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("reaction-side-lane-top")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("reaction-side-lane-bottom")).not.toBeInTheDocument();
+      });
+
+      it("Hidden mode: sending remains possible even though nothing renders locally — double-tap still calls send()", () => {
+        const send = vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false }));
+        const stageReactions = { ...MOCK_STAGE_REACTIONS_BASE, showReactions: false, myIdentity: "profile:viewer", send };
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="portrait" {...baseProps} stageReactions={stageReactions} />,
+        );
+        const topTile = screen.getAllByTestId("speaker-tile")[0];
+        const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 } as DOMRect;
+        vi.spyOn(topTile, "getBoundingClientRect").mockReturnValue(rect);
+        fireEvent.pointerUp(topTile, { clientX: 50, clientY: 50 });
+        fireEvent.pointerUp(topTile, { clientX: 50, clientY: 50 });
+
+        expect(send).toHaveBeenCalledWith("profile:alice", expect.any(String), expect.any(Number), expect.any(Number));
+      });
+
+      it("Landscape: keeps a single unsplit Side lane (unchanged scope), but still excludes the sender's own reaction", () => {
+        const stageReactions = reactionsWith({
+          incoming: [
+            { id: "r1", targetIdentity: "profile:alice", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else-entirely", ts: Date.now() },
+            { id: "r2", targetIdentity: "profile:bob", emoji: "❤️", x: 0.5, y: 0.5, senderIdentity: "profile:viewer", ts: Date.now() },
+          ],
+        });
+        render(
+          <SpeakerStage speakers={twoSpeakers} orientation="landscape" {...baseProps} stageReactions={stageReactions} />,
+        );
+        expect(screen.queryByTestId("reaction-side-lane-top")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("reaction-side-lane-bottom")).not.toBeInTheDocument();
+        const lane = screen.getByTestId("reaction-side-lane");
+        expect(lane).toHaveTextContent("🔥"); // someone else's, shown
+        expect(lane).not.toHaveTextContent("❤️"); // mine, excluded — renders on-speaker instead
+        expect(screen.getAllByTestId("speaker-tile")[1]).toHaveTextContent("❤️");
+      });
     });
   });
 });

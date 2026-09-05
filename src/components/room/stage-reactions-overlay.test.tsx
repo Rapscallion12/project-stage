@@ -78,4 +78,26 @@ describe("ReactionSideLane (pre-launch interaction pass, Section 4B)", () => {
     expect(lane.className).toMatch(/\bpointer-events-none\b/);
     expect(lane).toHaveAttribute("aria-hidden", "true");
   });
+
+  describe("region (real-device follow-up: Side mode must preserve which speaker was targeted)", () => {
+    it("region='top' gets its own distinct testid and an upper-stage position", () => {
+      render(<ReactionSideLane reactions={[reaction()]} region="top" />);
+      expect(screen.queryByTestId("reaction-side-lane")).not.toBeInTheDocument();
+      const lane = screen.getByTestId("reaction-side-lane-top");
+      expect(lane.className).toMatch(/top-\[18%\]/);
+    });
+
+    it("region='bottom' gets its own distinct testid and a lower-stage position", () => {
+      render(<ReactionSideLane reactions={[reaction()]} region="bottom" />);
+      expect(screen.queryByTestId("reaction-side-lane")).not.toBeInTheDocument();
+      const lane = screen.getByTestId("reaction-side-lane-bottom");
+      expect(lane.className).toMatch(/bottom-\[12%\]/);
+    });
+
+    it("omitting region keeps the original single-lane testid and position — landscape/solo scope is unchanged", () => {
+      render(<ReactionSideLane reactions={[reaction()]} />);
+      const lane = screen.getByTestId("reaction-side-lane");
+      expect(lane.className).toMatch(/bottom-24/);
+    });
+  });
 });

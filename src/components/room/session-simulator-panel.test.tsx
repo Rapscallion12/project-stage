@@ -2640,6 +2640,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         heatFraction: 0,
         inCooldown: false,
         canSend: true,
+        myIdentity: "profile:viewer",
       };
     }
 

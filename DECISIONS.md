@@ -3,6 +3,72 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-05 — Reaction UX correction: instant sender feedback, Side mode target-awareness (real-device report, issue #21)
+
+**Problem 1 — how does a client show its own reaction instantly without
+weakening the server-side rate limit as the real security boundary?**
+Alternatives considered: (a) trust the client's own accept/reject
+decision and only "confirm" against the server after the fact — rejected
+outright, this would make the visible heat meter (already documented as
+UX-only) into a de facto second enforcement point, exactly what Section
+5 of the prior pass explicitly forbade; (b) delay the local animation
+until the server responds but shrink the *perceived* delay with a
+loading spinner or instant button-press feedback short of the reaction
+itself — rejected, doesn't solve the actual complaint (the reaction
+itself still visibly lags); (c) show the local animation unconditionally
+on every tap, even when the client already knows it's in cooldown —
+rejected per explicit instruction, an animation for something that will
+almost certainly be rejected is actively misleading.
+
+**Decision**: render an optimistic local reaction only when the client's
+own already-server-reconciled heat state (`canSend`) doesn't already
+know sending is blocked, while *always* still making the authoritative
+call regardless of that local guess. This keeps the client-side check
+purely advisory (never a gate on whether the real request happens) and
+keeps `record_stage_reaction_attempt` as the only place a reaction is
+actually accepted or rejected — a stale/wrong client guess just means
+this one send arrives slightly later via the ordinary broadcast path
+instead of instantly, never that a legitimate reaction silently
+disappears or an illegitimate one is shown as if accepted.
+
+**Problem 2 — how to avoid the sender seeing their own reaction twice**
+(once optimistically, once when their own accepted broadcast returns —
+Realtime broadcasts deliver to every subscriber, sender included)
+**without maintaining a separate "which reactions are mine" list?**
+Considered tracking sent-reaction ids in a separate `Set` and filtering
+incoming broadcasts against it — works, but is a second, parallel piece
+of state that has to stay in sync with `incoming` itself for no real
+benefit. **Decision**: generate the reaction's id client-side, thread it
+through `sendStageReaction`'s new `reactionId` parameter, and have the
+server echo that *same* id back in the broadcast payload instead of
+minting its own. `addReaction` (the one function both the optimistic
+path and the broadcast handler call) is simply id-deduplicating — no
+second data structure, no sender-identity comparison needed for dedup
+specifically (identity comparison is still used, separately, for
+*presentation* — see below).
+
+**Problem 3 — Side mode previously showed every reaction in one shared,
+untargeted lane, which both lost the directed reaction's spatial meaning
+and buried the sender's own feedback in everyone else's traffic.**
+**Decision, two parts**: (a) the *sender's own* reaction always renders
+on-speaker, at the exact tap location, regardless of the sender's own
+display-mode preference — Side mode is reframed as "how do I want to see
+*other people's* reaction traffic," not "how do I want to see my own
+action," per explicit product framing. (b) *other viewers'* reactions in
+Side mode are now split into two regions (`ReactionSideLane`'s new
+`region` prop) for the two-tile portrait case, bucketed by *current
+local visual slot* (`firstSeat`/`secondSeat`, which already flips with
+the Section 7 timer swap) rather than by authoritative seat number —
+region placement follows a locally-swapped speaker to their new slot on
+this viewer's own screen, while `targetIdentity` itself never changes,
+preserving the same "local presentation vs. authoritative identity"
+separation Section 7 already established for the tiles themselves.
+**Explicitly out of scope, by decision**: landscape and desktop keep the
+original single, unsplit lane (still excluding the sender's own
+reactions, but not split by target) — guessing at a spatial treatment
+for a side-by-side layout ahead of the dedicated desktop UX audit risked
+getting it wrong twice; deferred instead of improvised.
+
 ## 2026-09-04 — Pre-launch interaction pass: directed reactions, tap-timer speaker swap, adaptive idle UI, Gift-icon removal, Session Simulator launch-visibility gate (issue #21)
 
 **Problem**: four independent product decisions had to be made before this

@@ -2,6 +2,7 @@
 
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import type { IncomingStageReaction } from "@/hooks/use-stage-reactions";
+import { cn } from "@/lib/utils";
 
 /**
  * Pre-launch interaction pass, Section 3/4A: renders one speaker tile's
@@ -60,21 +61,40 @@ export function OnSpeakerReactionBursts({ reactions }: { reactions: IncomingStag
 }
 
 /**
- * Pre-launch interaction pass, Section 4B: the "Side" display mode —
- * incoming reactions (regardless of which speaker they targeted; a
- * viewer who chose Side has opted out of per-speaker positioning
- * entirely, not per-speaker-B-only) float up a narrow lane instead of
- * covering either speaker's video. Rendered once at the stage level
- * (`SpeakerStage`), not per-tile.
+ * Pre-launch interaction pass, Section 4B — refined by a real-device
+ * follow-up pass: the "Side" display mode, for *other viewers'*
+ * reactions (the caller, `SpeakerStage`, already excludes the current
+ * viewer's own reactions from what it passes here — their own feedback
+ * renders on-speaker instead, at their exact tap location, so they never
+ * lose precise spatial confirmation of what they just did; see that
+ * component's own doc comment). Rendered at the stage level, not
+ * per-tile.
  *
- * The reaction is still genuinely associated with its correct target
- * internally (`useStageReactions`' own shared event carries
- * `targetIdentity` throughout) — this mode simply chooses not to *show*
- * that positioning, per Section 4's own "the sender's event stays
- * presentation-independent; each receiving client decides how to
- * render it."
+ * **`region`** (real-device follow-up: "Side mode must preserve which
+ * speaker was targeted"): a single shared bottom-corner lane originally
+ * treated every reaction identically regardless of target, which lost
+ * the directed reaction's whole point — a viewer had no way to tell
+ * "someone reacted to the top speaker" from "someone reacted to the
+ * bottom speaker." `SpeakerStage` now renders *two* instances of this
+ * component in the two-tile portrait case, one per currently-visible
+ * slot (`region="top"`/`region="bottom"`), each already pre-filtered to
+ * that slot's own target identity — this component itself still has no
+ * identity logic, it just positions itself differently per region.
+ * "Currently visible slot" tracks local timer-swap ordering (Section 7),
+ * not seat 1/2 — again, entirely the caller's job; by the time a
+ * reaction array reaches here it's already correctly bucketed.
+ * `region` omitted (landscape/solo/desktop) preserves the original
+ * single, unsplit lane position exactly — a deliberate, reported scope
+ * decision (see DECISIONS.md) to avoid guessing at a landscape/desktop
+ * spatial treatment ahead of the dedicated desktop UX audit.
  */
-export function ReactionSideLane({ reactions }: { reactions: IncomingStageReaction[] }) {
+export function ReactionSideLane({
+  reactions,
+  region,
+}: {
+  reactions: IncomingStageReaction[];
+  region?: "top" | "bottom";
+}) {
   const prefersReducedMotion = usePrefersReducedMotion();
   // Only the most recent handful — a lane that never stops growing
   // defeats "tasteful," and older bursts have already finished their
@@ -84,8 +104,11 @@ export function ReactionSideLane({ reactions }: { reactions: IncomingStageReacti
   return (
     <div
       aria-hidden="true"
-      data-testid="reaction-side-lane"
-      className="pointer-events-none absolute right-2 bottom-24 z-10 flex w-10 flex-col-reverse items-center gap-1 sm:right-3"
+      data-testid={region ? `reaction-side-lane-${region}` : "reaction-side-lane"}
+      className={cn(
+        "pointer-events-none absolute right-2 z-10 flex w-10 flex-col-reverse items-center gap-1 sm:right-3",
+        region === "top" ? "top-[18%]" : region === "bottom" ? "bottom-[12%]" : "bottom-24",
+      )}
     >
       {visible.map((reaction) => (
         <span

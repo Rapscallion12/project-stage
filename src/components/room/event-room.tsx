@@ -131,11 +131,19 @@ export function EventRoom({
   isSimulatorUiEnabled: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
+  // Moved up from its original spot below (still the "one canonical
+  // myIdentity" computation, unchanged) — needed here, before
+  // useReactionsController, so the reactions controller can tag the
+  // sender's own optimistic reactions and self-filter its own eventual
+  // broadcast (real-device follow-up: see that hook's own doc comment).
+  const myIdentity = getParticipantIdentity(
+    identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
+  );
   // Pre-launch interaction pass: one shared instance, above every
   // composition/role branch — same discipline as useLiveRoomConnection/
   // useActiveSpeakers above. Named `stageReactions` to avoid colliding
   // with `reactions` above (the unrelated lobby comment-reaction counts).
-  const stageReactions = useReactionsController(event.id);
+  const stageReactions = useReactionsController(event.id, myIdentity);
   const { speakers, roomStatus, refetch: refetchSpeakers, getSyncDiagnostics: getSpeakerSyncDiagnostics } = useActiveSpeakers(
     event.id,
     initialSpeakers,
@@ -350,9 +358,6 @@ export function EventRoom({
     };
   }, []);
 
-  const myIdentity = getParticipantIdentity(
-    identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
-  );
   // Issue #18 consistency fix: the *one* place "which seat, if any, does
   // this identity hold" gets computed — everything downstream (isSpeaker,
   // the role routers, SpeakerStage's own solo-tile selection) reads the

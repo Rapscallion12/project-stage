@@ -17,6 +17,7 @@ function fixture(overrides: Partial<ReactionsController> = {}): ReactionsControl
     heatFraction: 0,
     inCooldown: false,
     canSend: true,
+    myIdentity: "profile:viewer",
     ...overrides,
   };
 }

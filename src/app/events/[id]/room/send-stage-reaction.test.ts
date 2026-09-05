@@ -2,7 +2,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const { resolveIdentity, recordStageReactionAttempt, httpSend, channel } = vi.hoisted(() => {
-  const httpSend = vi.fn(async () => undefined);
+  const httpSend = vi.fn(async (...args: [event: string, payload: { id: string }]) => {
+    void args;
+    return undefined;
+  });
   const channel = vi.fn(() => ({ httpSend }));
   return {
     resolveIdentity: vi.fn(async (): Promise<{ type: "profile" | "guest"; id: string }> => ({ type: "guest", id: "guest-1" })),
@@ -86,5 +89,31 @@ describe("sendStageReaction (pre-launch interaction pass, Section 2-5)", () => {
     await sendStageReaction("e1", "profile:alice", "❤️", 0.5, 0.5);
     expect(recordStageReactionAttempt).toHaveBeenCalledWith("e1", { type: "profile", id: "real-user-id" });
     expect(httpSend).toHaveBeenCalledWith("reaction", expect.objectContaining({ senderIdentity: "profile:real-user-id" }));
+  });
+
+  describe("reactionId (real-device follow-up: instant sender feedback needs a shared id to dedup against)", () => {
+    it("broadcasts the exact client-supplied reactionId, verbatim, instead of generating a new one", async () => {
+      await sendStageReaction("e1", "profile:alice", "🔥", 0.5, 0.5, "client-generated-id-123");
+      expect(httpSend).toHaveBeenCalledWith("reaction", expect.objectContaining({ id: "client-generated-id-123" }));
+    });
+
+    it("falls back to a server-generated id when none is supplied", async () => {
+      await sendStageReaction("e1", "profile:alice", "🔥", 0.5, 0.5);
+      const payload = httpSend.mock.calls[0][1];
+      expect(typeof payload.id).toBe("string");
+      expect(payload.id.length).toBeGreaterThan(0);
+    });
+
+    it("falls back to a server-generated id when the supplied one is empty", async () => {
+      await sendStageReaction("e1", "profile:alice", "🔥", 0.5, 0.5, "");
+      const payload = httpSend.mock.calls[0][1];
+      expect(payload.id).not.toBe("");
+    });
+
+    it("a rejected attempt never broadcasts, regardless of whether a reactionId was supplied", async () => {
+      recordStageReactionAttempt.mockResolvedValue({ accepted: false, heatAfter: 100, inCooldownAfter: true });
+      await sendStageReaction("e1", "profile:alice", "🔥", 0.5, 0.5, "would-have-been-this-id");
+      expect(httpSend).not.toHaveBeenCalled();
+    });
   });
 });

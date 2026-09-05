@@ -4,6 +4,105 @@ Newest entry first.
 
 ---
 
+## 2026-09-05 — Session 69: Reaction UX correction — instant sender feedback, Side mode target-awareness (real-device report, issue #21)
+
+**Goal**: narrow correction to Session 68's reactions, based on real-
+device testing against the internal simulator-enabled deployment. No
+redesign of the reaction gesture model, timer swap semantics,
+authoritative targeting, voting, RTS, media, or simulator internals.
+
+**Root cause of the sender's own reaction delay, confirmed by reading
+`useStageReactions.send`, not assumed**: the ONLY path that ever added
+anything to the client's own `incoming` array was the Realtime broadcast
+subscription handler — including for the sender's *own* reaction. So the
+sender genuinely waited out the full round trip (resolve identity →
+`record_stage_reaction_attempt` → `httpSend` REST broadcast → that
+broadcast traveling back down the sender's own subscribed WebSocket
+channel) before ever seeing their own animation. There was no local/
+optimistic rendering path at all.
+
+**Fix — instant local feedback, id-based dedup, never a "which are
+mine" flag**: `send()` now constructs a client-generated `id`
+(`crypto.randomUUID()`) up front and, only when the client's own already-
+synchronized heat state (`canSend`) doesn't already know sending is
+blocked, adds a local optimistic entry to `incoming` immediately,
+synchronously — before `sendStageReaction` is even called. That same id
+is threaded through `sendStageReaction`'s new optional `reactionId`
+parameter and echoed back verbatim in the broadcast payload, so when
+that broadcast eventually returns to the sender's own subscribed channel
+(Realtime delivers to every subscriber, sender included), `addReaction`'s
+own id-based dedup recognizes it as the confirmation of what's already
+showing and silently drops it — no separate "is this reaction mine"
+bookkeeping needed anywhere. The authoritative call still always
+happens regardless of the local heat guess, still the only thing that
+can move heat or trigger a real broadcast; an unexpected server
+rejection after an optimistic render is not "undone" — the animation
+just finishes on its own (already time-bounded) while heat/cooldown
+reconcile normally.
+
+**Fix — Side mode now preserves which speaker was targeted, and
+distinguishes the sender from everyone else**: previously Side mode
+dumped every reaction (everyone's) into one shared bottom-corner lane,
+regardless of target — losing the whole point of a *directed* reaction,
+and hiding the sender's own precise feedback behind everyone else's
+traffic. Now: **the viewer's own reactions** render on-speaker, at their
+exact tap location, exactly like On Speaker mode — Side mode only ever
+changes where *other viewers'* reactions go. **Other viewers'
+reactions**, in the two-tile portrait case, split into two lanes
+(`ReactionSideLane`'s new `region="top"`/`"bottom"` prop) — one for
+whichever seat currently occupies the top visual slot, one for the
+bottom — derived from `firstSeat`/`secondSeat` (already flips with the
+Section 7 timer swap), never from seat 1/2 directly, so region placement
+correctly follows a locally-swapped speaker to their *new* visual slot
+while authoritative `targetIdentity` never changes. Landscape/desktop
+deliberately keep the original single, unsplit lane unchanged (still
+excluding the sender's own reactions) — an explicit, reported scope
+decision, not an oversight; a real landscape/desktop spatial treatment
+is deferred to the upcoming desktop UX audit. Hidden mode suppresses
+everything uniformly, sender included, with zero extra logic (both
+paths already gate on the same `showReactions` flag) — and sending
+itself remains completely unaffected regardless of display mode, since
+`onDoubleTapReact` was never gated on it.
+
+**Also this pass**: idle UI transparency (Section 8, Session 68) was
+found too subtle on a real phone — the compact comment composer, the
+widest surface in the row, had been scoped out of the original fade
+entirely. Extended the identical idle-fade treatment to `ChatPanel`'s
+own compact composer pill and replaced the prior 6% idle fill with
+fully transparent (0%) everywhere idle fading applies — a decisive
+difference, not another small increment. And: simulator UI needed to
+stay hidden on the ordinary launch-facing preview while still being
+testable, so a second deployment now uses a one-off `vercel deploy -e
+ENABLE_SESSION_SIMULATOR=1` (a runtime override scoped to that single
+deployment) rather than any change to shared Vercel project environment
+variables or the simulator's own gating code.
+
+**Testing**: `use-stage-reactions.test.ts` gained an "instant local
+sender feedback" describe block (immediate local render, concurrent
+authoritative send using the same id, no optimistic render when already
+known-blocked, dedup on the broadcast echo, no awkward undo on
+rejection). `send-stage-reaction.test.ts` gained a `reactionId` describe
+block (verbatim passthrough, server-generated fallback when absent/
+empty, rejection still never broadcasts). `speaker-stage.test.tsx`
+gained a "Side mode: sender/others split + region follows local visual
+swap" describe block (On Speaker unchanged, top/bottom region
+targeting, timer-swap-follows-target, sender-never-duplicated, Hidden
+suppresses both while still allowing send, landscape's unsplit-lane
+scope decision). `stage-reactions-overlay.test.tsx` gained direct
+`region` prop coverage. `chat-panel.test.tsx`/`watch-mode-controls.
+test.tsx`/`reaction-control.test.tsx` updated for the new idle-
+transparency value.
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/hooks/lobby/room-actions suites clean (1116
+tests, including the real-DB `stage-reactions.test.ts`/
+`simulator-actions.test.ts`). Full project suite run separately — see
+this session's own handoff for the final count.
+
+Not merged to `main`.
+
+---
+
 ## 2026-09-05 — Session 68 follow-up: idle transparency too subtle, internal simulator-testing deployment path (real-device report, issue #21)
 
 **Goal**: narrow real-device follow-up on Session 68's preview, on the

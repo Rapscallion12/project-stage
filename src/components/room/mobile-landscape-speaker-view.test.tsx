@@ -38,6 +38,7 @@ const MOCK_STAGE_REACTIONS: ReactionsController = {
   heatFraction: 0,
   inCooldown: false,
   canSend: true,
+  myIdentity: "profile:p1",
 };
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 

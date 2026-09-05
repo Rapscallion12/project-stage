@@ -256,6 +256,19 @@ export function SpeakerStage({
 
   const bySeat = (seatNumber: 1 | 2) => speakers.find((s) => s.seat_number === seatNumber) ?? null;
 
+  // Issue #16: a seat's occupant identity is whichever of
+  // profile_id/guest_id is actually set (the table's own XOR constraint
+  // guarantees exactly one) — never assume profile. Factored out (real-
+  // device follow-up) so both renderTile() and the stage-level Side-lane
+  // region computation below share the exact same derivation.
+  function identityForSeat(seat: EventSpeaker | null): string | null {
+    return seat
+      ? getParticipantIdentity(
+          seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
+        )
+      : null;
+  }
+
   // Real-device finding (2026-08-22): exactly one open seat, viewer not
   // already speaking — that seat is this viewer's one actionable target,
   // so it visually leads regardless of which seat number it happens to
@@ -323,16 +336,25 @@ export function SpeakerStage({
 
   function renderTile(seatNumber: 1 | 2) {
     const seat = seatNumber === 1 ? seat1 : seat2;
-    // Issue #16: a seat's occupant identity is whichever of
-    // profile_id/guest_id is actually set (the table's own XOR
-    // constraint guarantees exactly one) — never assume profile.
-    const identity = seat
-      ? getParticipantIdentity(
-          seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
-        )
-      : null;
+    const identity = identityForSeat(seat);
     const seatState = emptySeatState(seat, seatNumber);
-    const showOnSpeakerReactions = Boolean(stageReactions && stageReactions.showReactions && stageReactions.displayMode === "on-speaker");
+    // Real-device follow-up ("Side mode must preserve local sender
+    // feedback"): On Speaker mode still shows every reaction targeting
+    // this tile, from anyone. Side mode shows on-speaker only the
+    // *viewer's own* reactions here — their immediate, exact-tap-location
+    // confirmation of "I reacted here" — never a duplicate of what
+    // already shows once the sender's own accepted broadcast returns
+    // (see useStageReactions' own id-dedup doc comment), and never
+    // *other* viewers' reactions, which Side mode moves into the lane(s)
+    // below instead. Hidden mode (showReactions=false) suppresses all of
+    // this uniformly, sender included — Section 6's own requirement.
+    const onSpeakerReactions =
+      identity && stageReactions
+        ? stageReactions.incoming.filter(
+            (r) => r.targetIdentity === identity && (stageReactions.displayMode === "on-speaker" || r.senderIdentity === stageReactions.myIdentity),
+          )
+        : [];
+    const showOnSpeakerReactions = Boolean(stageReactions && stageReactions.showReactions);
     return (
       <div
         key={seat?.id ?? `empty-${seatNumber}`}
@@ -374,7 +396,7 @@ export function SpeakerStage({
           onDoubleTapReact={
             identity && stageReactions ? (x, y) => void stageReactions.send(identity, stageReactions.selectedEmoji, x, y) : undefined
           }
-          onSpeakerReactions={identity && stageReactions ? stageReactions.incoming.filter((r) => r.targetIdentity === identity) : []}
+          onSpeakerReactions={onSpeakerReactions}
           showOnSpeakerReactions={showOnSpeakerReactions}
         />
       </div>
@@ -422,6 +444,24 @@ export function SpeakerStage({
   const canSwapSpeakers = orientation === "portrait" && !renderSolo && seat1 !== null && seat2 !== null;
   const firstSeat = swapped ? 2 : 1;
   const secondSeat = swapped ? 1 : 2;
+
+  // Real-device follow-up ("Side mode must preserve which speaker was
+  // targeted" + "timer swap interaction is critical"): *other* viewers'
+  // reactions for the Side lane(s) — the current viewer's own reactions
+  // are deliberately excluded here (they render on-speaker instead, at
+  // their exact tap location — see renderTile's own onSpeakerReactions
+  // above). Bucketed by *current local visual slot*, derived from
+  // firstSeat/secondSeat (which already flips with `swapped`), never
+  // from seat 1/2 directly — authoritative targeting (targetIdentity)
+  // stays completely untouched either way; this only decides where each
+  // already-correctly-targeted reaction visually lands for this one
+  // viewer. Portrait only, per Section 4: landscape/desktop keep the
+  // original single unsplit lane (see ReactionSideLane's own doc
+  // comment) — a deliberate, reported scope decision, not an oversight.
+  const otherViewersReactions = stageReactions ? stageReactions.incoming.filter((r) => r.senderIdentity !== stageReactions.myIdentity) : [];
+  const firstSlotIdentity = identityForSeat(firstSeat === 1 ? seat1 : seat2);
+  const secondSlotIdentity = identityForSeat(secondSeat === 1 ? seat1 : seat2);
+  const soloIdentity = renderSolo ? identityForSeat(mySeatNumber === 1 ? seat2 : seat1) : null;
 
   return (
     <div data-testid="room-stage" className="stage-container relative z-0 h-full w-full overflow-hidden bg-black">
@@ -480,9 +520,27 @@ export function SpeakerStage({
         <StageRoundBadge display={stageRoundDisplay} onSwapTap={canSwapSpeakers ? handleSwapTap : undefined} />
       )}
 
-      {/* Pre-launch interaction pass, Section 4B: the "Side" reaction display mode — rendered once at the stage level, never per-tile (see ReactionSideLane's own doc comment for why it isn't scoped to either speaker). */}
+      {/* Pre-launch interaction pass, Section 4B, refined by a real-device
+          follow-up: the "Side" reaction display mode for *other viewers'*
+          reactions — rendered once at the stage level, never per-tile.
+          Portrait, two-tile case: two lanes, each pre-filtered to whichever
+          seat currently occupies that visual slot (follows local timer-swap
+          ordering — see firstSlotIdentity/secondSlotIdentity above).
+          soloMode/landscape: one unsplit lane (soloMode filtered to the one
+          visible tile's identity; landscape unfiltered, matching this
+          feature's original, unchanged behavior there — see
+          ReactionSideLane's own doc comment). */}
       {stageReactions && stageReactions.showReactions && stageReactions.displayMode === "side" && (
-        <ReactionSideLane reactions={stageReactions.incoming} />
+        renderSolo ? (
+          <ReactionSideLane reactions={otherViewersReactions.filter((r) => r.targetIdentity === soloIdentity)} />
+        ) : orientation === "portrait" ? (
+          <>
+            <ReactionSideLane reactions={otherViewersReactions.filter((r) => r.targetIdentity === firstSlotIdentity)} region="top" />
+            <ReactionSideLane reactions={otherViewersReactions.filter((r) => r.targetIdentity === secondSlotIdentity)} region="bottom" />
+          </>
+        ) : (
+          <ReactionSideLane reactions={otherViewersReactions} />
+        )
       )}
 
       {/* Scrim (issue #21) — driven by scrimOpacity; see the doc comment above. */}

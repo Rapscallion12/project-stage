@@ -1011,6 +1011,23 @@ async function bestEffortReconcileSelection(eventId: string): Promise<void> {
  * reaction whose target matches a seat it can currently see), which is a
  * safe, inert failure mode for a purely cosmetic feature, not something
  * worth a second server-side seat lookup.
+ *
+ * **`reactionId`** (real-device follow-up: "sender's own reaction feedback
+ * must feel instant"): the *client* generates this id itself, up front,
+ * at the moment of the double-tap — before this action even resolves —
+ * and renders its own optimistic local animation immediately, without
+ * waiting for this round trip (see `useStageReactions.send`'s own doc
+ * comment). Passing that same id through here means the eventual
+ * broadcast this function sends carries the *identical* id the sender
+ * already rendered, so when it arrives back over the sender's own
+ * subscribed channel (Realtime broadcasts deliver to every subscriber,
+ * including the sender), the sender's client can recognize it as the
+ * confirmation of what it already showed and skip rendering a duplicate —
+ * pure id-based dedup, no separate "is this mine" bookkeeping needed. Not
+ * trusted for anything security-relevant (it's cosmetic, like
+ * `targetIdentity` above) — falls back to a server-generated id if
+ * missing or malformed, so this stays backward-compatible with any other
+ * caller.
  */
 export async function sendStageReaction(
   eventId: string,
@@ -1018,6 +1035,7 @@ export async function sendStageReaction(
   emoji: string,
   x: number,
   y: number,
+  reactionId?: string,
 ): Promise<
   | { ok: true; heatAfter: number; inCooldownAfter: boolean }
   | { ok: false; reason: "invalid" | "cooling-down"; heatAfter?: number; inCooldownAfter?: boolean }
@@ -1034,6 +1052,7 @@ export async function sendStageReaction(
   // relative coordinates" spec.
   const nx = Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0.5));
   const ny = Math.max(0, Math.min(1, Number.isFinite(y) ? y : 0.5));
+  const id = typeof reactionId === "string" && reactionId.length > 0 ? reactionId : crypto.randomUUID();
 
   const identity = await resolveIdentity();
   const seatIdentity: SeatIdentity =
@@ -1047,14 +1066,16 @@ export async function sendStageReaction(
     // it, that a *legitimate* client's rejected attempt is also never
     // sent). heatAfter/inCooldownAfter are still returned so the
     // client's own visual meter (UX only) can reconcile against the
-    // server's authoritative value rather than drift.
+    // server's authoritative value rather than drift. The sender's own
+    // optimistic local animation (if it rendered one at all) simply
+    // finishes and disappears on its own — there is nothing to "undo".
     return { ok: false, reason: "cooling-down", heatAfter: attempt.heatAfter, inCooldownAfter: attempt.inCooldownAfter };
   }
 
   const senderIdentity = getParticipantIdentity(seatIdentity);
   const supabase = await createClient();
   await supabase.channel(`event-reactions:${eventId}`).httpSend("reaction", {
-    id: crypto.randomUUID(),
+    id,
     targetIdentity,
     emoji,
     x: nx,
