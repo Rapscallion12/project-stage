@@ -13,6 +13,27 @@ merged to `main`.
 
 ### Added
 
+- **Live emoji reactions — double-tap a speaker to send them your
+  selected emoji.** Tap the new React button to pick from a curated set
+  (❤️ 😂 👏 🔥 😮 💀 👍 👎, ❤️ by default) and choose how incoming
+  reactions show up for you — on the speaker at the spot you tapped, in a
+  dedicated side lane that never covers the video, or hidden entirely
+  (purely your own local preference; sending always still works). Sending
+  is generous but not unlimited: a smoothly draining "heat" meter fills
+  the button as you react and cools on its own — brief bursts during an
+  exciting moment are never a problem, only sustained spam ever
+  temporarily blocks you, and it's enforced for real on the server, not
+  just in your browser.
+- **Tap the round timer to swap which speaker is on top** (portrait/
+  mobile only) — a purely visual, personal fix for "my phone always puts
+  the same speaker on the bottom," with a smooth animated swap. Nothing
+  about the round, votes, or either speaker's actual seat changes for
+  anyone else.
+- **The interface gets out of your way while you're just watching** — the
+  translucent panels along the bottom of the stage fade to let more of
+  the video show through when you haven't touched anything for a couple
+  of seconds, and return instantly the moment you do (typing, opening a
+  panel, tapping anything). Text and controls stay legible throughout.
 - **You can no longer take a speaker seat without a verified camera and
   microphone** — previously a candidate could be seated with a dead
   camera or mic, only noticed 30 seconds later by the existing
@@ -38,6 +59,24 @@ merged to `main`.
   right after joining until manually toggling the camera, and the
   visualizer never appeared for your own self-view at all — both fixed;
   see DECISIONS.md for the root causes.)
+
+### Removed
+
+- **The Gift icon in the room's control row** — audited and confirmed it
+  never had any implemented function. No gifting, tipping, payments, or
+  virtual currency exist in this app; the placeholder icon is gone rather
+  than left as a dead tap target. Comment and Vote controls are
+  unaffected.
+
+### Changed
+
+- **The Session Simulator (internal testing tool) no longer shows itself
+  on ordinary preview deployments** — previews are now also used to test
+  the real launch-facing experience, so its panel, settings tab, and
+  floating control require an explicit internal flag to appear, on top
+  of the existing preview/dev-only requirement. Nothing about the
+  simulator itself was removed; a developer can still turn it on
+  intentionally. See DECISIONS.md.
 
 ### Fixed
 

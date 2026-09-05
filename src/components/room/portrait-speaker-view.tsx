@@ -114,6 +114,7 @@ export function PortraitSpeakerView({
   reactions,
   pendingRequests,
   profileDirectory,
+  stageReactions,
   onPrepareMedia,
   microphoneMuted,
   cameraMuted,
@@ -144,6 +145,7 @@ export function PortraitSpeakerView({
         viewerIdentity={identity}
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
+        stageReactions={stageReactions}
         soloMode
       />
 

@@ -569,6 +569,55 @@ export type Database = {
           },
         ]
       }
+      stage_reaction_heat: {
+        Row: {
+          event_id: string
+          guest_id: string | null
+          heat: number
+          in_cooldown: boolean
+          profile_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          event_id: string
+          guest_id?: string | null
+          heat?: number
+          in_cooldown?: boolean
+          profile_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          event_id?: string
+          guest_id?: string | null
+          heat?: number
+          in_cooldown?: boolean
+          profile_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stage_reaction_heat_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stage_reaction_heat_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stage_reaction_heat_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       stage_rounds: {
         Row: {
           ends_at: string
@@ -1033,6 +1082,22 @@ export type Database = {
           profile_id: string
           rank: number
           request_id: string
+        }[]
+      }
+      record_stage_reaction_attempt: {
+        Args: {
+          p_cooldown_exit_heat?: number
+          p_drain_per_second?: number
+          p_event_id: string
+          p_guest_id: string
+          p_heat_increment?: number
+          p_max_heat?: number
+          p_profile_id: string
+        }
+        Returns: {
+          accepted: boolean
+          heat_after: number
+          in_cooldown_after: boolean
         }[]
       }
       release_expired_disconnected_speaker: {

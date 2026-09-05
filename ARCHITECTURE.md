@@ -373,16 +373,20 @@ even where the current implementation uses one to drive the other:
   counter can't express. This is a bounded volume (capped by message
   count × attendee count in one lobby), not the unbounded firehose the
   next bullet is about.
-- **This is not the pattern for Phase 3's live emoji reactions on the live
-  room.** Those are the actually high-frequency case PRODUCT.md Principle
-  7 has in mind — audience members tapping a reaction repeatedly during a
-  live conversation. That must be pure ephemeral Realtime *broadcast*
-  (not Postgres Changes, no row per tap) with at most a periodically
-  persisted aggregate count if analytics ever need one. Writing a
-  database row per live reaction tap would be exactly the "excessive
-  database writes as audience size grows" this principle warns against —
-  whoever builds Phase 3 should not copy the message-reactions table
-  pattern for it.
+- **Live stage reactions (issue #21, pre-launch interaction pass) are
+  built on the different pattern this principle calls for** — the
+  actually high-frequency case PRODUCT.md Principle 7 has in mind:
+  audience members double-tapping a speaker repeatedly during a live
+  conversation. Each send is pure ephemeral Realtime *broadcast*
+  (`supabase.channel(...).httpSend()` from `sendStageReaction`
+  in `actions.ts` — not Postgres Changes, no row per tap, no
+  `stage_reactions` table). The only durable write per reaction is a
+  single `UPDATE` to one already-existing row in `stage_reaction_heat`
+  (one row per identity per event, not per reaction) — the server-side
+  rate-limit budget, not a reaction log; see `record_stage_reaction_attempt`
+  (migration 00000000000045). No aggregate reaction count is persisted
+  (not needed yet); if one ever is, it should be periodic, per this
+  principle, not one write per tap.
 
 ## Auth flow
 

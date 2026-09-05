@@ -5,6 +5,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction } = vi.hoisted(
@@ -32,6 +33,20 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 Element.prototype.scrollTo = vi.fn();
 
 const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+};
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -85,6 +100,7 @@ const baseProps: RoomLayoutProps = {
   simulatedGuestIds: new Set(),
   stageRound: null,
   onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -190,11 +206,10 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(submitSpeakerRequest).not.toHaveBeenCalled();
     });
 
-    it("React/Vote/Gift stay inert, unchanged — no reactions/voting/gifting behavior added", () => {
+    it("React is a real, enabled control (opens the reaction panel, pre-launch interaction pass); Vote stays inert, unchanged — no voting behavior added", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-emoji-emblem")).not.toBeDisabled();
       expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
     it("opening the composer never resizes, remounts, or reconnects SpeakerStage — same DOM node, same class list", () => {

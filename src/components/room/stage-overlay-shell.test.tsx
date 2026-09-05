@@ -55,4 +55,46 @@ describe("StageOverlayShell (real-device finding: an actionable tile could end u
       expect(inner.className).toMatch(/\bpointer-events-auto\b/);
     });
   });
+
+  describe("idle adaptive transparency (pre-launch interaction pass, Section 8)", () => {
+    it("defaults to the full-opacity gradient — unaffected until a caller opts in", () => {
+      render(<StageOverlayShell>content</StageOverlayShell>);
+      expect(screen.getByTestId("stage-bottom-overlay").className).not.toMatch(/\bopacity-50\b/);
+    });
+
+    it("fades the gradient's own opacity when idle", () => {
+      render(<StageOverlayShell idle>content</StageOverlayShell>);
+      expect(screen.getByTestId("stage-bottom-overlay").className).toMatch(/\bopacity-50\b/);
+    });
+
+    it("never affects the inner, pointer-events-auto content wrapper — foreground stays fully opaque and interactive regardless of idle", () => {
+      render(
+        <StageOverlayShell idle>
+          <button type="button">Do something</button>
+        </StageOverlayShell>,
+      );
+      const overlay = screen.getByTestId("stage-bottom-overlay");
+      const inner = overlay.firstElementChild as HTMLElement;
+      expect(inner.className).not.toMatch(/\bopacity-50\b/);
+      expect(inner.className).toMatch(/\bpointer-events-auto\b/);
+      expect(screen.getByRole("button", { name: "Do something" })).toBeEnabled();
+    });
+
+    it("does nothing when gradient is already off (idle has nothing to fade) — no stray opacity class applied to a non-existent gradient", () => {
+      render(
+        <StageOverlayShell gradient={false} idle>
+          content
+        </StageOverlayShell>,
+      );
+      const overlay = screen.getByTestId("stage-bottom-overlay");
+      expect(overlay.className).not.toMatch(/\bopacity-50\b/);
+    });
+
+    it("exposes the idle state via a data attribute for real-device/visual inspection", () => {
+      const { rerender } = render(<StageOverlayShell idle={false}>content</StageOverlayShell>);
+      expect(screen.getByTestId("stage-bottom-overlay")).toHaveAttribute("data-idle", "false");
+      rerender(<StageOverlayShell idle={true}>content</StageOverlayShell>);
+      expect(screen.getByTestId("stage-bottom-overlay")).toHaveAttribute("data-idle", "true");
+    });
+  });
 });

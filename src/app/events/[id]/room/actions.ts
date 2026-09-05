@@ -35,8 +35,11 @@ import {
   resetSpeakerCandidatePool,
   releaseFailedSpeakerClaim,
 } from "@/lib/repositories/speaker-requests";
-import { mintLiveKitToken } from "@/lib/livekit/token";
+import { mintLiveKitToken, getParticipantIdentity } from "@/lib/livekit/token";
 import { syncPublishPermission } from "@/lib/livekit/permissions";
+import { recordStageReactionAttempt } from "@/lib/repositories/stage-reactions";
+import { REACTION_EMOJI_SET } from "@/lib/reactions/constants";
+import { createClient } from "@/lib/supabase/server";
 import { decideClaimEligibility, findOpenSeat, findOpenSeats, type ClaimDecision } from "@/lib/speaker-queue";
 import { isStageEstablished, ensureStageRound } from "@/lib/repositories/stage-rounds";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
@@ -971,4 +974,94 @@ async function bestEffortReconcileSelection(eventId: string): Promise<void> {
     // Swallow — see this function's own doc comment. The reactive client
     // hook (`useSpeakerSelectionReconciliation`) remains the backstop.
   }
+}
+
+/**
+ * Pre-launch interaction pass: directed, ephemeral live-stage emoji
+ * reactions — presentation/audience-interaction only. Deliberately never
+ * touches `event_speakers`, `speaker_requests`, stage rounds, or any
+ * vote — a reaction has no effect on who's speaking, RTS ranking, or
+ * Continue/Replace outcomes, by construction (this function never reads
+ * or writes any of those tables).
+ *
+ * **Never persisted as a comment/history row** — matches AGENTS.md's own
+ * "high-frequency, truly ephemeral events... must not get a database row
+ * per event" rule. The only durable state this touches at all is
+ * `stage_reaction_heat` (one row per identity per event, an aggregate
+ * rate-limit counter — see `recordStageReactionAttempt`'s own doc
+ * comment), never the reaction itself.
+ *
+ * **Delivery**: this server action is the *only* path a reaction can
+ * reach other viewers through — a modified client calling
+ * `supabase.channel(...).send()` directly, bypassing this action
+ * entirely, never reaches `record_stage_reaction_attempt` at all, so it
+ * can't flood anyone regardless of what the client-visible heat meter
+ * shows (that meter is UX only, never the enforcement — see
+ * `useReactionHeat`'s own doc comment). Broadcasts via Supabase
+ * Realtime's REST broadcast endpoint (`RealtimeChannel.httpSend`) —
+ * no persistent socket needed for a single server-side send, and no new
+ * table for delivery.
+ *
+ * `targetIdentity` is the LiveKit-format identity string
+ * (`profile:<id>`/`guest:<id>`) the *client* already computes for each
+ * occupied seat via the same `getParticipantIdentity` this repeats
+ * server-side only for validation shape, never trusted as "this identity
+ * is actually a legitimate seat occupant" — a reaction sent at a stale
+ * target simply reaches nobody's UI (every client only renders a
+ * reaction whose target matches a seat it can currently see), which is a
+ * safe, inert failure mode for a purely cosmetic feature, not something
+ * worth a second server-side seat lookup.
+ */
+export async function sendStageReaction(
+  eventId: string,
+  targetIdentity: string,
+  emoji: string,
+  x: number,
+  y: number,
+): Promise<
+  | { ok: true; heatAfter: number; inCooldownAfter: boolean }
+  | { ok: false; reason: "invalid" | "cooling-down"; heatAfter?: number; inCooldownAfter?: boolean }
+> {
+  if (!(REACTION_EMOJI_SET as readonly string[]).includes(emoji)) {
+    return { ok: false, reason: "invalid" };
+  }
+  if (typeof targetIdentity !== "string" || targetIdentity.length === 0) {
+    return { ok: false, reason: "invalid" };
+  }
+  // Clamped, not rejected — a slightly out-of-range tap (e.g. right at a
+  // tile's edge) is still a legitimate reaction; only the on-screen
+  // position needs bounding, per Section 3's own "normalized tile-
+  // relative coordinates" spec.
+  const nx = Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0.5));
+  const ny = Math.max(0, Math.min(1, Number.isFinite(y) ? y : 0.5));
+
+  const identity = await resolveIdentity();
+  const seatIdentity: SeatIdentity =
+    identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id };
+
+  const attempt = await recordStageReactionAttempt(eventId, seatIdentity);
+  if (!attempt.accepted) {
+    // Never broadcast a rejected attempt — see this function's own doc
+    // comment ("a modified client... never reaches record_stage_reaction_
+    // attempt at all" is the security claim; this is the honest half of
+    // it, that a *legitimate* client's rejected attempt is also never
+    // sent). heatAfter/inCooldownAfter are still returned so the
+    // client's own visual meter (UX only) can reconcile against the
+    // server's authoritative value rather than drift.
+    return { ok: false, reason: "cooling-down", heatAfter: attempt.heatAfter, inCooldownAfter: attempt.inCooldownAfter };
+  }
+
+  const senderIdentity = getParticipantIdentity(seatIdentity);
+  const supabase = await createClient();
+  await supabase.channel(`event-reactions:${eventId}`).httpSend("reaction", {
+    id: crypto.randomUUID(),
+    targetIdentity,
+    emoji,
+    x: nx,
+    y: ny,
+    senderIdentity,
+    ts: Date.now(),
+  });
+
+  return { ok: true, heatAfter: attempt.heatAfter, inCooldownAfter: attempt.inCooldownAfter };
 }

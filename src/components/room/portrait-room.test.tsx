@@ -5,6 +5,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
@@ -30,6 +31,20 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 }));
 
 const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+};
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -83,6 +98,7 @@ const baseProps: RoomLayoutProps = {
   simulatedGuestIds: new Set(),
   stageRound: null,
   onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -177,12 +193,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
     });
   });
 
-  describe("persistent Watch Mode controls — composer real as of Phase 2, React/Vote/Gift still inert", () => {
-    it("React, Vote, and Gift stay disabled — only the composer is functional in this phase", () => {
+  describe("persistent Watch Mode controls — composer real as of Phase 2, React real as of the pre-launch interaction pass, Vote still inert", () => {
+    it("React is a real, enabled control (opens the reaction panel); Vote stays disabled", () => {
       render(<PortraitRoom {...baseProps} />);
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-emoji-emblem")).not.toBeDisabled();
       expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
     it("there is no Discussion Expanded entry point yet — no comments-toggle", () => {

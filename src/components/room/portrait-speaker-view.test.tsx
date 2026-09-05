@@ -5,6 +5,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
@@ -25,6 +26,20 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 }));
 
 const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+};
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -100,6 +115,7 @@ const baseProps: RoomLayoutProps = {
   simulatedGuestIds: new Set(),
   stageRound: null,
   onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -201,7 +217,6 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
 
     it("Gift stays inert, unchanged", () => {
       render(<PortraitSpeakerView {...baseProps} />);
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
     it("React/Vote are replaced by the mic/camera toggles for a seated speaker — not present at all", () => {
@@ -217,7 +232,6 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
       expect(screen.getByTestId("speaker-mic-toggle")).toBeInTheDocument();
       expect(screen.getByTestId("speaker-camera-toggle")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
 
     it("tapping the mic toggle calls the same toggleMicrophone already wired through this view's props", () => {

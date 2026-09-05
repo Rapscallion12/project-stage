@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { useIdleActivity } from "@/hooks/use-idle-activity";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
+import { ReactionControl } from "@/components/room/reaction-control";
 import { AmbientComments } from "@/components/room/ambient-comments";
 import { ExpandedComments } from "@/components/room/expanded-comments";
 import { SpeakerVotePanel } from "@/components/room/speaker-vote-panel";
@@ -111,6 +113,12 @@ export function PortraitRoom(props: RoomLayoutProps) {
   // Unused if participantRole is "speaker" (PortraitSpeakerView owns its
   // own instance instead), but still has to be called here.
   const [commentsOpen, setCommentsOpen] = useState(false);
+  // Pre-launch interaction pass, Section 8: one shared idle-activity
+  // tracker for the whole composition — see useIdleActivity's own doc
+  // comment for the ambient-activity vs. explicit-hold distinction.
+  // Called before the role-router's early return below for the same
+  // rules-of-hooks reason as commentsOpen above.
+  const idleActivity = useIdleActivity();
 
   // Issue #18, Speaker View Phase 1 — see this component's own doc
   // comment above. Checked before any of this component's own
@@ -160,10 +168,25 @@ export function PortraitRoom(props: RoomLayoutProps) {
     pendingRequests,
     profileDirectory,
     onOpenRoomInfo,
+    stageReactions,
   } = props;
 
   return (
-    <div className="relative h-full min-h-0 w-full overflow-hidden">
+    <div
+      className="relative h-full min-h-0 w-full overflow-hidden"
+      // Pre-launch interaction pass, Section 8: ambient "the viewer is
+      // doing something" signal for the whole composition — a real tap/
+      // keypress/focus anywhere (the composer, the reaction button, a
+      // vote control) resets the idle timer; see useIdleActivity's own
+      // doc comment for why focus specifically uses hold/release instead
+      // of a plain reset (a focused composer must stay solid the whole
+      // time it's focused, not just re-trigger a fresh 2.5s countdown on
+      // each keystroke).
+      onPointerDownCapture={idleActivity.registerActivity}
+      onKeyDownCapture={idleActivity.registerActivity}
+      onFocusCapture={idleActivity.holdActive}
+      onBlurCapture={idleActivity.releaseActive}
+    >
       <SpeakerStage
         speakers={speakers}
         getParticipant={getParticipant}
@@ -184,6 +207,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
         viewerIdentity={identity}
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
+        stageReactions={stageReactions}
         // Issue #18 UX finding: dims the stage behind the center-stage
         // "Going live" countdown — SpeakerStage's own existing scrim
         // mechanism (issue #21), reused rather than a second dimming
@@ -276,10 +300,16 @@ export function PortraitRoom(props: RoomLayoutProps) {
       ) : (
         <>
           <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
-            <AmbientComments messages={messages} onExpand={() => setCommentsOpen(true)} />
+            <AmbientComments
+              messages={messages}
+              onExpand={() => {
+                setCommentsOpen(true);
+                idleActivity.holdActive();
+              }}
+            />
           </div>
 
-          <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
+          <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2" idle={idleActivity.idle}>
             {joinSeatMessage && (
               <p
                 className="rounded-lg bg-black/35 px-3 py-2 text-xs text-red-400"
@@ -310,6 +340,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
               </div>
             )}
             <WatchModeControls
+              idle={idleActivity.idle}
               composer={
                 <ChatPanel
                   eventId={event.id}
@@ -325,12 +356,22 @@ export function PortraitRoom(props: RoomLayoutProps) {
                 />
               }
               voteSlot={<SpeakerVotePanel speakers={speakers} isPreviewBuild={isPreviewBuild} />}
+              reactionSlot={
+                <ReactionControl
+                  reactions={stageReactions}
+                  idle={idleActivity.idle}
+                  onOpenChange={(open) => (open ? idleActivity.holdActive() : idleActivity.releaseActive())}
+                />
+              }
             />
           </StageOverlayShell>
 
           <ExpandedComments
             open={commentsOpen}
-            onClose={() => setCommentsOpen(false)}
+            onClose={() => {
+              setCommentsOpen(false);
+              idleActivity.releaseActive();
+            }}
             eventId={event.id}
             messages={messages}
             reactions={reactions}

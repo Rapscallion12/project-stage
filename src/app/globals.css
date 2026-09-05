@@ -309,3 +309,73 @@ body.room-active > header {
     transform: scale(1);
   }
 }
+
+/*
+ * Pre-launch interaction pass — the reaction button's own cooldown
+ * signal (Section 5/11): a slow, subtle pulse, never a hard flash — the
+ * heat fill itself (already visibly full) is the primary signal; this
+ * is a secondary nudge, skipped entirely under `prefers-reduced-motion`
+ * (see ReactionButton's own doc comment).
+ */
+@keyframes reaction-cooldown-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/*
+ * Pre-launch interaction pass — one directed reaction burst (Section 3):
+ * a brief rise-and-fade, not a bounce or spin — appears near the tap
+ * location, drifts slightly, scales down a touch, and fades out. Each
+ * burst randomizes its own horizontal drift/rotation via inline custom
+ * properties (see StageReactionsOverlay) so repeated reactions from the
+ * same spot don't perfectly stack.
+ */
+@keyframes reaction-burst-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate(0, 0) scale(0.6) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate(calc(var(--drift-x, 0px) * 0.2), -10px) scale(1.05)
+      rotate(calc(var(--rotate, 0deg) * 0.2));
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate(var(--drift-x, 0px), -72px) scale(0.85) rotate(var(--rotate, 0deg));
+  }
+}
+
+/* Section 11: reduced motion still fades the burst, just without drift/rotation/scale. */
+@keyframes reaction-burst-rise-reduced {
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Side-lane reaction bubbles (Section 4B) — float up a short, fixed lane and fade, independent of any tap location. */
+@keyframes reaction-lane-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.7);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-120px) scale(0.9);
+  }
+}

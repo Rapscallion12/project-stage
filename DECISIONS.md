@@ -3,6 +3,102 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-04 — Pre-launch interaction pass: directed reactions, tap-timer speaker swap, adaptive idle UI, Gift-icon removal, Session Simulator launch-visibility gate (issue #21)
+
+**Problem**: four independent product decisions had to be made before this
+pass could be built at all — none were pre-specified precisely enough to
+just implement, and each had a plausible wrong-by-default implementation.
+
+**1. Reaction rate limiting — where does the security boundary live?**
+Alternatives considered: (a) a purely client-side cooldown (rejected
+outright — trivially bypassed by any modified client, and the pass
+explicitly named this "CRITICAL"); (b) a fixed-window limiter (e.g. "max N
+per 10s") — rejected because the spec explicitly called this "crude" and
+wanted enthusiastic bursts during exciting moments to be allowed, which a
+fixed window punishes arbitrarily depending on window alignment; (c) a
+new, general-purpose anti-abuse subsystem — rejected as over-engineering a
+prototype ("not an enormous anti-abuse platform").
+
+**Decision**: one new table (`stage_reaction_heat`) plus one atomic
+`SECURITY DEFINER` Postgres RPC (`record_stage_reaction_attempt`,
+migration 00000000000045), granted to `service_role` only — the *exact*
+existing trust tier this codebase already uses for guest-identity
+seat actions (`claim_speaker_seat`, `request_to_speak_as_guest`). The
+function does continuous linear decay (`heat -= drain_rate * elapsed`)
+computed inline from `now() - updated_at` under a row lock (`for update`),
+so there's no background job and no read-then-write race. Hysteresis is a
+persisted `in_cooldown` boolean: once true, it only clears when decayed
+heat drops to a lower *exit* threshold (55), not merely below the cap
+(100) — this is what prevents 99/100 thrashing the spec called out by
+name. The client-visible meter (`useReactionHeat`) is explicitly
+documented, in three separate files, as UX only: it bumps optimistically
+on send, then reconciles with the server's authoritative returned
+heat/cooldown regardless of accept or reject, so client drift
+self-corrects and a rejected attempt never broadcasts.
+
+**Reason**: reuses an established, audited trust pattern instead of
+inventing one; one function is "proportionate," matching the codebase's
+existing appetite for exactly this shape of problem. **Tradeoff**: tuning
+constants (`REACTION_HEAT_INCREMENT` etc.) are duplicated by hand between
+the SQL function's own defaults and `lib/reactions/constants.ts` — no
+shared runtime exists between Postgres and the Next.js client — so a real
+tuning pass must change both, documented explicitly in both places.
+
+**2. Timer-swap must not remount media — how is that actually guaranteed,
+not just intended?** Alternative considered: swap which seat's *data*
+renders in the first vs. second slot (i.e., re-derive `seat1`/`seat2`
+from a `swapped` flag before rendering). Rejected once traced through
+React's reconciliation model: whatever ends up in "the first slot" would
+receive a *different* value in its stable `key`, so React would still
+treat it as a different logical element on swap. **Decision**: keep
+`seat1 is always seat 1's authoritative data` and instead swap *which
+`renderTile(seatNumber)` call happens first* in the JSX array
+(`firstSeat`/`secondSeat` derived from `swapped`). Each call's wrapper
+`<div key={seat?.id}>` keeps an unchanged key across a swap, so React
+moves the existing DOM/component subtree rather than unmount-remounting
+it — proven with a dedicated test asserting the exact same DOM node
+reference for a tile before and after swapping. This was necessary,
+not incidental: Section 12 of this pass explicitly named "recreate the
+previous local media remount/stale-preview problem" (Session 67's own
+bug) as a regression to avoid, and the wrong implementation above would
+have reintroduced exactly that class of bug for camera/video elements
+mid-stream.
+
+**3. Idle adaptive transparency — what actually gets faded?** The spec's
+own instruction ("fade background surfaces/scrims, not foreground") named
+`StageOverlayShell`'s `gradient` prop as the presumed target. Auditing
+first (per this project's own standing rule) found every real call site
+already passes `gradient={false}` — a leftover from the prior "05 —
+Social Stage" redesign, which replaced the tall gradient wash with small
+individual translucent "glass" emblems. Fading a prop nothing enables
+would have been a complete no-op in production. **Decision**: fade the
+*actual* visible surfaces instead — `WatchModeControls`' own
+composer-placeholder/emblem backgrounds and the new `ReactionButton`'s
+background — while leaving the now-defense-in-depth `gradient` prop wired
+for the future. **Explicitly out of scope, by decision, not oversight**:
+`ChatPanel`'s real composer background (shared with the lobby — higher
+blast radius) and `SpeakerVotePanel` (the pass explicitly said not to
+touch vote UI, and judged even a pure opacity tweak too close to that
+line) — flagged for a future pass if wanted.
+
+**4. Simulator launch-visibility — is "Vercel Preview" still a safe
+proxy for "internal testing only"?** No, and the spec called this out
+explicitly: previews are now also used to test the real launch-facing
+experience, so `isPreviewOrDevBuild()` alone can no longer gate
+simulator UI without exposing it to ordinary preview visitors.
+**Decision**: a second, narrower, independent flag —
+`isSimulatorUiEnabled()` (`ENABLE_SESSION_SIMULATOR === "1"`), AND'd with
+the existing `isPreviewOrDevBuild()` check, defaulting off everywhere
+including previews. Deliberately additive rather than a replacement: the
+outer preview/dev gate stays as defense in depth, and every simulator
+*action* (not just the UI) still independently re-checks
+`isPreviewOrDevBuild()` on its own, so this is a visibility change, not a
+new bypass. **Alternative rejected**: repurposing an existing flag or
+env var — none of the existing ones meant "an internal developer
+deliberately wants simulator UI right now" without also meaning
+something else (preview vs. production) that previews now need to be
+independent of.
+
 ## 2026-09-04 — Media rendering bugfix pass: stale local self-preview after joining, missing audio-only visualizer (real-device report, issue #21)
 
 **Problem**: real-device testing of the Media Readiness + Audio

@@ -1,12 +1,16 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import type { LocalAudioTrack, LocalVideoTrack, Participant, RemoteAudioTrack } from "livekit-client";
 import { SpeakerTile } from "@/components/room/speaker-tile";
 import { SelfPreview } from "@/components/room/self-preview";
 import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
+import { ReactionSideLane } from "@/components/room/stage-reactions-overlay";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { deriveParticipantMediaState } from "@/lib/participant-media-state";
 import { cn } from "@/lib/utils";
 import { useStageRoundCountdown } from "@/hooks/use-stage-round-countdown";
+import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
@@ -144,6 +148,7 @@ export function SpeakerStage({
   viewerIdentity = null,
   pendingRequests = [],
   profileDirectory = {},
+  stageReactions,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -181,8 +186,60 @@ export function SpeakerStage({
   pendingRequests?: RankedPendingRequest[];
   /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible speaker with a public profile — see `useProfileDirectory`'s own doc comment. Optional, defaulting to empty, so every existing caller/test that doesn't care can omit it. */
   profileDirectory?: Record<string, ProfileDirectoryEntry>;
+  /** Pre-launch interaction pass: the one shared reactions controller (see `useReactionsController`, instantiated once in `EventRoom`) — drives directed double-tap sending, on-speaker/side rendering, and is entirely absent (undefined) for any caller/test that doesn't care about reactions at all. Named `stageReactions`, not `reactions`, to avoid colliding with `RoomLayoutProps`' own pre-existing `reactions` field (the lobby comment-reaction counts — a different, unrelated concept). */
+  stageReactions?: ReactionsController;
 }) {
   const stageRoundDisplay = useStageRoundCountdown(stageRound, isPreviewBuild);
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  // Pre-launch interaction pass, Section 7: purely local visual ordering
+  // — never touches which seatNumber renderTile(1)/renderTile(2) below
+  // actually describes (authoritative seat identity, media, votes,
+  // reactions all key off that unchanged seatNumber/identity), only
+  // which DOM position each call's *result* lands in. Local `useState`,
+  // not persisted — this component only exists at all for the audience/
+  // candidate composition (a seated speaker's own Speaker View uses
+  // `soloMode`, which has no top/bottom relationship to swap — see this
+  // component's own `soloMode` doc comment), and audience viewers never
+  // undergo the role-router remount that would otherwise reset it.
+  const [swapped, setSwapped] = useState(false);
+  const tileRefs = useRef<Record<1 | 2, HTMLDivElement | null>>({ 1: null, 2: null });
+  const prevRectsRef = useRef<Record<1 | 2, DOMRect | null>>({ 1: null, 2: null });
+
+  // FLIP animation: capture positions *before* the reorder commits, then
+  // in a layout effect after it, measure the new positions and animate
+  // from the old delta back to zero — the tiles visibly exchange places
+  // instead of teleporting. Skipped entirely under prefers-reduced-motion
+  // (Section 11) — the reorder itself still happens, just instantly.
+  useLayoutEffect(() => {
+    if (prefersReducedMotion) return;
+    (Object.keys(tileRefs.current) as unknown as Array<1 | 2>).forEach((seatNumber) => {
+      const el = tileRefs.current[seatNumber];
+      const prev = prevRectsRef.current[seatNumber];
+      if (!el || !prev) return;
+      const next = el.getBoundingClientRect();
+      const dy = prev.top - next.top;
+      if (Math.abs(dy) < 1) return;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${dy}px)`;
+      // Force a reflow so the browser registers the starting transform
+      // before animating to zero — the standard FLIP technique.
+      void el.offsetHeight;
+      requestAnimationFrame(() => {
+        el.style.transition = "transform 280ms ease";
+        el.style.transform = "";
+      });
+    });
+    prevRectsRef.current = { 1: null, 2: null };
+  }, [swapped, prefersReducedMotion]);
+
+  function handleSwapTap() {
+    prevRectsRef.current = {
+      1: tileRefs.current[1]?.getBoundingClientRect() ?? null,
+      2: tileRefs.current[2]?.getBoundingClientRect() ?? null,
+    };
+    setSwapped((current) => !current);
+  }
   if (process.env.NODE_ENV !== "production" && soloMode && !isSpeaker) {
     // Issue #18 consistency fix: soloMode and isSpeaker are two props
     // from the same caller that must agree — only PortraitSpeakerView/
@@ -275,9 +332,13 @@ export function SpeakerStage({
         )
       : null;
     const seatState = emptySeatState(seat, seatNumber);
+    const showOnSpeakerReactions = Boolean(stageReactions && stageReactions.showReactions && stageReactions.displayMode === "on-speaker");
     return (
       <div
         key={seat?.id ?? `empty-${seatNumber}`}
+        ref={(el) => {
+          tileRefs.current[seatNumber] = el;
+        }}
         className={cn("min-h-0 min-w-0 flex-1", promoteOpenSeat && seat === null && "order-first")}
       >
         <SpeakerTile
@@ -304,6 +365,17 @@ export function SpeakerStage({
           isSimulated={Boolean(seat?.guest_id && simulatedGuestIds?.has(seat.guest_id))}
           emptySeatState={seatState}
           profileEntry={seat?.profile_id ? profileDirectory[seat.profile_id] : undefined}
+          // Pre-launch interaction pass, Section 2: `identity` here is
+          // this seat's own authoritative occupant, computed the same
+          // way regardless of which visual slot (top/bottom, left/right)
+          // this renderTile() call happens to be placed in — see the
+          // timer-swap section below for why swapping *never* changes
+          // which seatNumber a given renderTile() call describes.
+          onDoubleTapReact={
+            identity && stageReactions ? (x, y) => void stageReactions.send(identity, stageReactions.selectedEmoji, x, y) : undefined
+          }
+          onSpeakerReactions={identity && stageReactions ? stageReactions.incoming.filter((r) => r.targetIdentity === identity) : []}
+          showOnSpeakerReactions={showOnSpeakerReactions}
         />
       </div>
     );
@@ -336,6 +408,20 @@ export function SpeakerStage({
   const showSelfAudioOnly = !showSelfVideo && cameraPublished && localMediaState.hasAudio;
 
   const renderSolo = soloMode && mySeatNumber !== null;
+  // Pre-launch interaction pass, Section 7: portrait's stacked layout is
+  // the *only* one with a real top/bottom relationship — `orientation
+  // === "landscape"` covers both DesktopRoom (side-by-side, no role
+  // router) and MobileLandscapeRoom (also side-by-side — this codebase's
+  // "landscape" always means a row, never a stack, see this component's
+  // own layout `className` above), so swapping stays meaningless there
+  // by construction, not by a separate desktop-specific check. Both
+  // seats must be occupied (Section 7: "do not allow timer swapping when
+  // only one speaker exists") and this can't be `renderSolo` (a seated
+  // speaker's own Speaker View has nothing to swap — see `soloMode`'s
+  // own doc comment).
+  const canSwapSpeakers = orientation === "portrait" && !renderSolo && seat1 !== null && seat2 !== null;
+  const firstSeat = swapped ? 2 : 1;
+  const secondSeat = swapped ? 1 : 2;
 
   return (
     <div data-testid="room-stage" className="stage-container relative z-0 h-full w-full overflow-hidden bg-black">
@@ -349,7 +435,7 @@ export function SpeakerStage({
           renderTile(mySeatNumber === 1 ? 2 : 1)
         ) : (
           <>
-            {renderTile(1)}
+            {renderTile(firstSeat)}
             <div
               data-testid="speaker-divider"
               aria-hidden="true"
@@ -358,7 +444,7 @@ export function SpeakerStage({
                 orientation === "landscape" ? "w-2 stage-divider-landscape" : "h-2",
               )}
             />
-            {renderTile(2)}
+            {renderTile(secondSeat)}
           </>
         )}
       </div>
@@ -389,8 +475,15 @@ export function SpeakerStage({
         </div>
       ) : null}
 
-      {/* Shared round badge (issue #21 corrective pass) — see this component's own doc comment above the stageRound prop; rendered exactly once, here, never per-tile. */}
-      {stageRoundDisplay && <StageRoundBadge display={stageRoundDisplay} />}
+      {/* Shared round badge (issue #21 corrective pass) — see this component's own doc comment above the stageRound prop; rendered exactly once, here, never per-tile. Pre-launch interaction pass, Section 7: becomes tappable (speaker swap) only in portrait with both seats occupied — see StageRoundBadge's own doc comment. */}
+      {stageRoundDisplay && (
+        <StageRoundBadge display={stageRoundDisplay} onSwapTap={canSwapSpeakers ? handleSwapTap : undefined} />
+      )}
+
+      {/* Pre-launch interaction pass, Section 4B: the "Side" reaction display mode — rendered once at the stage level, never per-tile (see ReactionSideLane's own doc comment for why it isn't scoped to either speaker). */}
+      {stageReactions && stageReactions.showReactions && stageReactions.displayMode === "side" && (
+        <ReactionSideLane reactions={stageReactions.incoming} />
+      )}
 
       {/* Scrim (issue #21) — driven by scrimOpacity; see the doc comment above. */}
       <div
@@ -418,16 +511,49 @@ export function SpeakerStage({
  * (top chrome, self-preview, ambient comments, controls, Vote panel) is
  * ever positioned at center-stage, so this reaches a clean spot no other
  * layer contests. `pointer-events-none` so it never blocks a tap on a
- * tile underneath, same discipline the scrim already uses.
+ * tile underneath, same discipline the scrim already uses — except when
+ * `onSwapTap` is provided (pre-launch interaction pass, Section 7), in
+ * which case this becomes a real, focusable button instead: the timer
+ * stays visually identical (same text, same position), just tappable,
+ * with a small, restrained swap-arrows glyph added so it reads as "you
+ * can tap this" without turning into a large new control cluttering the
+ * stage's center — a subtle discoverability nudge, not a redesign.
+ * Tapping it never changes the *displayed* time — it still reads exactly
+ * the same authoritative shared-round countdown either way; only which
+ * speaker sits on top changes (see `handleSwapTap`/`canSwapSpeakers`
+ * above).
  */
-function StageRoundBadge({ display }: { display: { remainingSeconds: number; roundNumber: number } }) {
+function StageRoundBadge({
+  display,
+  onSwapTap,
+}: {
+  display: { remainingSeconds: number; roundNumber: number };
+  onSwapTap?: () => void;
+}) {
+  const text = `Round ${display.roundNumber} · ${display.remainingSeconds}s`;
+  if (!onSwapTap) {
+    return (
+      <div
+        data-testid="stage-round-timer"
+        aria-hidden="true"
+        className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow"
+      >
+        {text}
+      </div>
+    );
+  }
   return (
-    <div
+    <button
+      type="button"
       data-testid="stage-round-timer"
-      aria-hidden="true"
-      className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow"
+      onClick={onSwapTap}
+      aria-label={`${text}. Tap to swap which speaker is on top.`}
+      className="pointer-events-auto absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow transition-colors hover:bg-black/75"
     >
-      Round {display.roundNumber} · {display.remainingSeconds}s
-    </div>
+      <span>{text}</span>
+      <span aria-hidden="true" className="text-white/50">
+        ⇅
+      </span>
+    </button>
   );
 }

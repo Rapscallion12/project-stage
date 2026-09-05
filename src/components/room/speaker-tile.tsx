@@ -9,7 +9,10 @@ import { inactiveSince } from "@/lib/speaker-presence";
 import { ParticipantAvatar } from "@/components/room/participant-avatar";
 import { ProfileLink } from "@/components/room/profile-link";
 import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
+import { OnSpeakerReactionBursts } from "@/components/room/stage-reactions-overlay";
 import { deriveParticipantMediaState } from "@/lib/participant-media-state";
+import { useDoubleTap } from "@/hooks/use-double-tap";
+import type { IncomingStageReaction } from "@/hooks/use-stage-reactions";
 import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
@@ -70,6 +73,9 @@ export function SpeakerTile({
   isSimulated = false,
   emptySeatState,
   profileEntry,
+  onDoubleTapReact,
+  onSpeakerReactions = [],
+  showOnSpeakerReactions = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -180,9 +186,26 @@ export function SpeakerTile({
   emptySeatState?: "joining" | "selecting" | "waiting" | "fallback-open";
   /** Issue #29: this seat's occupant's own public profile, if `speaker.profile_id` has one — see `useProfileDirectory`'s own doc comment. Undefined for a guest, a simulated identity, or an account that hasn't chosen a username yet; every one of those keeps today's exact non-navigable, initials-only avatar. */
   profileEntry?: ProfileDirectoryEntry;
+  /**
+   * Pre-launch interaction pass, Section 2: double-tapping this tile's
+   * own background surface (never a nested interactive control — see
+   * `useDoubleTap`'s own doc comment) sends the viewer's currently
+   * selected reaction to *this seat's* authoritative identity. Provided
+   * by `SpeakerStage.renderTile` from the same `identity` it already
+   * computes from `speaker.profile_id`/`guest_id` — never derived from
+   * this tile's visual position, so a local top/bottom swap can never
+   * misattribute a reaction. `undefined` for an empty seat (there's
+   * nobody to react to) or when reactions are unavailable.
+   */
+  onDoubleTapReact?: (x: number, y: number) => void;
+  /** Pre-launch interaction pass, Section 3: this seat's own incoming reactions, already filtered by the caller — see `OnSpeakerReactionBursts`. */
+  onSpeakerReactions?: IncomingStageReaction[];
+  /** Pre-launch interaction pass, Section 4: true only when the viewer's own display preference is "On speaker" *and* they haven't hidden reactions — "Side"/hidden modes render nothing here at all (see `ReactionSideLane`/`SpeakerStage` instead). */
+  showOnSpeakerReactions?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const doubleTap = useDoubleTap(onDoubleTapReact ?? (() => {}));
 
   // Issue #18 audience-countdown finding, broadened by the unified
   // inactive-speaker finding: the *same* authoritative deadline this
@@ -303,7 +326,14 @@ export function SpeakerTile({
   }
 
   return (
-    <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
+    <div
+      data-testid="speaker-tile"
+      className="relative h-full w-full overflow-hidden bg-foreground/10"
+      onPointerUp={onDoubleTapReact ? doubleTap.onPointerUp : undefined}
+    >
+      {showOnSpeakerReactions && onSpeakerReactions.length > 0 && (
+        <OnSpeakerReactionBursts reactions={onSpeakerReactions} />
+      )}
       {showBigVideo ? (
         // Only ever a remote participant's video now — the local
         // speaker's own feed lives in SelfPreview instead (see this

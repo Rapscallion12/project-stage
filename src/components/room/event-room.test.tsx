@@ -155,6 +155,14 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
   reconcileSpeakerSelectionAction: vi.fn(),
 }));
 
+vi.mock("@/components/room/session-simulator-panel", () => ({
+  // Pre-launch interaction pass: a thin stand-in — this file's own tests
+  // exercise only whether EventRoom mounts this at all (the
+  // isPreviewBuild && isSimulatorUiEnabled gate), never the real panel's
+  // own extensive behavior (covered by session-simulator-panel.test.tsx).
+  SessionSimulatorPanel: () => <div data-testid="session-simulator-panel" />,
+}));
+
 vi.mock("@/components/room/portrait-room", () => ({
   // Issue #18 real-device finding (2026-08-27): the tap-empty-seat button
   // is a deliberate addition to this stand-in — only this composition's
@@ -221,7 +229,10 @@ function mySeat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   };
 }
 
-function renderEventRoom(initialSpeakers: EventSpeaker[]) {
+function renderEventRoom(
+  initialSpeakers: EventSpeaker[],
+  overrides: { isPreviewBuild?: boolean; isSimulatorUiEnabled?: boolean } = {},
+) {
   return render(
     <EventRoom
       event={event}
@@ -233,7 +244,8 @@ function renderEventRoom(initialSpeakers: EventSpeaker[]) {
       initialReactions={{}}
       initialHasPendingRequest={false}
       initialPendingRequests={[]}
-      isPreviewBuild={false}
+      isPreviewBuild={overrides.isPreviewBuild ?? false}
+      isSimulatorUiEnabled={overrides.isSimulatorUiEnabled ?? false}
     />,
   );
 }
@@ -319,6 +331,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
           isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
 
@@ -345,6 +358,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
           isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -371,6 +385,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
           isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.queryByTestId("portrait-room")).not.toBeInTheDocument();
@@ -389,6 +404,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
           isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -583,6 +599,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
           isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
 
@@ -624,6 +641,7 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialHasPendingRequest={false}
           initialPendingRequests={[]}
           isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -688,6 +706,28 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
 
       fireEvent.click(screen.getByTestId("room-info-backdrop"));
       expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Session Simulator launch visibility (pre-launch interaction pass): a separate, narrower gate than isPreviewBuild alone", () => {
+    it("does not render the simulator panel when both isPreviewBuild and isSimulatorUiEnabled are false (ordinary production)", () => {
+      renderEventRoom([], { isPreviewBuild: false, isSimulatorUiEnabled: false });
+      expect(screen.queryByTestId("session-simulator-panel")).not.toBeInTheDocument();
+    });
+
+    it("does not render the simulator panel on an ordinary Vercel preview (isPreviewBuild true) when isSimulatorUiEnabled is not explicitly on — a preview deployment alone must not expose it", () => {
+      renderEventRoom([], { isPreviewBuild: true, isSimulatorUiEnabled: false });
+      expect(screen.queryByTestId("session-simulator-panel")).not.toBeInTheDocument();
+    });
+
+    it("does not render the simulator panel merely because isSimulatorUiEnabled is true, if isPreviewBuild is somehow false — both are required, defense in depth", () => {
+      renderEventRoom([], { isPreviewBuild: false, isSimulatorUiEnabled: true });
+      expect(screen.queryByTestId("session-simulator-panel")).not.toBeInTheDocument();
+    });
+
+    it("renders the simulator panel only when both isPreviewBuild and isSimulatorUiEnabled are explicitly true — the intentional internal-development condition", () => {
+      renderEventRoom([], { isPreviewBuild: true, isSimulatorUiEnabled: true });
+      expect(screen.getByTestId("session-simulator-panel")).toBeInTheDocument();
     });
   });
 });

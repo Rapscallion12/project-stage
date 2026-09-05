@@ -7,6 +7,22 @@ import type { StageRound } from "@/lib/repositories/stage-rounds";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { Identity } from "@/lib/identity";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
+
+const MOCK_STAGE_REACTIONS_BASE: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+};
 
 // Media rendering bugfix pass (real-device report): jsdom has no real Web
 // Audio API — see speaker-tile.test.tsx's identical mock for why this is
@@ -1010,6 +1026,160 @@ describe("SpeakerStage", () => {
       );
       expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
       expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
+    });
+  });
+
+  describe("tap-center-timer speaker swap (pre-launch interaction pass, Section 7): purely local visual ordering, never authoritative state", () => {
+    const twoSpeakers = [
+      speaker({ id: "s1", seat_number: 1, profile_id: "alice", display_name: "Alice" }),
+      speaker({ id: "s2", seat_number: 2, profile_id: "bob", display_name: "Bob" }),
+    ];
+
+    it("the timer is a plain, non-interactive badge when only one seat is occupied — no meaningless swap for a single speaker", () => {
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "alice" })]}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+        />,
+      );
+      const timer = screen.getByTestId("stage-round-timer");
+      expect(timer.tagName).toBe("DIV");
+    });
+
+    it("the timer is a plain, non-interactive badge in landscape (side-by-side — no top/bottom relationship to swap), even with both seats occupied", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="landscape"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+        />,
+      );
+      const timer = screen.getByTestId("stage-round-timer");
+      expect(timer.tagName).toBe("DIV");
+    });
+
+    it("becomes a real, tappable button in portrait once both seats are occupied", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+        />,
+      );
+      const timer = screen.getByTestId("stage-round-timer");
+      expect(timer.tagName).toBe("BUTTON");
+      expect(timer).toHaveAccessibleName(/tap to swap/i);
+    });
+
+    it("still shows the same authoritative round text whether or not it's tappable", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture({ round_number: 3 })}
+          isPreviewBuild
+        />,
+      );
+      expect(screen.getByTestId("stage-round-timer")).toHaveTextContent("Round 3");
+    });
+
+    it("one tap visually swaps which seat's tile renders first (top); a second tap restores the original order", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+        />,
+      );
+      const tiles = () => screen.getAllByTestId("speaker-tile");
+      expect(tiles()[0]).toHaveTextContent("Alice");
+      expect(tiles()[1]).toHaveTextContent("Bob");
+
+      fireEvent.click(screen.getByTestId("stage-round-timer"));
+      expect(tiles()[0]).toHaveTextContent("Bob");
+      expect(tiles()[1]).toHaveTextContent("Alice");
+
+      fireEvent.click(screen.getByTestId("stage-round-timer"));
+      expect(tiles()[0]).toHaveTextContent("Alice");
+      expect(tiles()[1]).toHaveTextContent("Bob");
+    });
+
+    it("swapping never changes the authoritative seat identity a double-tap reaction targets — it still follows the person, not the visual slot", () => {
+      const send = vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false }));
+      const stageReactions = { ...MOCK_STAGE_REACTIONS_BASE, send };
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+          stageReactions={stageReactions}
+        />,
+      );
+
+      // Swap so Bob now renders first (top).
+      fireEvent.click(screen.getByTestId("stage-round-timer"));
+      const topTile = screen.getAllByTestId("speaker-tile")[0];
+      expect(topTile).toHaveTextContent("Bob");
+
+      // Double-tap the now-top tile (visually Bob's position) — the
+      // reaction must still target Bob's own authoritative identity,
+      // derived from seat_number/profile_id, never "whichever tile is
+      // first in the DOM right now."
+      const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 } as DOMRect;
+      vi.spyOn(topTile, "getBoundingClientRect").mockReturnValue(rect);
+      fireEvent.pointerUp(topTile, { clientX: 50, clientY: 50 });
+      fireEvent.pointerUp(topTile, { clientX: 50, clientY: 50 });
+
+      expect(send).toHaveBeenCalledWith("profile:bob", expect.any(String), expect.any(Number), expect.any(Number));
+    });
+
+    it("swapping does not remount either tile — the same speaker-tile DOM node is reused, just repositioned (no fresh media attach/stale-preview regression)", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+        />,
+      );
+      const aliceTileBefore = screen.getAllByTestId("speaker-tile").find((el) => el.textContent?.includes("Alice"));
+      fireEvent.click(screen.getByTestId("stage-round-timer"));
+      const aliceTileAfter = screen.getAllByTestId("speaker-tile").find((el) => el.textContent?.includes("Alice"));
+      expect(aliceTileAfter).toBe(aliceTileBefore);
+    });
+
+    it("respects prefers-reduced-motion — the reorder still happens, just without the FLIP transform animation", () => {
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("prefers-reduced-motion"),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }));
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          stageRound={stageRoundFixture()}
+          isPreviewBuild
+        />,
+      );
+      fireEvent.click(screen.getByTestId("stage-round-timer"));
+      expect(screen.getAllByTestId("speaker-tile")[0]).toHaveTextContent("Bob");
+      vi.unstubAllGlobals();
     });
   });
 });

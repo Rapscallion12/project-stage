@@ -28,6 +28,8 @@ import {
 import { jitteredDelayMs, randomOrdinaryComment, randomSpeakerRequestComment } from "@/lib/simulator/content";
 import { replacePercentage, resolveRoundOutcome } from "@/lib/speaker-round";
 import { useNow } from "@/hooks/use-now";
+import { getParticipantIdentity } from "@/lib/livekit/token";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import { useSeatPromotionTiming } from "@/hooks/use-seat-promotion-timing";
 import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
 import { SimButton } from "@/components/room/sim-button";
@@ -306,6 +308,7 @@ export function SessionSimulatorPanel({
   refetchSpeakers,
   getSpeakerSyncDiagnostics,
   getSelectionReconcileDiagnostics,
+  stageReactions,
 }: {
   eventId: string;
   speakers: EventSpeaker[];
@@ -335,6 +338,19 @@ export function SessionSimulatorPanel({
   getSpeakerSyncDiagnostics?: () => SpeakerSyncDiagnostics;
   /** Issue #21, nineteenth corrective pass: `useSpeakerSelectionReconciliation`'s own diagnostics — surfaced in Copy Debug Snapshot's new SELECTION RECONCILIATION section. Optional, same reasoning as `getSpeakerSyncDiagnostics`. */
   getSelectionReconcileDiagnostics?: () => SelectionReconcileDiagnostics;
+  /**
+   * Pre-launch interaction pass, Section 13/14: `EventRoom`'s own shared
+   * `useReactionsController` instance, passed straight through — never a
+   * simulator-specific duplicate. Lets this preview-only panel send a
+   * real directed reaction at whichever seat is currently occupied, the
+   * same production `send()` path a real double-tap uses (real RPC rate
+   * limiting, real Realtime broadcast), so testing incoming-reaction
+   * rendering/heat/cooldown doesn't require a second browser tab. Purely
+   * additive — every existing reaction control still works exactly the
+   * same with or without the simulator mounted. Optional so this
+   * component still works standalone in tests that don't wire reactions.
+   */
+  stageReactions?: ReactionsController;
 }) {
   const [running, setRunning] = useState(false);
   // Issue #21, fourth corrective pass: the bounded startup state machine
@@ -2561,6 +2577,39 @@ export function SessionSimulatorPanel({
         <SimButton data-testid="sim-resolve-round" onClick={resolveRoundNow} className="rounded bg-indigo-600 px-2 py-1 font-medium">
           Resolve Round Now
         </SimButton>
+        {/*
+          Pre-launch interaction pass, Section 13/14: preview-only reaction
+          testing support — sends one real directed reaction (via the same
+          shared `stageReactions.send()` every real double-tap uses) at
+          whichever seat is currently occupied, with a varied normalized
+          position each click so on-speaker drift/scale is visible without
+          a second tab. Disabled — not hidden — when that seat is empty or
+          no `stageReactions` controller was supplied, matching this
+          panel's existing disabled-affordance convention elsewhere.
+        */}
+        {stageReactions &&
+          ([1, 2] as const).map((seatNumber) => {
+            const seat = speakers.find((s) => s.seat_number === seatNumber);
+            const identity = seat
+              ? getParticipantIdentity(seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! })
+              : null;
+            return (
+              <SimButton
+                key={seatNumber}
+                data-testid={`sim-simulate-reaction-seat-${seatNumber}`}
+                disabled={!identity}
+                onClick={() => {
+                  if (!identity) return;
+                  const x = 0.15 + Math.random() * 0.7;
+                  const y = 0.15 + Math.random() * 0.7;
+                  void stageReactions.send(identity, stageReactions.selectedEmoji, x, y);
+                }}
+                className="rounded bg-white/10 px-2 py-1 disabled:opacity-40"
+              >
+                Simulate Reaction → Seat {seatNumber}
+              </SimButton>
+            );
+          })}
         {/*
           Issue #21, tenth corrective pass, Sections 1, 25: a real-device
           bug report is far more useful as pasteable text than a

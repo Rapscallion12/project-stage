@@ -17,6 +17,7 @@ import {
 import { createServiceClient } from "@/lib/supabase/service";
 import { requestToSpeakAsGuest, castSpeakerRequestVoteAsGuest } from "@/lib/repositories/speaker-requests";
 import { claimSpeakerSeat, castSpeakerRoundVoteAsGuest, endSpeakerSeat } from "@/lib/repositories/event-speakers";
+import { recordStageReactionAttempt } from "@/lib/repositories/stage-reactions";
 
 /**
  * Issue #21, Part 5: the gate itself — every simulator action must
@@ -113,6 +114,7 @@ describe("simulator-actions (issue #21, Part 5) — refuse to run on production"
       speakersDeleted: 0,
       requestVotesDeleted: 0,
       roundVotesDeleted: 0,
+      stageReactionHeatDeleted: 0,
     });
   });
 });
@@ -231,6 +233,23 @@ describe.skipIf(!hasServiceCredentials)("resetSimulatorSession (real database) �
     expect(remainingMessage).toBeNull();
     const { data: remainingReactions } = await service.from("event_chat_message_reactions").select("id").eq("message_id", messageId);
     expect(remainingReactions).toEqual([]);
+  });
+
+  it("deletes a simulated identity's stage-reaction heat row, keeps a real identity's row (pre-launch interaction pass)", async () => {
+    const simGuestId = crypto.randomUUID();
+    const realGuestId = crypto.randomUUID();
+    await recordStageReactionAttempt(eventId, { type: "guest", id: simGuestId });
+    await recordStageReactionAttempt(eventId, { type: "guest", id: realGuestId });
+
+    const result = await resetSimulatorSession(eventId, [simGuestId]);
+    expect(result.stageReactionHeatDeleted).toBe(1);
+
+    const { data: remainingSim } = await service.from("stage_reaction_heat").select("guest_id").eq("event_id", eventId).eq("guest_id", simGuestId).maybeSingle();
+    expect(remainingSim).toBeNull();
+    const { data: remainingReal } = await service.from("stage_reaction_heat").select("guest_id").eq("event_id", eventId).eq("guest_id", realGuestId).maybeSingle();
+    expect(remainingReal).not.toBeNull();
+
+    await service.from("stage_reaction_heat").delete().eq("event_id", eventId).eq("guest_id", realGuestId);
   });
 
   it("deletes a simulated speaker seat and cascades its round votes, keeps a real seat and real votes on it untouched", async () => {

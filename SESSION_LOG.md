@@ -4,6 +4,106 @@ Newest entry first.
 
 ---
 
+## 2026-09-04 — Session 68: Pre-launch interaction pass — directed emoji reactions, tap-timer speaker swap, adaptive idle UI, Gift-icon removal, Session Simulator launch-visibility gate (issue #21)
+
+**Goal**: a focused pre-launch UX pass on top of the `pre-reactions-stable`
+rollback checkpoint (Session 67's `4608926`, real-device tested and
+tagged). No vote-UI rework, no monetization, no regression to the
+media-readiness/camera-preview/audio-visualizer work Sessions 66-67
+established. See DECISIONS.md's own entry immediately above for the four
+consequential design decisions this pass had to make before implementing
+anything.
+
+**Directed emoji reactions**: double-tapping a speaker tile (manual
+pointer-based double-tap detection — mobile browsers don't reliably fire
+native `dblclick` for touch) sends the viewer's own selected emoji
+(curated 8-emoji set, ❤️ default, tapping the emoji button only opens a
+selection/settings panel — there is no general "send" action) at that
+specific speaker, rendered at the normalized tap position. Delivery is
+Supabase Realtime `broadcast` via `RealtimeChannel.httpSend()` from a
+Server Action (confirmed by reading `@supabase/realtime-js` directly —
+the broadcast endpoint is available immediately, no persistent socket
+needed), never persisted as comments/history. Rate limiting is a real
+server-side decaying heat/hysteresis budget — see DECISIONS.md; the
+visible button-fill meter is UX only. Three local, localStorage-persisted
+display preferences (On speaker / Side lane / Hidden) — presentation-only,
+never change what others see, and sending stays possible even when
+hidden. Reaction targeting is derived from authoritative seat identity at
+render time, so it survives camera on/off, video/audio-visualizer state,
+and the new visual speaker swap below, by construction — verified with a
+dedicated test that swaps first, then double-taps, and asserts the
+correct original identity was targeted.
+
+**Tap-center-timer speaker swap** (portrait/mobile only — audited
+landscape and desktop separately; landscape has no genuine stacked
+top/bottom relationship to apply this to, desktop is left untouched):
+tapping the shared round timer visually swaps the top/bottom tiles,
+purely local presentation state — no seat/vote/RTS/round/LiveKit state
+touched, no message to other viewers. A FLIP-style transition (manual
+`useLayoutEffect` + `getBoundingClientRect` before/after) animates the
+exchange, skipped under `prefers-reduced-motion`. Implemented by
+reordering *which* `renderTile(seatNumber)` call renders first, never by
+swapping which seat's *data* renders in a fixed slot — see DECISIONS.md
+for why the other way would have silently remounted media.
+
+**Adaptive idle transparency**: `useIdleActivity` (registerActivity /
+holdActive+releaseActive, counter-based so concurrent holds don't
+prematurely resume the idle countdown) drives a ~2.5s idle fade on the
+*actual* visible glass surfaces (`WatchModeControls`' own backgrounds,
+the new reaction button's background) — never a blanket opacity drop,
+never while a composer is focused or a panel is open, always instantly
+restored on any interaction. Ambient comments' own independent hide/show
+toggle is unaffected.
+
+**Gift icon**: audited — genuinely dead, no implemented function. Removed
+from `WatchModeControls`' render output only; no gifting/tipping/payment
+code exists to delete, so there was nothing else to touch.
+
+**Session Simulator launch-visibility gate**: new `isSimulatorUiEnabled()`
+(`ENABLE_SESSION_SIMULATOR=1`, defaults off), AND'd with the existing
+`isPreviewOrDevBuild()` check as a second, narrower, independent
+condition — see DECISIONS.md for why an ordinary Vercel preview alone can
+no longer imply "show simulator UI." Nothing about the simulator's own
+implementation was touched or deleted; this is a visibility change to one
+render condition in `EventRoom`. Also added a small, genuinely optional
+preview-only convenience (gated the same way, additive): two "Simulate
+Reaction → Seat N" buttons in the panel that call the same production
+`send()` path a real double-tap uses, so testing incoming-reaction
+rendering doesn't require a second browser tab; Reset Session now also
+clears any `stage_reaction_heat` rows the simulator's own guest ids
+accumulated.
+
+**Testing**: new dedicated unit/component test files —
+`use-reaction-preferences`, `use-double-tap`, `use-reaction-heat` (incl. a
+proactively-found-and-fixed stale-closure bug in its own "skip redundant
+re-render" optimization), `use-idle-activity`, `use-stage-reactions`,
+`reaction-panel`, `reaction-control`, `stage-reactions-overlay` — plus a
+real-DB test (`stage-reactions.test.ts`, against the live linked Supabase
+project, same discipline as `event-speakers-expiration.test.ts`) proving
+`record_stage_reaction_attempt`'s actual decay/hysteresis/cross-identity/
+cross-event isolation and its identity-XOR guard, not just a mocked RPC.
+`speaker-stage.test.tsx` gained an 8-test timer-swap describe block
+(including the no-remount and reduced-motion tests). `event-room.test.tsx`
+gained a 4-test Session Simulator launch-visibility describe block
+(OFF/preview-alone/flag-alone/both-ON). `session-simulator-panel.test.tsx`
+gained tests for the new reaction-testing buttons and the Reset cleanup
+count. Two pre-existing tests asserting "React stays disabled" were
+rewritten (now genuinely false — React is a real control).
+
+**Verification**:
+
+1. **Automated** — `npm run lint` clean, `npx tsc --noEmit` clean,
+   `npm run build` clean, full suite clean: **107 files / 1424 tests**
+   (including the two new real-DB test files), zero failures.
+2. **Production interaction**: not yet performed this session — see the
+   handoff for what's outstanding before this is reported as tested.
+3. **Real-device: UNVERIFIED — requires real-device testing.** See the
+   handoff's own checklist.
+
+Not merged to `main`.
+
+---
+
 ## 2026-09-04 — Session 67: Media rendering bugfix pass — stale local self-preview after joining, missing audio-only visualizer (real-device report, issue #21)
 
 **Goal**: narrow bugfix on top of Session 66's Media Readiness + Audio

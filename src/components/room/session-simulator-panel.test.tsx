@@ -7,6 +7,7 @@ import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
 import type { ResetSimulatorSessionResult, DebugSnapshotState } from "@/app/events/[id]/room/simulator-actions";
 import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 
 /**
  * Issue #21, fourth corrective pass: `stageRoundRow` now has two distinct
@@ -153,6 +154,7 @@ const {
         speakersDeleted: 0,
         requestVotesDeleted: 0,
         roundVotesDeleted: 0,
+        stageReactionHeatDeleted: 0,
       };
     }),
     simulateAdvanceSelection,
@@ -814,7 +816,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         () =>
           new Promise((resolve) => {
             resolveReset = () =>
-              resolve({ messagesDeleted: 0, reactionsDeleted: 0, speakersDeleted: 0, requestVotesDeleted: 0, roundVotesDeleted: 0 });
+              resolve({ messagesDeleted: 0, reactionsDeleted: 0, speakersDeleted: 0, requestVotesDeleted: 0, roundVotesDeleted: 0, stageReactionHeatDeleted: 0 });
           }),
       );
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -1856,6 +1858,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         speakersDeleted: 0,
         requestVotesDeleted: 0,
         roundVotesDeleted: 0,
+        stageReactionHeatDeleted: 0,
       });
       resetSimulatorSession.mockResolvedValueOnce({
         messagesDeleted: 1,
@@ -1863,6 +1866,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         speakersDeleted: 0,
         requestVotesDeleted: 0,
         roundVotesDeleted: 0,
+        stageReactionHeatDeleted: 0,
       });
 
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -2615,6 +2619,76 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       render(<SessionSimulatorPanel {...baseProps} pendingRequests={[request({ id: "r1", guest_id: "g1" })]} />);
       expect(screen.queryByTestId("sim-prospective-both")).not.toBeInTheDocument();
       expect(screen.queryByTestId("sim-prospective-second")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Simulate Reaction buttons (pre-launch interaction pass, Section 13/14): preview-only reaction testing support", () => {
+    function reactionsFixture() {
+      return {
+        selectedEmoji: "❤️" as const,
+        setSelectedEmoji: vi.fn(),
+        displayMode: "on-speaker" as const,
+        setDisplayMode: vi.fn(),
+        showReactions: true,
+        setShowReactions: vi.fn(),
+        incoming: [],
+        send: vi.fn(async (...args: Parameters<ReactionsController["send"]>) => {
+          void args;
+          return { ok: true as const, heatAfter: 12, inCooldownAfter: false };
+        }),
+        heat: 0,
+        heatFraction: 0,
+        inCooldown: false,
+        canSend: true,
+      };
+    }
+
+    it("does not render either button when no stageReactions controller is supplied — purely additive", () => {
+      render(<SessionSimulatorPanel {...baseProps} speakers={[speaker({ id: "seat-1", seat_number: 1 })]} />);
+      expect(screen.queryByTestId("sim-simulate-reaction-seat-1")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("sim-simulate-reaction-seat-2")).not.toBeInTheDocument();
+    });
+
+    it("disables a seat's button when that seat is empty", () => {
+      render(<SessionSimulatorPanel {...baseProps} stageReactions={reactionsFixture()} speakers={[]} />);
+      expect(screen.getByTestId("sim-simulate-reaction-seat-1")).toBeDisabled();
+      expect(screen.getByTestId("sim-simulate-reaction-seat-2")).toBeDisabled();
+    });
+
+    it("enables and sends to seat 1's real occupant identity, using the controller's own selected emoji", async () => {
+      const reactions = reactionsFixture();
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageReactions={reactions}
+          speakers={[speaker({ id: "seat-1", seat_number: 1, guest_id: "g-occupant-1" })]}
+        />,
+      );
+      const button = screen.getByTestId("sim-simulate-reaction-seat-1");
+      expect(button).not.toBeDisabled();
+      fireEvent.click(button);
+
+      expect(reactions.send).toHaveBeenCalledTimes(1);
+      const [targetIdentity, emoji, x, y] = reactions.send.mock.calls[0];
+      expect(targetIdentity).toBe("guest:g-occupant-1");
+      expect(emoji).toBe("❤️");
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(1);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(1);
+    });
+
+    it("targets a profile-seated speaker's real identity, not a guest-shaped one", () => {
+      const reactions = reactionsFixture();
+      render(
+        <SessionSimulatorPanel
+          {...baseProps}
+          stageReactions={reactions}
+          speakers={[speaker({ id: "seat-2", seat_number: 2, guest_id: null, profile_id: "p-occupant-2" })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("sim-simulate-reaction-seat-2"));
+      expect(reactions.send).toHaveBeenCalledWith("profile:p-occupant-2", "❤️", expect.any(Number), expect.any(Number));
     });
   });
 });

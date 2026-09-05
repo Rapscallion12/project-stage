@@ -85,6 +85,7 @@ export function DesktopRoom({
   pendingRequests,
   profileDirectory,
   onOpenRoomInfo,
+  stageReactions,
 }: RoomLayoutProps) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -121,6 +122,7 @@ export function DesktopRoom({
               viewerIdentity={identity}
               pendingRequests={pendingRequests}
               profileDirectory={profileDirectory}
+              stageReactions={stageReactions}
             />
           </div>
           {joinSeatMessage && (

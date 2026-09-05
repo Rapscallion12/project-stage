@@ -14,6 +14,30 @@ if (typeof Element !== "undefined") {
   Element.prototype.scrollTo = vi.fn();
 }
 
+// jsdom doesn't implement window.matchMedia at all — pre-launch
+// interaction pass's usePrefersReducedMotion (used unconditionally
+// inside SpeakerStage, now reachable from essentially every room
+// composition's own test file) needs a safe default so tests that don't
+// care about motion preference don't have to know it exists. Defaults
+// to `matches: false` (full motion) — any test that genuinely needs to
+// control the result (e.g. use-orientation.test.ts's own per-test
+// `vi.stubGlobal("matchMedia", ...)`, or a future
+// use-prefers-reduced-motion.test.ts) overrides this locally the same
+// way those tests already override `window.matchMedia` today; a global
+// stub here only fills the gap for callers that don't.
+if (typeof window !== "undefined" && !window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 // React Testing Library doesn't auto-register its cleanup unless the test
 // framework exposes globals (this project's vitest.config.mts doesn't set
 // `test.globals: true` — every existing test file explicitly imports

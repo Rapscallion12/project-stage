@@ -1585,10 +1585,22 @@ different dependencies. Current order:
 - [ ] Replace speaker voting — guest-eligible, same as above
 - [ ] Timer extension (tied to continue voting) — guest-eligible by
       inheritance from continue voting
-- [ ] Live emoji reactions (Realtime broadcast, ephemeral — no `reactions`
-      table needed unless we decide to persist them for analytics) —
-      guest-eligible, rate-limited per identity (guest or account, same
-      limit)
+- [x] Live emoji reactions (issue #21, pre-launch interaction pass,
+      2026-09-04) — double-tap a speaker tile to send your selected
+      emoji directly at them, rendered at the tapped position (or a
+      dedicated side lane, or hidden — a local presentation preference).
+      Realtime broadcast only, exactly as scoped here: no `reactions`
+      table, ephemeral by design. Guest-eligible, rate-limited per
+      identity (guest or account, same limit) via a server-authoritative
+      continuously-draining heat/hysteresis budget
+      (`record_stage_reaction_attempt`, migration 00000000000045) — the
+      client's own heat meter is UX only. See DECISIONS.md and
+      SESSION_LOG.md's Session 68 entry.
+- [x] Tap-center-timer speaker swap, adaptive idle transparency for the
+      lower-stage UI, and removal of the dead Gift-icon affordance (issue
+      #21, same pass) — local-only presentation polish, no product-scope
+      additions; not separately tracked line items before this pass. See
+      SESSION_LOG.md's Session 68 entry.
 - [ ] Pinned/featured comments + general "top comments" ranking
       **(account-only** to post — per PRODUCT.md; guests may still *view*
       the comment feed). Partially unlocked by issue #14: request

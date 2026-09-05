@@ -281,6 +281,8 @@ export type ResetSimulatorSessionResult = {
   speakersDeleted: number;
   requestVotesDeleted: number;
   roundVotesDeleted: number;
+  /** Pre-launch interaction pass: rows this reset's own simulated guest ids accumulated in `stage_reaction_heat` (see migration 00000000000045) — small numeric rows, harmless if left behind, but Reset destroys everything else the run created, so this stays consistent with that. */
+  stageReactionHeatDeleted: number;
 };
 
 /**
@@ -409,6 +411,7 @@ export async function resetSimulatorSession(
     speakersDeleted: 0,
     requestVotesDeleted: 0,
     roundVotesDeleted: 0,
+    stageReactionHeatDeleted: 0,
   };
   if (guestIds.length === 0) return empty;
 
@@ -442,6 +445,12 @@ export async function resetSimulatorSession(
     .eq("event_id", eventId)
     .in("author_guest_id", guestIds);
 
+  const { count: stageReactionHeatDeleted } = await supabase
+    .from("stage_reaction_heat")
+    .delete({ count: "exact" })
+    .eq("event_id", eventId)
+    .in("guest_id", guestIds);
+
   if (reconcileStageRound) {
     const { count: remainingOccupied } = await supabase
       .from("event_speakers")
@@ -462,6 +471,7 @@ export async function resetSimulatorSession(
     speakersDeleted: speakersDeleted ?? 0,
     requestVotesDeleted: requestVotesDeleted ?? 0,
     roundVotesDeleted: roundVotesDeleted ?? 0,
+    stageReactionHeatDeleted: stageReactionHeatDeleted ?? 0,
   };
 }
 

@@ -35,6 +35,7 @@ import { getParticipantIdentity } from "@/lib/livekit/token";
 import { formatCountdown, getEventPhase, type EventPhase } from "@/lib/events";
 import { isDevToolsAvailable } from "@/lib/dev-demo";
 import { joinOpenSeat } from "@/app/events/[id]/room/actions";
+import { useReactionsController } from "@/hooks/use-stage-reactions";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -108,6 +109,7 @@ export function EventRoom({
   initialHasPendingRequest,
   initialPendingRequests,
   isPreviewBuild,
+  isSimulatorUiEnabled,
 }: {
   event: Event;
   identity: Identity;
@@ -123,10 +125,17 @@ export function EventRoom({
   initialHasPendingRequest: boolean;
   /** Issue #21: every currently-pending speaker request, for "Top Speaker Requests" — see useActiveSpeakerRequests' own doc comment. */
   initialPendingRequests: SpeakerRequest[];
-  /** Issue #21, Parts 1 & 5: computed server-side (`isPreviewOrDevBuild()`) — never re-derived here, since `VERCEL_ENV` isn't reliably readable in a client component. Governs the full-time round-timer test presentation and the Session Simulator panel's mere existence in the tree. */
+  /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`) — never re-derived here, since `VERCEL_ENV` isn't reliably readable in a client component. Governs only the full-time round-timer test presentation now — see `isSimulatorUiEnabled` for the Session Simulator panel's own, separate gate (pre-launch interaction pass). */
   isPreviewBuild: boolean;
+  /** Pre-launch interaction pass: computed server-side (`isSimulatorUiEnabled()`, lib/preview-mode.ts) — whether the Session Simulator's own UI (panel + collapsed "SIM" pill) should render at all. Deliberately narrower than, and required *in addition to*, `isPreviewBuild` — see that function's own doc comment for why a Vercel preview alone must no longer be enough. */
+  isSimulatorUiEnabled: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
+  // Pre-launch interaction pass: one shared instance, above every
+  // composition/role branch — same discipline as useLiveRoomConnection/
+  // useActiveSpeakers above. Named `stageReactions` to avoid colliding
+  // with `reactions` above (the unrelated lobby comment-reaction counts).
+  const stageReactions = useReactionsController(event.id);
   const { speakers, roomStatus, refetch: refetchSpeakers, getSyncDiagnostics: getSpeakerSyncDiagnostics } = useActiveSpeakers(
     event.id,
     initialSpeakers,
@@ -668,6 +677,7 @@ export function EventRoom({
     simulatedGuestIds,
     stageRound,
     onOpenRoomInfo: () => setRoomInfoOpen(true),
+    stageReactions,
   };
 
   return (
@@ -737,15 +747,20 @@ export function EventRoom({
         />
       )}
       {/*
-       * Issue #21, Part 5: the actual security boundary is
-       * `isPreviewBuild` itself (computed server-side, `VERCEL_ENV !==
-       * "production"` — see lib/preview-mode.ts) plus every simulator
-       * Server Action independently re-checking the same thing — this
+       * Issue #21, Part 5, narrowed by the pre-launch interaction pass:
+       * the actual security boundary is every simulator Server Action
+       * independently re-checking `isPreviewOrDevBuild()` itself
+       * (`VERCEL_ENV !== "production"` — see lib/preview-mode.ts) — this
        * conditional render is defense in depth, not the enforcement.
-       * Deliberately outside the main room div, same reasoning as
-       * RoomDiagnostics above: tooling, not part of the consumer room UI.
+       * `isSimulatorUiEnabled` is a second, deliberately narrower
+       * condition required in addition — an ordinary Vercel preview
+       * (now also used to test the real launch-facing experience) no
+       * longer shows this UI on its own; see that function's own doc
+       * comment. Deliberately outside the main room div, same reasoning
+       * as RoomDiagnostics above: tooling, not part of the consumer room
+       * UI.
        */}
-      {isPreviewBuild && (
+      {isPreviewBuild && isSimulatorUiEnabled && (
         <SessionSimulatorPanel
           eventId={event.id}
           speakers={speakers}
@@ -766,6 +781,7 @@ export function EventRoom({
           refetchSpeakers={refetchSpeakers}
           getSpeakerSyncDiagnostics={getSpeakerSyncDiagnostics}
           getSelectionReconcileDiagnostics={getSelectionReconcileDiagnostics}
+          stageReactions={stageReactions}
           // Issue #21, seventh corrective pass, Section 19: defense in
           // depth alongside SessionSimulatorPanel's own database cleanup
           // — an explicit fresh read of speaker occupancy, the same

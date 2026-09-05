@@ -10,6 +10,7 @@ import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { RoomStatus } from "@/lib/room-status";
 import type { StageRound } from "@/lib/repositories/stage-rounds";
 import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 
 /**
  * Shared props for the portrait/landscape presentation components —
@@ -128,4 +129,6 @@ export type RoomLayoutProps = {
   stageRound: StageRound | null;
   /** Issue #21, seventh corrective pass, Sections 8-15: opens the collapsed room/navigation overlay — see RoomInfoOverlay's own doc comment. Owned by EventRoom (the overlay itself renders once, there); every composition just wires its own trigger to this. */
   onOpenRoomInfo: () => void;
+  /** Pre-launch interaction pass: the one shared directed-reactions controller (`useReactionsController`, instantiated once in EventRoom) — see SpeakerStage's own `stageReactions` doc comment for why this isn't named `reactions` (that name is already taken, above, by the unrelated lobby comment-reaction counts). */
+  stageReactions: ReactionsController;
 };

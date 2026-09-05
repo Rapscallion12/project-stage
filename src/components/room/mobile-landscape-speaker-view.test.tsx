@@ -5,6 +5,7 @@ import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
@@ -24,6 +25,20 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 }));
 
 const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+};
 const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
@@ -99,6 +114,7 @@ const baseProps: RoomLayoutProps = {
   simulatedGuestIds: new Set(),
   stageRound: null,
   onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -209,7 +225,6 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
 
     it("Gift stays inert; React/Vote are replaced by the mic/camera toggles", () => {
       render(<MobileLandscapeSpeakerView {...baseProps} />);
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
       expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
       expect(screen.queryByTestId("watch-vote-emblem")).not.toBeInTheDocument();
     });
@@ -221,7 +236,6 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
       expect(screen.getAllByTestId("speaker-mic-toggle")).toHaveLength(1);
       expect(screen.getAllByTestId("speaker-camera-toggle")).toHaveLength(1);
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
 
     it("tapping the mic/camera toggles calls the toggles already wired through this view's props", () => {

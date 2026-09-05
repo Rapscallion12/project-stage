@@ -35,3 +35,39 @@
 export function isPreviewOrDevBuild(): boolean {
   return process.env.VERCEL_ENV !== "production";
 }
+
+/**
+ * Pre-launch interaction pass: whether the Session Simulator's own UI
+ * (the full panel, its collapsed "SIM" pill, every control inside it)
+ * should render at all — deliberately a *narrower*, separate condition
+ * from `isPreviewOrDevBuild()` above, not a replacement for it.
+ *
+ * **Why this needs to exist separately**: `isPreviewOrDevBuild()` is true
+ * for *every* non-production deployment, including the ordinary Vercel
+ * previews this project now also uses to test the actual launch-facing
+ * experience — as this project approaches launch, "this is a preview
+ * deployment" and "an internal developer wants simulator tooling visible
+ * right now" are no longer the same question. Read server-side (a Server
+ * Component, same discipline as `isPreviewOrDevBuild()` itself) and
+ * passed down as a plain prop — never re-derived in a client component.
+ *
+ * **Not a new security boundary, an additional one**: the Session
+ * Simulator's actual authorization boundary is unchanged and unweakened
+ * — every simulator Server Action (`simulator-actions.ts`) still
+ * independently re-checks `isPreviewOrDevBuild()` itself before doing
+ * anything, exactly as it already did (see that file's own doc comment).
+ * This flag only ever gates whether the *UI* renders in `EventRoom` —
+ * `isPreviewOrDevBuild() && isSimulatorUiEnabled()`, both required, so a
+ * misconfiguration of this new flag alone could never expose simulator
+ * UI on the real production deployment either.
+ *
+ * Defaults OFF (unset env var) everywhere, including every ordinary
+ * preview deployment — a developer enables it deliberately, per
+ * environment, by setting `ENABLE_SESSION_SIMULATOR=1` (e.g. in a local
+ * `.env.local`, or as a Vercel environment variable scoped to a specific
+ * internal-testing deployment/branch they control) — never tied to
+ * `VERCEL_ENV` or any other ambient signal.
+ */
+export function isSimulatorUiEnabled(): boolean {
+  return process.env.ENABLE_SESSION_SIMULATOR === "1";
+}
