@@ -30,10 +30,15 @@ merged to `main`.
   about the round, votes, or either speaker's actual seat changes for
   anyone else.
 - **The interface gets out of your way while you're just watching** — the
-  translucent panels along the bottom of the stage fade to let more of
-  the video show through when you haven't touched anything for a couple
-  of seconds, and return instantly the moment you do (typing, opening a
-  panel, tapping anything). Text and controls stay legible throughout.
+  translucent panels along the bottom of the stage — including the
+  comment box, not just the small React/Vote controls — fade to
+  noticeably more transparent, clearly showing more of the stage
+  underneath, when you haven't touched anything for a couple of seconds,
+  and return instantly to full opacity the moment you do (typing,
+  opening a panel, tapping anything). Text, icons, and emoji stay fully
+  legible throughout. (Real-device testing found the first version of
+  this too subtle to notice — the comment box hadn't been included and
+  the fade itself was too small; both fixed.)
 - **You can no longer take a speaker seat without a verified camera and
   microphone** — previously a candidate could be seated with a dead
   camera or mic, only noticed 30 seconds later by the existing

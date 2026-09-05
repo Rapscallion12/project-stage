@@ -4,6 +4,58 @@ Newest entry first.
 
 ---
 
+## 2026-09-05 — Session 68 follow-up: idle transparency too subtle, internal simulator-testing deployment path (real-device report, issue #21)
+
+**Goal**: narrow real-device follow-up on Session 68's preview, on the
+same branch — no redesign of reactions/timer-swap/voting/RTS/media/
+simulator internals.
+
+**Issue 1 — couldn't practically test the new interaction features
+without simulator access, but simulator must stay hidden from the
+ordinary launch-facing preview.** Root cause: `ENABLE_SESSION_SIMULATOR`
+is a single Vercel project-level env var — setting it would have turned
+the simulator on for *every* Preview deployment, including the one
+meant to represent the real launch-facing experience. **Fix, no gating
+code touched**: a second deployment via `vercel deploy -e
+ENABLE_SESSION_SIMULATOR=1`, which sets that variable as a *runtime
+override scoped to that one deployment only* — the shared Vercel project
+Preview environment variables (and therefore the ordinary git-triggered
+preview for this branch) are completely unaffected. Confirmed via
+`vercel inspect` that the resulting deployment's `target` is `preview`,
+not `production`.
+
+**Issue 2 — idle UI transparency was real but too subtle to matter on a
+phone.** Root-caused: Session 68's fade only touched the small React/
+Vote emblems (14% → 6% white fill); the compact comment composer — the
+*widest* surface in Watch Mode's bottom row — was explicitly scoped out
+of that pass (shared with the lobby, flagged as higher blast radius in
+DECISIONS.md) and never faded at all, so the net visual change across
+the row was minor. **Fix**: extended the identical idle-fade treatment
+to `ChatPanel`'s own compact composer pill (new optional `idle` prop,
+default `false`, scoped to the `compact` branch only — the lobby's own
+non-compact rendering is untouched), and replaced the prior 6% idle fill
+with fully transparent (0%) everywhere this pattern applies — a
+decisive difference instead of another small increment. Border, mic
+icon, placeholder/input text, emoji, and the mic-request-mode accent
+background (an active state) are all unchanged, matching the original
+Section 8 constraints; active (non-idle) opacity is unchanged.
+
+**Testing**: `chat-panel.test.tsx` gained an idle-adaptive-transparency
+describe block (default full opacity, fades to transparent when idle,
+mic-request-mode's accent background is exempt). `watch-mode-controls.
+test.tsx` and `reaction-control.test.tsx` updated for the new fully-
+transparent idle value.
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/lobby/hooks suites clean (1052 tests). Real-
+device: UNVERIFIED — requires the user's own iPhone pass, this time
+against the internal simulator-enabled link so two-speaker interaction
+state can actually be created.
+
+Not merged to `main`.
+
+---
+
 ## 2026-09-04 — Session 68: Pre-launch interaction pass — directed emoji reactions, tap-timer speaker swap, adaptive idle UI, Gift-icon removal, Session Simulator launch-visibility gate (issue #21)
 
 **Goal**: a focused pre-launch UX pass on top of the `pre-reactions-stable`
