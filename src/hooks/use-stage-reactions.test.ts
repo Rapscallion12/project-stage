@@ -180,6 +180,132 @@ describe("useReactionsController / useStageReactions (pre-launch interaction pas
       expect(result.current.incoming).toHaveLength(1);
     });
 
+    it("real-device regression: the dedup still works even after the optimistic burst has already been pruned from the screen — the original bug", async () => {
+      // The actual root cause: the first dedup design compared the
+      // broadcast's id against whatever was still in `incoming`, which
+      // is pruned after REACTION_BURST_LIFETIME_MS (2200ms). A round
+      // trip slower than that meant the id match had nothing left to
+      // match against, so the "confirmation" got added as a brand-new
+      // reaction. This test drives exactly that timing and proves the
+      // fix (a separate, longer-lived sent-id memory) survives it.
+      vi.useFakeTimers();
+      const fake = makeFakeSupabase();
+      createClient.mockReturnValue(fake.client);
+      let resolveSend: (value: unknown) => void = () => {};
+      sendStageReaction.mockReturnValue(new Promise((resolve) => (resolveSend = resolve)));
+      const { result } = renderHook(() => useReactionsController("e1", MY_IDENTITY));
+
+      act(() => {
+        void result.current.send("profile:bob", "🔥", 0.5, 0.5);
+      });
+      const localId = result.current.incoming[0].id;
+      expect(result.current.incoming).toHaveLength(1);
+
+      // Let the on-screen burst's own prune timer fire — well past
+      // REACTION_BURST_LIFETIME_MS — before the round trip "resolves".
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(result.current.incoming).toHaveLength(0); // the burst genuinely finished and was pruned
+
+      // The slow round trip finally resolves, and the broadcast for the
+      // exact same id arrives back over the channel.
+      await act(async () => {
+        resolveSend({ ok: true, heatAfter: 12, inCooldownAfter: false });
+        fake.fireReaction({
+          id: localId,
+          targetIdentity: "profile:bob",
+          emoji: "🔥",
+          x: 0.5,
+          y: 0.5,
+          senderIdentity: MY_IDENTITY,
+          ts: Date.now(),
+        });
+      });
+
+      // Must NOT reappear — the sent-id memory (30s) outlives the burst's
+      // own 2.2s on-screen lifetime, so this is still recognized as this
+      // tab's own confirmed echo.
+      expect(result.current.incoming).toHaveLength(0);
+      vi.useRealTimers();
+    });
+
+    it("the sender's own confirmed echo never increments heat a second time", async () => {
+      const fake = makeFakeSupabase();
+      createClient.mockReturnValue(fake.client);
+      sendStageReaction.mockResolvedValue({ ok: true, heatAfter: 12, inCooldownAfter: false });
+      const { result } = renderHook(() => useReactionsController("e1", MY_IDENTITY));
+
+      await act(async () => {
+        await result.current.send("profile:bob", "🔥", 0.5, 0.5);
+      });
+      const localId = result.current.incoming[0].id;
+      const heatAfterSend = result.current.heat;
+      expect(heatAfterSend).toBeCloseTo(12, 5);
+
+      act(() => {
+        fake.fireReaction({
+          id: localId,
+          targetIdentity: "profile:bob",
+          emoji: "🔥",
+          x: 0.5,
+          y: 0.5,
+          senderIdentity: MY_IDENTITY,
+          ts: Date.now(),
+        });
+      });
+
+      // Receiving the echo must not touch heat at all — only send() ever
+      // does, and it wasn't called again.
+      expect(result.current.heat).toBe(heatAfterSend);
+    });
+
+    it("incoming reactions from other viewers never affect my own outgoing heat", async () => {
+      const fake = makeFakeSupabase();
+      createClient.mockReturnValue(fake.client);
+      const { result } = renderHook(() => useReactionsController("e1", MY_IDENTITY));
+      expect(result.current.heat).toBe(0);
+
+      act(() => {
+        fake.fireReaction({
+          id: "someone-elses-reaction",
+          targetIdentity: "profile:alice",
+          emoji: "😂",
+          x: 0.5,
+          y: 0.5,
+          senderIdentity: "guest:someone-else",
+          ts: Date.now(),
+        });
+      });
+
+      expect(result.current.heat).toBe(0);
+      expect(result.current.canSend).toBe(true);
+    });
+
+    it("self-origin filtering only suppresses ids this exact tab actually sent — a same-identity reaction this tab never sent (e.g. from another tab/device) still renders on its first sighting", async () => {
+      const fake = makeFakeSupabase();
+      createClient.mockReturnValue(fake.client);
+      const { result } = renderHook(() => useReactionsController("e1", MY_IDENTITY));
+
+      // Same senderIdentity as this tab's own viewer, but an id this tab
+      // never generated via send() — e.g. the same guest cookie open in
+      // a second tab. Must NOT be suppressed merely for matching identity.
+      act(() => {
+        fake.fireReaction({
+          id: "sent-from-a-different-tab",
+          targetIdentity: "profile:bob",
+          emoji: "👏",
+          x: 0.3,
+          y: 0.3,
+          senderIdentity: MY_IDENTITY,
+          ts: Date.now(),
+        });
+      });
+
+      expect(result.current.incoming).toHaveLength(1);
+      expect(result.current.heat).toBe(0); // still never affects outgoing heat
+    });
+
     it("an unexpected authoritative rejection after an optimistic render is not undone — it just finishes on its own and reconciles heat", async () => {
       const fake = makeFakeSupabase();
       createClient.mockReturnValue(fake.client);

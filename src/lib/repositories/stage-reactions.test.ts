@@ -137,6 +137,39 @@ describe.skipIf(!hasServiceCredentials)("record_stage_reaction_attempt (pre-laun
     expect(resumed.inCooldownAfter).toBe(false);
   });
 
+  it("real-device correction: cooldown stays blocked at 99%, 75%, 55%, and 1% remaining — only exactly 0 lifts it", async () => {
+    const guestId = crypto.randomUUID();
+    await recordStageReactionAttempt(eventId, { type: "guest", id: guestId });
+
+    async function forceCooldownAndCheckAt(heatValue: number) {
+      await service
+        .from("stage_reaction_heat")
+        .update({ heat: heatValue, in_cooldown: true, updated_at: new Date().toISOString() })
+        .eq("event_id", eventId)
+        .eq("guest_id", guestId);
+      const attempt = await recordStageReactionAttempt(eventId, { type: "guest", id: guestId });
+      expect(attempt.accepted).toBe(false);
+      expect(attempt.inCooldownAfter).toBe(true);
+    }
+
+    // No backdating — updated_at stays "now", so decay is ~0 and the
+    // stored heat value is what record_stage_reaction_attempt actually
+    // evaluates the cooldown-exit check against.
+    await forceCooldownAndCheckAt(99);
+    await forceCooldownAndCheckAt(75);
+    await forceCooldownAndCheckAt(55); // the OLD exit threshold — must no longer unlock here
+    await forceCooldownAndCheckAt(1);
+
+    await service
+      .from("stage_reaction_heat")
+      .update({ heat: 0, in_cooldown: true, updated_at: new Date().toISOString() })
+      .eq("event_id", eventId)
+      .eq("guest_id", guestId);
+    const atZero = await recordStageReactionAttempt(eventId, { type: "guest", id: guestId });
+    expect(atZero.accepted).toBe(true);
+    expect(atZero.inCooldownAfter).toBe(false);
+  });
+
   it("moderate, spaced-out reacting never approaches cooldown", async () => {
     const guestId = crypto.randomUUID();
     for (let i = 0; i < 3; i += 1) {

@@ -3,6 +3,59 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-05 — Reaction cooldown + sender-dedup correction (real-device report, issue #21)
+
+**Problem 1 — the id-dedup design from the previous entry (below) was
+supposed to already solve the duplicate-echo problem; real-device
+testing showed it still failed sometimes.** Traced the actual runtime
+path rather than re-assuming the design was sound: the dedup compared an
+incoming broadcast's id against the *live* `incoming` array, which
+prunes each entry after 2200ms (the on-screen animation's own duration).
+The round trip being deduped against — DB row lock, REST broadcast,
+Realtime propagation back to the sender — has no relationship to that
+2200ms figure at all. Any round trip slower than the animation itself
+(plausible, and apparently common enough on a real phone to be "some of
+the time" rather than "always") meant the id match had nothing left to
+compare against by the time it mattered, and the confirmation got
+rendered as a second, brand-new reaction.
+
+**Decision**: separate "how long does this animate on screen" from "how
+long do we remember we sent this" into two independent lifetimes — a new
+`sentReactionIdsRef` (30s) that exists purely for dedup, checked by the
+broadcast handler *before* touching the visual `incoming` array at all.
+**Alternative considered and rejected**: filtering the broadcast handler
+on `senderIdentity === myIdentity` instead of (or in addition to) id
+matching — rejected because it's *too broad*: a guest's cookie-based
+identity is shared across every tab of the same browser, so an
+identity-only filter would silently swallow a legitimate reaction sent
+from a genuinely different tab/device under the same account, which the
+task's own stated goal explicitly ruled out ("suppress only this
+browser/device's own optimistic echo"). An id generated fresh, in
+memory, per `send()` call and never shared between tabs is already
+exactly the right granularity — no identity comparison needed for
+correctness, only for the unrelated Side-mode presentation split that
+already existed.
+
+**Problem 2 — was heat actually double-counting, or was that a
+misreading of the duplicate-reaction bug?** Audited every call site of
+`recordOptimisticSend`/`reconcileWithServer` — both are called exactly
+once, only from within `send()`; the broadcast-receive path
+(`addReaction`) has no reference to the heat hook at all. Concluded the
+reported "heat fills again" was the visible symptom of Problem 1 (a
+second emoji burst reads as "I must have sent again, so heat must have
+moved again") rather than a distinct bug — confirmed by writing a
+dedicated test that receives the sender's own echo and asserts heat is
+byte-for-byte unchanged. No code change was needed here beyond fixing
+Problem 1; a decision to *not* invent a second fix for a symptom that
+traced back to the first bug.
+
+**Problem 3 — cooldown should exit only at genuinely zero heat, not
+55%.** Explicit product decision, not a bug: pure tuning change via a
+new migration (`CREATE OR REPLACE FUNCTION` with the identical body,
+only the `p_cooldown_exit_heat` default changed) plus the matching
+client constant. No mechanism change — the same atomic decay/hysteresis
+math already generalizes correctly to a zero exit threshold.
+
 ## 2026-09-05 — Reaction UX correction: instant sender feedback, Side mode target-awareness (real-device report, issue #21)
 
 **Problem 1 — how does a client show its own reaction instantly without

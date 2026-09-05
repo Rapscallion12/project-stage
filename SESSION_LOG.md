@@ -4,6 +4,83 @@ Newest entry first.
 
 ---
 
+## 2026-09-05 — Session 70: Reaction cooldown + sender-dedup correction (real-device report, issue #21)
+
+**Goal**: second narrow reaction correction on the same branch — cooldown
+tuning and a real, confirmed duplicate-echo bug the previous pass's own
+id dedup design didn't actually survive in practice.
+
+**Cooldown now exits only at genuinely zero, not 55%** — explicit
+product decision, not a bug fix: `REACTION_HEAT_COOLDOWN_EXIT` changed
+from 55 to 0 on both sides. Server: migration 00000000000046
+`CREATE OR REPLACE FUNCTION record_stage_reaction_attempt` with the
+identical body as migration 00000000000045, only `p_cooldown_exit_heat`'s
+default changed — the decay/hysteresis *mechanism* itself untouched, so
+this was a pure tuning change, not a redesign. Client:
+`src/lib/reactions/constants.ts`'s copy changed to match; the comparison
+logic in `useReactionHeat` (`decayed <= REACTION_HEAT_COOLDOWN_EXIT`) and
+in the SQL function (`v_decayed_heat > p_cooldown_exit_heat`) both
+already generalized correctly to the zero case with no further code
+changes needed — confirmed with a real-DB test forcing heat to 99/75/55/
+1 during cooldown (all still rejected — 55 explicitly proven to no
+longer unlock) and to exactly 0 (accepted).
+
+**Root cause of the still-duplicating sender echo, traced through the
+actual runtime path, not assumed**: the *first* id-dedup design (this
+file's own previous session) compared an incoming broadcast's id against
+whatever was still in the `incoming` array — but `incoming` entries are
+pruned after `REACTION_BURST_LIFETIME_MS` (2200ms, tied to the on-screen
+animation), while the round trip being deduped against (resolve identity
+→ DB row lock/update → REST broadcast → Realtime propagation back to the
+sender) has no such guarantee of finishing that fast. A round trip
+slower than 2.2s — entirely plausible on a real phone — meant the
+optimistic entry was already gone by the time its own confirmation
+arrived, so the id match silently found nothing and the broadcast got
+added as a "new" reaction: a second, genuinely duplicate on-screen burst.
+Confirmed by writing a regression test that drives exactly this timing
+(advance a fake clock 5s past the burst's own prune before resolving the
+round trip) — it reproduced the bug against the old code and passes
+against the fix.
+
+**Fix**: a second, separate, much longer-lived ref
+(`sentReactionIdsRef`, `REACTION_SENT_ID_MEMORY_MS` = 30s — no relation
+to the visual burst's 2.2s) tracks ids this exact tab has sent,
+independent of the pruned `incoming` array. The broadcast handler checks
+this set *before* ever calling `addReaction`, so a slow round trip can
+no longer defeat the dedup. Deliberately still id-based, not
+`senderIdentity`-based, per explicit instruction: a reaction genuinely
+sent from a *different* tab/device under the same account (e.g. a guest
+cookie open in two tabs) was never added to *this* tab's own sent-id
+set, so its first sighting via broadcast still renders normally — an
+identity-based filter would have wrongly suppressed that legitimate
+activity. Heat was confirmed never touched by the broadcast-receive path
+at all (only `send()` calls `recordOptimisticSend`/`reconcileWithServer`,
+and `addReaction` has no access to `heat`) — the reported "heat also
+fills again" was the duplicate *reaction* being mistaken for a duplicate
+*heat increment*; a dedicated test now proves receiving any reaction,
+including the sender's own echo or another viewer's, never moves the
+receiving client's own outgoing heat.
+
+**Testing**: `use-stage-reactions.test.ts` gained the regression test
+above plus explicit heat-isolation tests (echo doesn't double-increment,
+others' incoming reactions never move my heat, a same-identity-
+different-origin id still renders on first sighting). `use-reaction-
+heat.test.ts` gained a "cooldown-exit rule" describe block (99/75/55/1
+still blocked, only exactly 0 exits) plus a "heat at 99, not yet in
+cooldown, still allows sending" test. `stage-reactions.test.ts` (real-DB)
+gained a direct multi-checkpoint test against the live migrated
+`record_stage_reaction_attempt`.
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/hooks/lobby/room-actions suites clean (1132
+tests, including the real-DB reaction tests against the newly applied
+migration). Full project suite run separately — see this session's own
+handoff for the final count.
+
+Not merged to `main`.
+
+---
+
 ## 2026-09-05 — Session 69: Reaction UX correction — instant sender feedback, Side mode target-awareness (real-device report, issue #21)
 
 **Goal**: narrow correction to Session 68's reactions, based on real-

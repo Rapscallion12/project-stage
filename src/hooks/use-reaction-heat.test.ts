@@ -36,6 +36,12 @@ describe("useReactionHeat (pre-launch interaction pass, Section 5): client-visib
     expect(result.current.canSend).toBe(true);
   });
 
+  it("heat at 99, not yet in cooldown, still allows sending — only hitting the cap itself blocks", () => {
+    const { result } = renderHook(() => useReactionHeat());
+    act(() => result.current.reconcileWithServer(99, false));
+    expect(result.current.canSend).toBe(true);
+  });
+
   it("enough rapid sends fill the meter and enter cooldown, blocking further sends", () => {
     const { result } = renderHook(() => useReactionHeat());
     const sendsNeeded = Math.ceil(REACTION_HEAT_MAX / REACTION_HEAT_INCREMENT);
@@ -66,27 +72,47 @@ describe("useReactionHeat (pre-launch interaction pass, Section 5): client-visib
     expect(result.current.heat).toBeLessThan(afterSend);
   });
 
-  it("hysteresis: once in cooldown, exiting requires draining down to the exit threshold, not merely below the max", async () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(() => useReactionHeat());
-    act(() => result.current.reconcileWithServer(REACTION_HEAT_MAX, true));
-    // A tiny amount of drain — still well above the exit threshold.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
+  describe("cooldown-exit rule (real-device correction): blocked for the entire drain, only exits at genuinely zero", () => {
+    it("REACTION_HEAT_COOLDOWN_EXIT is 0 — no partial-drain unlock", () => {
+      expect(REACTION_HEAT_COOLDOWN_EXIT).toBe(0);
     });
-    expect(result.current.inCooldown).toBe(true);
-    expect(result.current.heat).toBeGreaterThan(REACTION_HEAT_COOLDOWN_EXIT);
-  });
 
-  it("exits cooldown once heat has actually drained to the exit threshold", async () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(() => useReactionHeat());
-    act(() => result.current.reconcileWithServer(REACTION_HEAT_MAX, true));
-    await act(async () => {
-      // Long enough for real decay to reach the exit threshold.
-      await vi.advanceTimersByTimeAsync(60_000);
+    it("a tiny amount of drain leaves cooldown active — nowhere close to zero yet", async () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useReactionHeat());
+      act(() => result.current.reconcileWithServer(REACTION_HEAT_MAX, true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(result.current.inCooldown).toBe(true);
+      expect(result.current.canSend).toBe(false);
+      expect(result.current.heat).toBeGreaterThan(0);
     });
-    expect(result.current.inCooldown).toBe(false);
-    expect(result.current.canSend).toBe(true);
+
+    it("even at heat=1 — one drain tick away from empty — sending remains blocked", async () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useReactionHeat());
+      act(() => result.current.reconcileWithServer(REACTION_HEAT_MAX, true));
+      // 100 -> 1 at 4/sec drain takes 24.75s.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(24_750);
+      });
+      expect(result.current.heat).toBeCloseTo(1, 0);
+      expect(result.current.inCooldown).toBe(true);
+      expect(result.current.canSend).toBe(false);
+    });
+
+    it("exits cooldown only once heat has drained all the way to genuinely zero", async () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useReactionHeat());
+      act(() => result.current.reconcileWithServer(REACTION_HEAT_MAX, true));
+      await act(async () => {
+        // Long enough for real decay to reach zero (100/4 = 25s) and settle.
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.heat).toBe(0);
+      expect(result.current.inCooldown).toBe(false);
+      expect(result.current.canSend).toBe(true);
+    });
   });
 });

@@ -23,12 +23,16 @@ export const REACTION_HEAT_DRAIN_PER_SECOND = 4;
 /** Heat at which sending stops (the button visually reads "full"). */
 export const REACTION_HEAT_MAX = 100;
 /**
- * Hysteresis: once cooldown starts at REACTION_HEAT_MAX, sending stays
- * blocked until heat has drained back down to *this* threshold — not
- * merely below REACTION_HEAT_MAX — so a viewer never bounces between
- * blocked/unblocked right at the boundary.
+ * Cooldown-exit threshold, 0-100 scale. Real-device correction (this
+ * was 55 — hysteresis to avoid bouncing right at the boundary): once
+ * cooldown starts at REACTION_HEAT_MAX, sending now stays blocked for
+ * the entire drain, all the way back down to genuinely empty — 0, not
+ * partway down. Migration 00000000000046 changed the server RPC's own
+ * default to match; keep both in sync for any future tuning pass (see
+ * this file's own doc comment on why there's no shared runtime between
+ * the two).
  */
-export const REACTION_HEAT_COOLDOWN_EXIT = 55;
+export const REACTION_HEAT_COOLDOWN_EXIT = 0;
 
 /**
  * Small, curated set appropriate for live conversation — not a general
@@ -42,3 +46,17 @@ export const DEFAULT_REACTION_EMOJI: ReactionEmoji = "❤️";
 
 /** How long an on-screen reaction burst stays mounted before being pruned — see useStageReactions. */
 export const REACTION_BURST_LIFETIME_MS = 2200;
+
+/**
+ * Real-device correction: how long `useStageReactions` remembers a
+ * reaction id *it originated* for dedup purposes, independent of
+ * `REACTION_BURST_LIFETIME_MS` (the id-dedup bug this fixes was exactly
+ * this: the two were previously the same lifetime, so a round trip
+ * slower than the burst's own on-screen animation meant the sender's own
+ * confirming broadcast arrived *after* the optimistic entry had already
+ * been pruned from `incoming`, defeating the id match and rendering a
+ * second, duplicate burst). Generously long compared to any plausible
+ * round trip (DB row lock + REST broadcast + Realtime propagation) —
+ * this only needs to outlast that, not the visual animation.
+ */
+export const REACTION_SENT_ID_MEMORY_MS = 30_000;

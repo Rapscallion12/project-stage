@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 // directly, not through a repository.
 import { createClient } from "@/lib/supabase/client";
 import { sendStageReaction } from "@/app/events/[id]/room/actions";
-import { REACTION_BURST_LIFETIME_MS } from "@/lib/reactions/constants";
+import { REACTION_BURST_LIFETIME_MS, REACTION_SENT_ID_MEMORY_MS } from "@/lib/reactions/constants";
 import { useReactionHeat } from "@/hooks/use-reaction-heat";
 import { useReactionPreferences } from "@/hooks/use-reaction-preferences";
 
@@ -59,21 +59,48 @@ export type IncomingStageReaction = {
  * move heat or trigger a real broadcast (this local entry is
  * presentation only, exactly like the client-visible heat meter is).
  *
- * **Dedup, not a "which reactions are mine" flag**: the optimistic entry
+ * **Dedup — real-device correction, second pass**: the optimistic entry
  * and the real broadcast eventually sent by the server for the *same*
- * send carry the *identical* `id` — generated client-side, threaded
- * through `sendStageReaction`'s new `reactionId` parameter, and echoed
- * back verbatim in the broadcast payload (see that function's own doc
- * comment). `addReaction` below is id-deduplicating, so when that
- * broadcast eventually arrives back over this same subscribed channel
- * (Realtime broadcasts deliver to every subscriber, the sender
- * included), it's recognized as the confirmation of what's already
- * showing and silently dropped — never a second, duplicate animation.
+ * send carry the *identical* `id` (generated client-side, threaded
+ * through `sendStageReaction`'s `reactionId` parameter, echoed back
+ * verbatim in the broadcast payload). The *first* version of this dedup
+ * compared the incoming broadcast's id against whatever was still in
+ * `incoming` — which is exactly the bug: `incoming` entries are pruned
+ * after `REACTION_BURST_LIFETIME_MS` (2200ms, tied to the on-screen
+ * animation's own duration), but the round trip this is deduping against
+ * (DB row lock + REST broadcast + Realtime propagation back to the
+ * sender) has no such guarantee of finishing that fast — a slower round
+ * trip meant the optimistic entry was already gone by the time its own
+ * confirmation arrived, so the id match silently failed and the
+ * broadcast got added as if it were a brand-new reaction. Fixed by
+ * tracking "ids this exact tab has sent" in a *separate*, longer-lived
+ * ref (`sentReactionIdsRef`, `REACTION_SENT_ID_MEMORY_MS`, 30s — no
+ * relation to the visual burst's own 2.2s lifetime) — the broadcast
+ * handler checks this set *before* ever touching `incoming`, so a slow
+ * round trip can never defeat it. Deliberately id-based, not
+ * `senderIdentity`-based: a same-identity reaction sent from a
+ * *different* tab/device (e.g. a guest with the same cookie open in two
+ * tabs) never gets added to *this* tab's `sentReactionIdsRef`, so its
+ * own first sighting of that broadcast still renders normally — matching
+ * "suppress only this browser/device's own optimistic echo, never
+ * another session's legitimate activity."
+ *
+ * **Heat is never touched by this path, by construction**: only `send()`
+ * below ever calls `recordOptimisticSend`/`reconcileWithServer` — the
+ * broadcast handler (`addReaction`'s caller) has no access to `heat` at
+ * all. Receiving *any* reaction, whether it's your own echo or someone
+ * else's, can never move your own sending heat.
  */
 function useStageReactions(eventId: string, myIdentity: string) {
   const [incoming, setIncoming] = useState<IncomingStageReaction[]>([]);
   const heat = useReactionHeat();
   const pruneTimeoutsRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  // Ids this exact hook instance (this tab/session) has sent and already
+  // rendered optimistically — see this function's own doc comment above
+  // for why this is deliberately a separate, longer-lived tracking
+  // mechanism from the visual `incoming` array's own pruning.
+  const sentReactionIdsRef = useRef(new Set<string>());
+  const sentIdTimeoutsRef = useRef(new Set<ReturnType<typeof setTimeout>>());
 
   function addReaction(reaction: IncomingStageReaction) {
     setIncoming((prev) => {
@@ -88,22 +115,35 @@ function useStageReactions(eventId: string, myIdentity: string) {
   }
 
   useEffect(() => {
-    // Captured once, at the top of the effect — the Set instance itself
-    // never changes across this hook's lifetime (never reassigned), only
-    // its contents do; this is purely to satisfy the "ref value may have
-    // changed by cleanup time" lint rule, not a real staleness risk.
+    // Captured once, at the top of the effect — the Set instances
+    // themselves never change across this hook's lifetime (never
+    // reassigned), only their contents do; this is purely to satisfy the
+    // "ref value may have changed by cleanup time" lint rule, not a real
+    // staleness risk.
     const pruneTimeouts = pruneTimeoutsRef.current;
+    const sentIds = sentReactionIdsRef.current;
+    const sentIdTimeouts = sentIdTimeoutsRef.current;
     const supabase = createClient();
     const channel = supabase
       .channel(`event-reactions:${eventId}`)
       .on("broadcast", { event: "reaction" }, (message) => {
-        addReaction(message.payload as IncomingStageReaction);
+        const reaction = message.payload as IncomingStageReaction;
+        // This tab's own confirmed echo — already shown optimistically
+        // (or deliberately not shown at all, if canSend was already
+        // known false at send time; either way, this tab has nothing
+        // further to render for it). Never re-added, never re-touches
+        // heat (nothing below this branch ever runs).
+        if (sentIds.has(reaction.id)) return;
+        addReaction(reaction);
       })
       .subscribe();
 
     return () => {
       for (const timeout of pruneTimeouts) clearTimeout(timeout);
       pruneTimeouts.clear();
+      for (const timeout of sentIdTimeouts) clearTimeout(timeout);
+      sentIdTimeouts.clear();
+      sentIds.clear();
       setIncoming([]);
       void supabase.removeChannel(channel);
     };
@@ -140,6 +180,16 @@ function useStageReactions(eventId: string, myIdentity: string) {
   async function send(targetIdentity: string, emoji: string, x: number, y: number) {
     const id = crypto.randomUUID();
     if (heat.canSend) {
+      // Remembered *before* the round trip even starts, independent of
+      // the visual burst's own shorter lifetime — see this hook's own
+      // doc comment on `sentReactionIdsRef` for why this fixes the real
+      // duplicate bug rather than the id-matching idea alone.
+      sentReactionIdsRef.current.add(id);
+      const cleanup = setTimeout(() => {
+        sentIdTimeoutsRef.current.delete(cleanup);
+        sentReactionIdsRef.current.delete(id);
+      }, REACTION_SENT_ID_MEMORY_MS);
+      sentIdTimeoutsRef.current.add(cleanup);
       addReaction({ id, targetIdentity, emoji, x, y, senderIdentity: myIdentity, ts: Date.now() });
     }
     heat.recordOptimisticSend();

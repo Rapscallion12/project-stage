@@ -21,15 +21,20 @@ merged to `main`.
   (purely your own local preference; sending always still works). Sending
   is generous but not unlimited: a smoothly draining "heat" meter fills
   the button as you react and cools on its own — brief bursts during an
-  exciting moment are never a problem, only sustained spam ever
-  temporarily blocks you, and it's enforced for real on the server, not
-  just in your browser. Your own reaction now appears instantly, right
-  where you tapped, without waiting on a network round trip (real-device
-  testing found a noticeable lag in the first version); if you've chosen
-  the side-lane display for *other people's* reactions, your own still
-  shows exactly where you tapped, and that lane now clearly shows which
-  speaker each reaction was actually for — including correctly following
-  a speaker you've locally swapped to the other side of the screen.
+  exciting moment are never a problem, only sustained sending eventually
+  fills the meter and blocks you for a bit, and it's enforced for real on
+  the server, not just in your browser. Once the meter fills, it now
+  drains all the way back to empty before you can react again (previously
+  it unlocked partway through). Your own reaction appears instantly,
+  right where you tapped, without waiting on a network round trip
+  (real-device testing found a noticeable lag in an earlier version, and
+  then, after that first fix, an occasional duplicate copy of your own
+  reaction appearing a moment later — both traced and fixed); if you've
+  chosen the side-lane display for *other people's* reactions, your own
+  still shows exactly where you tapped, and that lane now clearly shows
+  which speaker each reaction was actually for — including correctly
+  following a speaker you've locally swapped to the other side of the
+  screen.
 - **Tap the round timer to swap which speaker is on top** (portrait/
   mobile only) — a purely visual, personal fix for "my phone always puts
   the same speaker on the bottom," with a smooth animated swap. Nothing
