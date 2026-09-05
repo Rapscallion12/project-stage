@@ -94,7 +94,7 @@ function InertComposerPlaceholder({ idle }: { idle: boolean }) {
       aria-label="Add a comment"
       className={cn(
         "flex h-11 flex-1 items-center gap-2 rounded-full border border-white/30 px-3 text-left text-sm text-white/60 transition-colors duration-300 disabled:opacity-100",
-        idle ? "bg-white/[0.06]" : "bg-white/[0.14]",
+        idle ? "bg-transparent" : "bg-white/[0.14]",
       )}
     >
       <span
@@ -127,7 +127,7 @@ function ControlEmblem({
       aria-label={label}
       className={cn(
         "flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/30 text-lg transition-colors duration-300 disabled:opacity-100",
-        idle ? "bg-white/[0.06]" : "bg-white/[0.14]",
+        idle ? "bg-transparent" : "bg-white/[0.14]",
       )}
     >
       <span aria-hidden="true">{emoji}</span>

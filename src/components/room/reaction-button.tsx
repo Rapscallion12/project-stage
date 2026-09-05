@@ -52,7 +52,7 @@ export function ReactionButton({
       aria-haspopup="dialog"
       className={cn(
         "relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/30 text-lg transition-colors duration-300",
-        idle ? "bg-white/[0.06]" : "bg-white/[0.14]",
+        idle ? "bg-transparent" : "bg-white/[0.14]",
         inCooldown && !prefersReducedMotion && "animate-[reaction-cooldown-pulse_1.6s_ease-in-out_infinite]",
       )}
     >

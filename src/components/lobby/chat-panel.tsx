@@ -151,6 +151,7 @@ export function ChatPanel({
   allowMicRequest = true,
   hasPendingRequest = false,
   onCancelPendingRequest,
+  idle = false,
 }: {
   eventId: string;
   messages: LobbyMessage[];
@@ -165,6 +166,20 @@ export function ChatPanel({
   hasPendingRequest?: boolean;
   /** Called instead of re-opening the request-mode input when the mic button is tapped while a request is already pending. */
   onCancelPendingRequest?: () => void;
+  /**
+   * Pre-launch interaction pass, Section 8 follow-up (real-device
+   * finding: the first pass's idle fade excluded this component
+   * entirely, but the compact composer pill is the *widest* surface in
+   * Watch Mode's bottom row — leaving it out meant idle barely looked
+   * different). Fades only this pill's own background fill toward
+   * transparent, never its border, text, mic icon, or the accent
+   * mic-request-mode treatment (an active state, not idle chrome).
+   * Non-compact (lobby) rendering is untouched regardless — this only
+   * ever applies to the `compact` branch below. Defaults to `false`, so
+   * every other caller (the lobby proper, and any test that doesn't
+   * pass it) is unaffected.
+   */
+  idle?: boolean;
 }) {
   const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
   const [requestState, requestFormAction, requestPending] = useActionState(
@@ -232,8 +247,8 @@ export function ChatPanel({
       {compact ? (
         <div
           className={cn(
-            "flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors",
-            micRequestMode ? "border-accent/60 bg-accent/15" : "border-white/30 bg-white/[0.14]",
+            "flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors duration-300",
+            micRequestMode ? "border-accent/60 bg-accent/15" : cn("border-white/30", idle ? "bg-transparent" : "bg-white/[0.14]"),
           )}
         >
           {allowMicRequest && (

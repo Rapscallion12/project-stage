@@ -353,6 +353,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
                   hasPendingRequest={!isSpeaker && hasPendingRequest}
                   onCancelPendingRequest={onCancelPromotion}
                   compact
+                  idle={idleActivity.idle}
                 />
               }
               voteSlot={<SpeakerVotePanel speakers={speakers} isPreviewBuild={isPreviewBuild} />}

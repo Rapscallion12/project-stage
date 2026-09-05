@@ -89,12 +89,20 @@ describe("WatchModeControls (issue #21, 05 interaction model)", () => {
       expect(screen.getByTestId("watch-vote-emblem").className).toMatch(/bg-white\/\[0\.14\]/);
     });
 
-    it("fades the inert placeholders' own backgrounds when idle — never removes them or affects the emoji/text foreground", () => {
+    it("fades the inert placeholders' own backgrounds to fully transparent when idle — never removes them or affects the emoji/text foreground", () => {
+      // Real-device follow-up: the first pass's 14%->6% fade was too
+      // subtle to notice against real video. Now a decisive drop to no
+      // fill at all — the border and foreground content are what keep
+      // the control legible/discoverable while idle, not a faint tint.
       render(<WatchModeControls idle />);
       const composer = screen.getByTestId("watch-composer");
       const vote = screen.getByTestId("watch-vote-emblem");
-      expect(composer.className).toMatch(/bg-white\/\[0\.06\]/);
-      expect(vote.className).toMatch(/bg-white\/\[0\.06\]/);
+      expect(composer.className).toMatch(/bg-transparent/);
+      expect(vote.className).toMatch(/bg-transparent/);
+      expect(composer.className).not.toMatch(/bg-white\/\[0\.14\]/);
+      expect(vote.className).not.toMatch(/bg-white\/\[0\.14\]/);
+      expect(composer.className).toMatch(/border-white\/30/);
+      expect(vote.className).toMatch(/border-white\/30/);
       expect(screen.getByText("Add a comment…")).toBeInTheDocument();
       expect(screen.getByText("🗳")).toBeInTheDocument();
     });

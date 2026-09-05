@@ -70,6 +70,6 @@ describe("ReactionControl (pre-launch interaction pass): the button + its own pa
 
   it("passes idle through to the button's own background treatment", () => {
     render(<ReactionControl reactions={fixture()} idle />);
-    expect(screen.getByTestId("watch-emoji-emblem").className).toMatch(/bg-white\/\[0\.06\]/);
+    expect(screen.getByTestId("watch-emoji-emblem").className).toMatch(/bg-transparent/);
   });
 });
