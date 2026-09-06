@@ -149,6 +149,8 @@ export function SpeakerStage({
   pendingRequests = [],
   profileDirectory = {},
   stageReactions,
+  onTapSelfPreview,
+  compact = false,
 }: {
   speakers: EventSpeaker[];
   getParticipant: (identity: string) => Participant | undefined;
@@ -188,6 +190,43 @@ export function SpeakerStage({
   profileDirectory?: Record<string, ProfileDirectoryEntry>;
   /** Pre-launch interaction pass: the one shared reactions controller (see `useReactionsController`, instantiated once in `EventRoom`) — drives directed double-tap sending, on-speaker/side rendering, and is entirely absent (undefined) for any caller/test that doesn't care about reactions at all. Named `stageReactions`, not `reactions`, to avoid colliding with `RoomLayoutProps`' own pre-existing `reactions` field (the lobby comment-reaction counts — a different, unrelated concept). */
   stageReactions?: ReactionsController;
+  /**
+   * Mobile UX correction (live-user-test finding): wired straight through
+   * to the self-preview slot's own `onTap` (both the video and audio-
+   * only-visualizer branches) — see `SelfPreview`'s own doc comment.
+   * This component has no opinion on what tapping means; the caller
+   * (`PortraitSpeakerView`/`MobileLandscapeSpeakerView`) owns the actual
+   * `soloMode`/normal-stage-view toggle state and passes both this and
+   * the resulting `soloMode` value independently. Optional/undefined for
+   * every caller that doesn't want the self-preview to be tappable (the
+   * ordinary pre-claim candidate composition, and `compact` mode below,
+   * which never renders a self-preview at all).
+   */
+  onTapSelfPreview?: () => void;
+  /**
+   * Mobile UX correction: the small, side-by-side "mini stage" rendered
+   * above Expanded Comments (see that component's own `miniStage` prop
+   * doc comment) is a *second, separate* `SpeakerStage` instance, not the
+   * same one shrunk in place — reusing this component wholesale (same
+   * `renderTile`/`SpeakerTile`, same reaction filtering) rather than
+   * building a bespoke compact renderer. `compact` trims it down to what
+   * a small supporting-context band needs: always side-by-side
+   * (regardless of `orientation`), no round-timer badge (and therefore no
+   * timer-swap — a second, independent swap state for a transient view
+   * would only confuse "which mode am I in"), no self-preview corner slot
+   * (the *main* stage's self-preview, and this toggle, already cover
+   * that), and a single unsplit reaction lane rather than portrait's
+   * top/bottom split (compact's side-by-side arrangement has no
+   * vertical-stack relationship for that split to track). Attaching the
+   * same already-flowing LiveKit tracks to this instance's own fresh
+   * `<video>` elements is an *additional*, independent attachment —
+   * LiveKit tracks support being attached to multiple elements at once —
+   * never a detach/reattach of the main stage's own elements, so the main
+   * stage (still mounted underneath Expanded Comments, per its own
+   * existing behavior) is completely unaffected. Defaults to `false`;
+   * every existing caller is unaffected.
+   */
+  compact?: boolean;
 }) {
   const stageRoundDisplay = useStageRoundCountdown(stageRound, isPreviewBuild);
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -381,8 +420,13 @@ export function SpeakerStage({
           onTapEmptySeat={isSpeaker || (seat === null && established && seatState !== "fallback-open") ? undefined : onTapEmptySeat}
           isJoiningSeat={isJoiningSeat}
           isInactive={identity !== null && reconnectingIdentities.has(identity)}
-          orientation={orientation}
+          // Mobile UX correction: a compact tile always gets the more
+          // proportionate bottom-gradient name bar (already landscape's
+          // own treatment) rather than portrait's top-anchored dot+text,
+          // which was sized/offset for a full-height tile.
+          orientation={compact ? "landscape" : orientation}
           clearTopChrome={seatNumber === 1}
+          compact={compact}
           isPreviewBuild={isPreviewBuild}
           isSimulated={Boolean(seat?.guest_id && simulatedGuestIds?.has(seat.guest_id))}
           emptySeatState={seatState}
@@ -441,7 +485,7 @@ export function SpeakerStage({
   // only one speaker exists") and this can't be `renderSolo` (a seated
   // speaker's own Speaker View has nothing to swap — see `soloMode`'s
   // own doc comment).
-  const canSwapSpeakers = orientation === "portrait" && !renderSolo && seat1 !== null && seat2 !== null;
+  const canSwapSpeakers = !compact && orientation === "portrait" && !renderSolo && seat1 !== null && seat2 !== null;
   const firstSeat = swapped ? 2 : 1;
   const secondSeat = swapped ? 1 : 2;
 
@@ -468,7 +512,12 @@ export function SpeakerStage({
       <div
         className={cn(
           "flex h-full w-full",
-          orientation === "landscape" ? "flex-row stage-tiles-landscape" : "flex-col",
+          // Mobile UX correction: the mini stage is always side-by-side,
+          // regardless of the caller's own orientation — a phone in
+          // portrait viewing Expanded Comments still gets a row of two
+          // tiles here, never a stack (see this component's own `compact`
+          // doc comment).
+          compact || orientation === "landscape" ? "flex-row stage-tiles-landscape" : "flex-col",
         )}
       >
         {renderSolo ? (
@@ -498,25 +547,51 @@ export function SpeakerStage({
           camera is authoritatively off but the mic is genuinely
           publishing — the same corner box, same position, never a
           second local-preview surface. */}
-      {showSelfVideo && localVideoTrack ? (
-        <SelfPreview track={localVideoTrack} />
+      {compact ? null : showSelfVideo && localVideoTrack ? (
+        <SelfPreview track={localVideoTrack} onTap={onTapSelfPreview} />
       ) : showSelfAudioOnly ? (
         <div
           data-testid="self-preview-audio-only"
-          className="absolute top-3 right-3 h-24 w-16 overflow-hidden rounded-md border-2 border-accent bg-black shadow-lg sm:h-28 sm:w-20"
+          onClick={onTapSelfPreview}
+          role={onTapSelfPreview ? "button" : undefined}
+          tabIndex={onTapSelfPreview ? 0 : undefined}
+          onKeyDown={
+            onTapSelfPreview
+              ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onTapSelfPreview();
+                  }
+                }
+              : undefined
+          }
+          aria-label={onTapSelfPreview ? "Switch stage view" : undefined}
+          className={cn(
+            "absolute top-3 right-3 h-24 w-16 overflow-hidden rounded-md border-2 border-accent bg-black shadow-lg sm:h-28 sm:w-20",
+            onTapSelfPreview && "cursor-pointer",
+          )}
         >
           <AudioOnlyVisualizer
             track={localMediaState.microphoneTrack as LocalAudioTrack | RemoteAudioTrack}
             compact
           />
+          {onTapSelfPreview && (
+            <span
+              aria-hidden="true"
+              data-testid="self-preview-expand-affordance"
+              className="absolute top-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] leading-none text-white"
+            >
+              ⤢
+            </span>
+          )}
           <span className="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 text-[10px] font-medium leading-tight text-white">
             You
           </span>
         </div>
       ) : null}
 
-      {/* Shared round badge (issue #21 corrective pass) — see this component's own doc comment above the stageRound prop; rendered exactly once, here, never per-tile. Pre-launch interaction pass, Section 7: becomes tappable (speaker swap) only in portrait with both seats occupied — see StageRoundBadge's own doc comment. */}
-      {stageRoundDisplay && (
+      {/* Shared round badge (issue #21 corrective pass) — see this component's own doc comment above the stageRound prop; rendered exactly once, here, never per-tile. Pre-launch interaction pass, Section 7: becomes tappable (speaker swap) only in portrait with both seats occupied — see StageRoundBadge's own doc comment. Mobile UX correction: omitted entirely in `compact` mode — a small supporting-context band has no room for it, and a second, independent swap state there would only confuse "which mode am I in" (see this component's own `compact` doc comment). */}
+      {!compact && stageRoundDisplay && (
         <StageRoundBadge display={stageRoundDisplay} onSwapTap={canSwapSpeakers ? handleSwapTap : undefined} />
       )}
 
@@ -526,14 +601,17 @@ export function SpeakerStage({
           Portrait, two-tile case: two lanes, each pre-filtered to whichever
           seat currently occupies that visual slot (follows local timer-swap
           ordering — see firstSlotIdentity/secondSlotIdentity above).
-          soloMode/landscape: one unsplit lane (soloMode filtered to the one
-          visible tile's identity; landscape unfiltered, matching this
-          feature's original, unchanged behavior there — see
-          ReactionSideLane's own doc comment). */}
+          soloMode/landscape/compact: one unsplit lane (soloMode filtered to
+          the one visible tile's identity; landscape/compact unfiltered,
+          matching this feature's original, unchanged behavior for
+          landscape — see ReactionSideLane's own doc comment. Compact's
+          side-by-side arrangement has no vertical-stack relationship for
+          the top/bottom split to track, so it gets the same unsplit
+          treatment landscape already does, not a new left/right split). */}
       {stageReactions && stageReactions.showReactions && stageReactions.displayMode === "side" && (
         renderSolo ? (
           <ReactionSideLane reactions={otherViewersReactions.filter((r) => r.targetIdentity === soloIdentity)} />
-        ) : orientation === "portrait" ? (
+        ) : !compact && orientation === "portrait" ? (
           <>
             <ReactionSideLane reactions={otherViewersReactions.filter((r) => r.targetIdentity === firstSlotIdentity)} region="top" />
             <ReactionSideLane reactions={otherViewersReactions.filter((r) => r.targetIdentity === secondSlotIdentity)} region="bottom" />

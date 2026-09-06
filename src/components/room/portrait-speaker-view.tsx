@@ -87,7 +87,40 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * this component's own local state — a seated speaker can browse
  * comments exactly like an audience member, and opening/closing it never
  * touches `isSpeaker`, `canPublish`, mic/camera, or LiveKit at all (it
- * has no reference to any of them).
+ * has no reference to any of them). Mobile UX correction: it now also
+ * receives a `miniStage` (a second, `compact` `SpeakerStage` instance,
+ * always showing both speakers side-by-side, never this component's own
+ * `soloMode`) — see `ExpandedComments`' own doc comment for why a
+ * *speaker* opening comments shouldn't be stuck in their own solo/self-
+ * focused framing there. `commentsOpen` and `normalStageView` (below) are
+ * two completely independent booleans — opening/closing comments never
+ * reads or resets `normalStageView`, so whichever speaker-presentation
+ * mode was active before comments opened is exactly what's still active
+ * once they close.
+ *
+ * **`normalStageView` (mobile UX correction, live-user-test finding)**:
+ * a live real-user test found this view's own small self-preview too
+ * small to make audience reactions (or the other speaker) meaningfully
+ * visible while actually speaking. Tapping the self-preview now toggles
+ * a purely local, presentation-only boolean that flips `SpeakerStage`'s
+ * own `soloMode` off — the *same* `SpeakerStage` instance this component
+ * already rendered, just told to lay out both tiles at normal size
+ * instead of one full-bleed tile, exactly like the ordinary audience
+ * `PortraitRoom` composition already does. Nothing about the speaker's
+ * own seat, publications, round, or vote eligibility is touched by this
+ * — `isSpeaker`/`mySeatNumber`/`canPublish` are untouched inputs, not
+ * outputs, of this toggle. **No remount**: `SpeakerStage` itself never
+ * unmounts across the toggle (this component still renders exactly one
+ * instance of it, in the same JSX position) — only its own internal
+ * `soloMode` branch changes which/how many `renderTile()` calls happen.
+ * The *other* speaker's own tile keeps the same React `key` (`seat.id`)
+ * in both branches, so React repositions the existing mounted subtree
+ * (and its already-attached `<video>`) rather than tearing it down —
+ * the identical technique the Section 7 timer-swap reorder already
+ * relies on (see `SpeakerStage`'s own doc comment). The viewer's own
+ * self-preview corner (`SelfPreview`) is a separate sibling, rendered
+ * unconditionally regardless of `soloMode` — this toggle never touches
+ * it beyond adding the tap handler.
  */
 export function PortraitSpeakerView({
   event,
@@ -122,6 +155,10 @@ export function PortraitSpeakerView({
   toggleCamera,
 }: RoomLayoutProps) {
   const [commentsOpen, setCommentsOpen] = useState(false);
+  // Mobile UX correction — see this component's own doc comment above.
+  // Local-only, purely presentational; never read by anything outside
+  // this component's own render.
+  const [normalStageView, setNormalStageView] = useState(false);
 
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -146,7 +183,8 @@ export function PortraitSpeakerView({
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
         stageReactions={stageReactions}
-        soloMode
+        soloMode={!normalStageView}
+        onTapSelfPreview={() => setNormalStageView((current) => !current)}
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} onOpenRoomInfo={onOpenRoomInfo} />
@@ -208,6 +246,30 @@ export function PortraitSpeakerView({
         onHasPendingRequestChange={() => {}}
         onPrepareMedia={onPrepareMedia}
         allowMicRequest={false}
+        miniStage={
+          commentsOpen ? (
+            <SpeakerStage
+              speakers={speakers}
+              getParticipant={getParticipant}
+              myIdentity={myIdentity}
+              isSpeaker={isSpeaker}
+              mySeatNumber={mySeatNumber}
+              needsMediaActivation={false}
+              activateMedia={activateMedia}
+              mediaError={null}
+              orientation="portrait"
+              onTapEmptySeat={() => {}}
+              isJoiningSeat={false}
+              localVideoTrack={null}
+              reconnectingIdentities={reconnectingIdentities}
+              isPreviewBuild={isPreviewBuild}
+              simulatedGuestIds={simulatedGuestIds}
+              profileDirectory={profileDirectory}
+              stageReactions={stageReactions}
+              compact
+            />
+          ) : null
+        }
       />
     </div>
   );

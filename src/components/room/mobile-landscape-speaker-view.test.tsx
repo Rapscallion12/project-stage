@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileLandscapeSpeakerView } from "./mobile-landscape-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -8,6 +8,18 @@ import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { LocalVideoTrack } from "livekit-client";
+
+/** Same fake-track technique as self-preview.test.tsx's own — attach() must set srcObject for the repaint nudge to read back without throwing. */
+function fakeVideoTrack(): LocalVideoTrack {
+  return {
+    attach: vi.fn((element: HTMLVideoElement) => {
+      element.srcObject = {} as MediaStream;
+      return element;
+    }),
+    detach: vi.fn(),
+  } as unknown as LocalVideoTrack;
+}
 
 const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
@@ -336,5 +348,84 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       expect(toggleMicrophone).not.toHaveBeenCalled();
       expect(toggleCamera).not.toHaveBeenCalled();
     });
+  });
+
+  describe("tap self-preview to enter/leave normal stage view (mobile UX correction, live-user-test finding)", () => {
+    it("starts in the existing speaker-focused (solo) presentation", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+    });
+
+    it("tapping the self-preview switches to the normal, two-speaker stage presentation", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+    });
+
+    it("tapping it again restores the speaker-focused presentation", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      const selfPreview = screen.getByTestId("self-preview");
+      fireEvent.click(selfPreview);
+      fireEvent.click(selfPreview);
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+    });
+
+    it("does not remount the other speaker's tile — the same DOM node is reused, just repositioned", () => {
+      render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      const before = screen.getByTestId("speaker-tile");
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getAllByTestId("speaker-tile")).toContain(before);
+    });
+
+    it("switching views is purely local — no seat, media, or server action fires just from toggling", () => {
+      const activateMedia = vi.fn(async () => MEDIA_READY);
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      const selfPreview = screen.getByTestId("self-preview");
+      fireEvent.click(selfPreview);
+      fireEvent.click(selfPreview);
+      expect(leaveSpeakerSeat).not.toHaveBeenCalled();
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it("incoming reactions targeting the other speaker become visible once switched to normal view", () => {
+      const stageReactions: ReactionsController = {
+        ...MOCK_STAGE_REACTIONS,
+        incoming: [
+          { id: "r1", targetIdentity: "profile:p2", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} stageReactions={stageReactions} />);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getByText("🔥")).toBeInTheDocument();
+    });
+  });
+
+  it("mobile UX correction, Section 9: a seated speaker opening Expanded Comments gets the same two-speaker mini stage, never their own solo framing", () => {
+    render(
+      <MobileLandscapeSpeakerView
+        {...baseProps}
+        messages={[
+          { id: "m1", author_display_name: "Jamie", author_profile_id: "p1", author_guest_id: null, body: "hi", created_at: new Date().toISOString(), is_speaker_request: false },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("ambient-comment"));
+    const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+    expect(within(miniStage).getAllByTestId("speaker-tile")).toHaveLength(2);
   });
 });

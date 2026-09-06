@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileLandscapeRoom } from "./mobile-landscape-room";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -7,6 +7,29 @@ import type { Event } from "@/lib/repositories/events";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+
+function seat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
+  return {
+    id: "s1",
+    event_id: "e1",
+    profile_id: "p1",
+    guest_id: null,
+    seat_number: 1,
+    display_name: "Alice",
+    joined_at: new Date().toISOString(),
+    left_at: null,
+    left_reason: null,
+    disconnected_at: null,
+    media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
+    ...overrides,
+  };
+}
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction } = vi.hoisted(
   () => ({
@@ -398,6 +421,33 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       render(<MobileLandscapeRoom {...baseProps} messages={[message]} />);
       fireEvent.click(screen.getByTestId("ambient-comment"));
       expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
+
+    it("mobile UX correction: both current speakers stay visible, side-by-side, in a mini stage above comments", () => {
+      const message: LobbyMessage = {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      };
+      render(
+        <MobileLandscapeRoom
+          {...baseProps}
+          messages={[message]}
+          speakers={[
+            seat({ id: "s1", seat_number: 1, profile_id: "alice", display_name: "Alice" }),
+            seat({ id: "s2", seat_number: 2, profile_id: "bob", display_name: "Bob" }),
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+      expect(within(miniStage).getAllByTestId("speaker-tile")).toHaveLength(2);
+      expect(miniStage).toHaveTextContent("Alice");
+      expect(miniStage).toHaveTextContent("Bob");
     });
   });
 

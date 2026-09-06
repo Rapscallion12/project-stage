@@ -604,4 +604,59 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     const formData = sendMessage.mock.calls[0][2] as FormData;
     expect(formData.get("body")).toBe("hello from the sheet");
   });
+
+  describe("miniStage (mobile UX correction: this sheet must not cover the entire stage)", () => {
+    it("without a miniStage, the sheet keeps its original partial-height, rounded-top behavior — no existing caller/test is affected", () => {
+      render(<ExpandedComments {...baseProps} open messages={[]} />);
+      const sheet = screen.getByTestId("expanded-comments");
+      expect(sheet.className).toMatch(/h-\[70vh\]/);
+      expect(sheet.className).toMatch(/rounded-t-2xl/);
+      expect(screen.queryByTestId("expanded-comments-mini-stage")).not.toBeInTheDocument();
+    });
+
+    it("renders the given miniStage content above the drag handle, before the scrollable comments", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[]}
+          miniStage={<div data-testid="fake-mini-stage">both speakers here</div>}
+        />,
+      );
+      expect(screen.getByTestId("fake-mini-stage")).toHaveTextContent("both speakers here");
+      const sheet = screen.getByTestId("expanded-comments");
+      const children = Array.from(sheet.children).map((el) => el.getAttribute("data-testid"));
+      const miniStageIndex = children.indexOf("expanded-comments-mini-stage");
+      const handleIndex = children.indexOf("expanded-comments-handle");
+      expect(miniStageIndex).toBeGreaterThanOrEqual(0);
+      expect(miniStageIndex).toBeLessThan(handleIndex);
+    });
+
+    it("with a miniStage, the sheet spans the full height instead of a partial 70vh — the mini stage itself is the visible top of the screen", () => {
+      render(<ExpandedComments {...baseProps} open messages={[]} miniStage={<div />} />);
+      const sheet = screen.getByTestId("expanded-comments");
+      expect(sheet.className).toMatch(/inset-0/);
+      expect(sheet.className).not.toMatch(/h-\[70vh\]/);
+    });
+
+    it("comments, requests, refresh, and the composer all still render normally alongside a miniStage", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", body: "still here" })]}
+          miniStage={<div />}
+        />,
+      );
+      expect(screen.getByText("still here")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+    });
+
+    it("closing (and reopening) still works the same with a miniStage present", () => {
+      const onClose = vi.fn();
+      render(<ExpandedComments {...baseProps} onClose={onClose} open messages={[]} miniStage={<div />} />);
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
 });

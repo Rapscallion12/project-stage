@@ -3,6 +3,69 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-06 — Mobile UX correction: speaker normal-stage-view toggle, Expanded Comments mini stage (live-user-test finding, issue #21)
+
+**Problem 1 — how does a seated speaker see the room "like the audience
+does" without touching seat/media/round/vote state, and without
+remounting the video the project has already been burned by remounting
+once?** Alternatives considered: (a) a genuinely new, third
+`SpeakerStage`-like composition just for this — rejected, `SpeakerStage`
+already contains the exact target layout behind its own `soloMode` flag
+(both tiles, normal size, divider) — building a second copy would be
+pure duplication for zero benefit; (b) toggling `soloMode` by unmounting/
+remounting `SpeakerStage` itself between two call sites — rejected
+outright, this is exactly the remount pattern that caused the Session 67
+stale-preview bug.
+
+**Decision**: keep exactly one `SpeakerStage` instance in
+`PortraitSpeakerView`/`MobileLandscapeSpeakerView`, and let a new local
+boolean (`normalStageView`) flip its existing `soloMode` prop. Traced
+React's own reconciliation to confirm this is actually safe, not just
+assumed: both the solo and two-tile branches call the identical
+`renderTile(seatNumber)` function, whose wrapper `key` is the seat's own
+database id — unchanged by which branch is active — so React moves the
+existing mounted subtree (including its already-attached `<video>`)
+rather than tearing it down. This is the same guarantee the Section 7
+timer-swap reorder already relies on, applied to a second, independent
+toggle. The self-preview corner (already rendered unconditionally,
+regardless of `soloMode`) became the natural, symmetric tap target for
+both directions — one existing, always-visible element, no new UI
+surface.
+
+**Problem 2 — Expanded Comments covers the whole stage; showing "both
+speakers, side by side" requires an arrangement (row) the underlying
+portrait stage (a vertical stack) doesn't have "in place."** A vertical
+stack can't be visually "shrunk into a row" — that's a genuinely
+different tile arrangement, not a resize. Alternatives considered: (a)
+restructure all four mobile room compositions' root flex layout so the
+*same* `SpeakerStage` instance shrinks and repositions when comments
+open — rejected as unnecessarily invasive (four files' worth of layout
+surgery, each with its own absolutely-positioned overlays that would all
+need conditional suppression to avoid double-rendering once the sheet no
+longer fully covers them); (b) a **second**, `compact` `SpeakerStage`
+instance, mounted only while comments are open, reusing the same tiles/
+reaction-filtering logic.
+
+**Decision — (b)**: `ExpandedComments` gained a generic `miniStage`
+`ReactNode` slot (preserving its own "no role/media/seat state" contract
+— it has zero `SpeakerStage`-specific knowledge), and each caller passes
+a second, `compact` `SpeakerStage`. Confirmed this is *not* the harmful
+kind of remount: LiveKit tracks explicitly support being attached to
+multiple elements at once (this is how the real repaint-nudge bug was
+diagnosed as remount-*specific* in the first place — a detach-then-
+reattach in place, not an additional attach elsewhere) — so this second
+instance's own fresh `attach()` calls are purely additive, never
+touching the main stage's own already-flowing elements. **Accepted
+tradeoff, reported rather than hidden**: both stage instances exist
+simultaneously while comments are open (main stage still mounted,
+covered by the now-full-height sheet; mini stage additionally attached)
+— a modest extra decode cost for a two-participant stream, traded for
+zero risk to the primary, always-relied-upon media path. If this proves
+measurably costly on real hardware, the four-file restructuring in
+alternative (a) remains available as a follow-up, now with a working
+reference implementation to restructure toward instead of designing from
+scratch.
+
 ## 2026-09-05 — Reaction cooldown + sender-dedup correction (real-device report, issue #21)
 
 **Problem 1 — the id-dedup design from the previous entry (below) was

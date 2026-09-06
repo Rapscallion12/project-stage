@@ -64,6 +64,15 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * full reasoning (this file mirrors it exactly, same footprint math).
  *
  * **Still deliberately not here**: no desktop equivalent.
+ *
+ * **`normalStageView`/self-preview toggle and Expanded Comments'
+ * `miniStage`** (mobile UX correction): identical to `PortraitSpeakerView`
+ * — see that component's own doc comment for the full reasoning (no-
+ * remount guarantee, independence from `commentsOpen`, why the mini
+ * stage always shows both speakers rather than this view's own
+ * `soloMode`). Mirrored here, not shared via a helper, for the same
+ * "separate compositions, not one branching on orientation" reasoning
+ * the rest of this file already follows.
  */
 export function MobileLandscapeSpeakerView({
   event,
@@ -98,6 +107,8 @@ export function MobileLandscapeSpeakerView({
   toggleCamera,
 }: RoomLayoutProps) {
   const [commentsOpen, setCommentsOpen] = useState(false);
+  // Mobile UX correction — see this component's own doc comment above.
+  const [normalStageView, setNormalStageView] = useState(false);
 
   return (
     <div className="relative h-full min-h-0 w-full overflow-hidden">
@@ -122,7 +133,8 @@ export function MobileLandscapeSpeakerView({
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
         stageReactions={stageReactions}
-        soloMode
+        soloMode={!normalStageView}
+        onTapSelfPreview={() => setNormalStageView((current) => !current)}
       />
 
       <SpeakerViewTopChrome event={event} identity={identity} connectionStatus={connectionStatus} onOpenRoomInfo={onOpenRoomInfo} />
@@ -184,6 +196,30 @@ export function MobileLandscapeSpeakerView({
         onHasPendingRequestChange={() => {}}
         onPrepareMedia={onPrepareMedia}
         allowMicRequest={false}
+        miniStage={
+          commentsOpen ? (
+            <SpeakerStage
+              speakers={speakers}
+              getParticipant={getParticipant}
+              myIdentity={myIdentity}
+              isSpeaker={isSpeaker}
+              mySeatNumber={mySeatNumber}
+              needsMediaActivation={false}
+              activateMedia={activateMedia}
+              mediaError={null}
+              orientation="landscape"
+              onTapEmptySeat={() => {}}
+              isJoiningSeat={false}
+              localVideoTrack={null}
+              reconnectingIdentities={reconnectingIdentities}
+              isPreviewBuild={isPreviewBuild}
+              simulatedGuestIds={simulatedGuestIds}
+              profileDirectory={profileDirectory}
+              stageReactions={stageReactions}
+              compact
+            />
+          ) : null
+        }
       />
     </div>
   );

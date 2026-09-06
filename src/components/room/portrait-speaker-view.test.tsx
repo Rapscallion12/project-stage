@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PortraitSpeakerView } from "./portrait-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -8,6 +8,18 @@ import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { LocalVideoTrack } from "livekit-client";
+
+/** Same fake-track technique as self-preview.test.tsx's own — attach() must set srcObject for the repaint nudge to read back without throwing. */
+function fakeVideoTrack(): LocalVideoTrack {
+  return {
+    attach: vi.fn((element: HTMLVideoElement) => {
+      element.srcObject = {} as MediaStream;
+      return element;
+    }),
+    detach: vi.fn(),
+  } as unknown as LocalVideoTrack;
+}
 
 const { leaveSpeakerSeat, sendMessage, addReaction } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
@@ -495,6 +507,137 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       );
       fireEvent.click(screen.getByTestId("ambient-comment"));
       expect(screen.getByTestId("expanded-top-requests")).toHaveTextContent("Jordan");
+    });
+  });
+
+  describe("tap self-preview to enter/leave normal stage view (mobile UX correction, live-user-test finding)", () => {
+    it("starts in the existing speaker-focused (solo) presentation", () => {
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+    });
+
+    it("tapping the self-preview switches to the normal, two-speaker stage presentation", () => {
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getByTestId("speaker-divider")).toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+    });
+
+    it("tapping it again restores the speaker-focused presentation", () => {
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      const selfPreview = screen.getByTestId("self-preview");
+      fireEvent.click(selfPreview);
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+      fireEvent.click(selfPreview);
+      expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+    });
+
+    it("does not remount the other speaker's tile — the same DOM node is reused, just repositioned", () => {
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      const before = screen.getByTestId("speaker-tile");
+      fireEvent.click(screen.getByTestId("self-preview"));
+      const tilesAfter = screen.getAllByTestId("speaker-tile");
+      expect(tilesAfter).toContain(before);
+    });
+
+    it("in normal view, the speaker's own seat now renders too, but never shows their own big video a second time", () => {
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      const tiles = screen.getAllByTestId("speaker-tile");
+      expect(tiles).toHaveLength(2);
+      // Still exactly one live <video> element for the local camera — the
+      // self-preview corner's own, not a second copy inside either tile
+      // (baseProps' getParticipant returns no participant at all, so the
+      // local seat's own tile falls back to the ordinary no-video
+      // placeholder here — the real proof is the video count, not which
+      // specific placeholder renders for a participant-less fixture).
+      expect(document.querySelectorAll("video")).toHaveLength(1);
+    });
+
+    it("switching views is purely local — no seat, media, or server action fires just from toggling", () => {
+      const activateMedia = vi.fn(async () => MEDIA_READY);
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      const selfPreview = screen.getByTestId("self-preview");
+      fireEvent.click(selfPreview);
+      fireEvent.click(selfPreview);
+      expect(leaveSpeakerSeat).not.toHaveBeenCalled();
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it("incoming reactions targeting the other speaker become visible once switched to normal view, at the sender's normalized tap location", () => {
+      const stageReactions: ReactionsController = {
+        ...MOCK_STAGE_REACTIONS,
+        incoming: [
+          { id: "r1", targetIdentity: "profile:p2", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} stageReactions={stageReactions} />);
+      // Not visible while solo — the other speaker's tile isn't even
+      // guaranteed to be the one occupying the full-bleed slot in a way
+      // that would make this assertion meaningful before switching.
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getByText("🔥")).toBeInTheDocument();
+    });
+
+    it("provides a discoverable tap affordance on the self-preview, not just an invisible gesture", () => {
+      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+      expect(screen.getByTestId("self-preview-expand-affordance")).toBeInTheDocument();
+    });
+  });
+
+  describe("Expanded Comments mini stage for a seated speaker (mobile UX correction, Section 9)", () => {
+    it("a seated speaker opening Expanded Comments gets the same two-speaker mini stage — never their own solo/self-focused framing", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[
+            { id: "m1", author_display_name: "Jamie", author_profile_id: "p1", author_guest_id: null, body: "hi", created_at: new Date().toISOString(), is_speaker_request: false },
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+      expect(within(miniStage).getAllByTestId("speaker-tile")).toHaveLength(2);
+      expect(within(miniStage).queryByTestId("speaker-divider")).toBeInTheDocument();
+    });
+
+    it("opening/closing Expanded Comments never resets the speaker's own normal-stage-view toggle", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          messages={[
+            { id: "m1", author_display_name: "Jamie", author_profile_id: "p1", author_guest_id: null, body: "hi", created_at: new Date().toISOString(), is_speaker_request: false },
+          ]}
+        />,
+      );
+      // Switch to normal stage view first.
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+
+      // Open, then close, Expanded Comments.
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments-mini-stage")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(screen.queryByTestId("expanded-comments-mini-stage")).not.toBeInTheDocument();
+
+      // Still in normal stage view — comments never touched that toggle.
+      expect(screen.queryByTestId("speaker-divider")).toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
     });
   });
 });

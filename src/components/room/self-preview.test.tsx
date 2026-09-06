@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SelfPreview } from "./self-preview";
 import type { LocalVideoTrack } from "livekit-client";
@@ -49,6 +49,44 @@ describe("SelfPreview", () => {
     const video = document.querySelector("video");
     expect((video as HTMLVideoElement).muted).toBe(true);
     expect(document.querySelector("audio")).not.toBeInTheDocument();
+  });
+
+  describe("onTap (mobile UX correction): the tap-to-switch-stage-view affordance", () => {
+    it("is not interactive at all when no onTap is given — the ordinary pre-claim candidate preview, unaffected", () => {
+      render(<SelfPreview track={fakeVideoTrack()} />);
+      const preview = screen.getByTestId("self-preview");
+      expect(preview).not.toHaveAttribute("role", "button");
+      expect(screen.queryByTestId("self-preview-expand-affordance")).not.toBeInTheDocument();
+    });
+
+    it("calls onTap when clicked", () => {
+      const onTap = vi.fn();
+      render(<SelfPreview track={fakeVideoTrack()} onTap={onTap} />);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(onTap).toHaveBeenCalledTimes(1);
+    });
+
+    it("calls onTap on Enter/Space for keyboard users", () => {
+      const onTap = vi.fn();
+      render(<SelfPreview track={fakeVideoTrack()} onTap={onTap} />);
+      const preview = screen.getByTestId("self-preview");
+      fireEvent.keyDown(preview, { key: "Enter" });
+      fireEvent.keyDown(preview, { key: " " });
+      expect(onTap).toHaveBeenCalledTimes(2);
+    });
+
+    it("shows a small, unobtrusive discoverability affordance when tappable", () => {
+      render(<SelfPreview track={fakeVideoTrack()} onTap={vi.fn()} />);
+      expect(screen.getByTestId("self-preview-expand-affordance")).toBeInTheDocument();
+    });
+
+    it("is exposed as a real button to assistive tech, with a focusable tab stop", () => {
+      render(<SelfPreview track={fakeVideoTrack()} onTap={vi.fn()} />);
+      const preview = screen.getByTestId("self-preview");
+      expect(preview).toHaveAttribute("role", "button");
+      expect(preview).toHaveAttribute("tabIndex", "0");
+      expect(preview).toHaveAccessibleName();
+    });
   });
 
   describe("repaint nudge (media rendering bugfix pass, real-device report: a fresh mount reattaching an already-flowing track can paint black until forced to redecode)", () => {

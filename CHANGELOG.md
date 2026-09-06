@@ -11,6 +11,29 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Fixed
+
+- **A seated speaker's own preview was too small to make audience
+  reactions (or the other speaker) meaningfully visible while actually
+  speaking** (live-user-test finding) — tap your own small preview to
+  switch to the normal, full-size two-speaker view the audience sees,
+  reactions and all; tap it again to switch back to the focused speaker
+  view. Purely a personal display choice — your seat, camera/mic, and
+  the round/vote you're part of are completely unaffected either way.
+- **Expanded Comments covered the entire stage** (live-user-test
+  finding) — opening it now keeps a compact live view of both speakers,
+  side by side, at the top of the screen the whole time you're reading
+  comments, so you never lose sight of the conversation.
+
+## [public-beta-v2] - 2026-09-05
+
+Second production release of Virtual Stage to the live site
+(https://project-stage-weld.vercel.app), promoted from
+`feature/expanded-comments` after real-device approval across that
+branch's own session history and a successful first real-user test.
+Tagged as `pre-issue-21-launch-stable` (the prior production commit,
+`cc76a45`) immediately before this merge as the rollback checkpoint.
+
 ### Added
 
 - **Live emoji reactions — double-tap a speaker to send them your

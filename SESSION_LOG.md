@@ -4,6 +4,76 @@ Newest entry first.
 
 ---
 
+## 2026-09-06 — Session 71: Mobile UX correction — speaker normal-stage-view toggle, Expanded Comments mini stage (live-user-test finding, issue #21), on `feature/mobile-speaker-view-toggle`
+
+**Goal**: two visibility issues found during the first real-user test on
+production: (1) a seated speaker's own compact self-focused layout made
+audience reactions and the other speaker too small to actually perceive;
+(2) Expanded Comments covered the entire stage, losing all visual
+contact with the live conversation while reading comments. Branched from
+`main` (`df889e9`, the just-launched production baseline) — not from
+`feature/expanded-comments`, whose own further reaction work is a
+separate track.
+
+**Speaker normal-stage-view toggle**: tapping the speaker's own self-
+preview (the always-visible corner overlay, tappable in both directions)
+flips a new local `normalStageView` boolean owned by
+`PortraitSpeakerView`/`MobileLandscapeSpeakerView`, which simply flips
+`SpeakerStage`'s own existing `soloMode` prop off — the *same*
+`SpeakerStage` instance these views already rendered, told to lay out
+both tiles at normal size instead of one full-bleed tile, exactly like
+the ordinary audience composition already does. **No remount**: the
+other speaker's tile keeps the same React key (`seat.id`) whether solo
+or not, so React repositions the existing mounted subtree (and its
+already-attached `<video>`) rather than tearing it down — the identical
+technique the Section 7 timer-swap reorder already established, verified
+with the same "same DOM node before/after" test technique. Nothing about
+the speaker's own seat, publications, round, or vote eligibility is an
+output of this toggle — `isSpeaker`/`mySeatNumber`/`canPublish` stay
+inputs only.
+
+**Expanded Comments mini stage**: `ExpandedComments` gained a `miniStage`
+slot (a plain `ReactNode`, keeping that component's own "no role/media/
+seat/LiveKit state" contract intact) rendered as a fixed-height band
+above the drag handle; with a mini stage present, the sheet spans the
+full height instead of a partial 70vh (the mini stage band itself is the
+visible "top of screen," not a sliver of the old stage peeking out above
+a still-70vh sheet). Each caller passes a **second, separate** `compact`
+`SpeakerStage` instance (new `compact` prop: always side-by-side
+regardless of orientation, no round-timer badge/swap, no self-preview
+slot, a single unsplit reaction lane) as that slot — reusing the exact
+same tile/reaction-filtering logic rather than a bespoke renderer.
+Confirmed safe, not a "remount" in the sense that matters: LiveKit
+tracks support being attached to multiple elements simultaneously, so
+this second instance's own fresh attach is an *additional* attachment,
+never a detach/reattach of the main stage's own already-mounted
+elements (which stay mounted, unaffected, just visually covered exactly
+as before this pass). Accepted, reported tradeoff: both stage instances
+render simultaneously while comments are open, a modest extra decode
+cost for a two-person stream, in exchange for zero risk to the existing
+media lifecycle.
+
+**Testing**: `self-preview.test.tsx` gained an `onTap` describe block;
+`portrait-speaker-view.test.tsx`/`mobile-landscape-speaker-view.test.tsx`
+gained toggle describe blocks (starts solo, switches on tap, switches
+back, no remount, no seat/media side effects, reactions become visible
+in normal view) plus Expanded Comments mini-stage-for-a-speaker tests;
+`expanded-comments.test.tsx` gained a `miniStage` describe block
+(structural: positioning, full-height layout, comments/composer
+unaffected); `portrait-room.test.tsx`/`mobile-landscape-room.test.tsx`
+gained end-to-end mini-stage tests (both speakers visible side-by-side,
+correct identity-to-tile mapping, RTS/Top-Requests unaffected, no seat/
+media/reaction-send side effects from merely opening comments).
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/hooks/lobby suites clean (1109 tests). Full
+project suite run separately — see this session's own handoff for the
+final count.
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-05 — Session 70: Reaction cooldown + sender-dedup correction (real-device report, issue #21)
 
 **Goal**: second narrow reaction correction on the same branch — cooldown

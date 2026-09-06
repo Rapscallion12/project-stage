@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { addReaction } from "@/app/events/[id]/lobby/actions";
 import { voteForSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { ChatPanel } from "@/components/lobby/chat-panel";
@@ -99,6 +100,23 @@ const TOP_REQUESTS_LIMIT = 3;
  * flat list keyed by `message.id`; a future pass can group by a
  * `reply_to_message_id` into a `repliesByParentId` map without
  * restructuring this component.
+ *
+ * **`miniStage`** (mobile UX correction, live-user-test finding): a
+ * real-device report found this sheet covering the *entire* stage,
+ * defeating the "stage-first" concept — a viewer (or a seated speaker)
+ * opening comments lost all visual contact with the live conversation.
+ * When provided, this renders as a fixed-height band at the very top of
+ * this sheet, before the drag handle — both speakers, side-by-side, at a
+ * small but legible scale, so the stage stays visible the whole time
+ * comments are open. This component still owns no role/media/seat/
+ * LiveKit state itself, matching its own doc comment above: the caller
+ * builds and passes in whatever `ReactNode` it wants (in practice, a
+ * second `SpeakerStage` instance in `compact` mode — see that
+ * component's own doc comment for why a *second* instance, reusing the
+ * same tiles/reaction filtering, is the safe way to do this without
+ * touching the main stage's own already-attached media at all). `null`/
+ * omitted keeps this sheet's original full-height behavior exactly as it
+ * was, so no existing caller/test is affected until it opts in.
  */
 export function ExpandedComments({
   open,
@@ -115,6 +133,7 @@ export function ExpandedComments({
   hasPendingRequest = false,
   onCancelPendingRequest,
   profileDirectory = {},
+  miniStage = null,
 }: {
   open: boolean;
   onClose: () => void;
@@ -131,6 +150,8 @@ export function ExpandedComments({
   onCancelPendingRequest?: () => void;
   /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible comment author with a public profile — see `useProfileDirectory`'s own doc comment. Optional, defaulting to empty, so every existing caller/test that doesn't care can omit it. */
   profileDirectory?: Record<string, ProfileDirectoryEntry>;
+  /** Mobile UX correction — see this component's own doc comment above. `null`/omitted preserves the original full-height sheet exactly. */
+  miniStage?: ReactNode;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<LobbyMessage[]>([]);
@@ -223,12 +244,30 @@ export function ExpandedComments({
   return (
     <div
       data-testid="expanded-comments"
-      className="absolute inset-x-0 bottom-0 z-20 flex h-[70vh] max-h-full flex-col rounded-t-2xl border-t border-white/10 bg-black/92 shadow-[0_-8px_30px_rgba(0,0,0,0.4)] landscape:h-[85vh]"
+      className={cn(
+        "absolute inset-x-0 bottom-0 z-20 flex flex-col border-t border-white/10 bg-black/92 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]",
+        // Mobile UX correction: with a mini stage, this sheet spans the
+        // full height — the mini stage band itself *is* the visible "top
+        // of screen" (see this component's own `miniStage` doc comment),
+        // not a separate layer floating above a still-70vh sheet. No
+        // rounded top corner in that case either — it should read as the
+        // stage continuing into the comment panel, not as a sheet's own
+        // edge. Without a mini stage, every existing caller/test keeps
+        // the original 70vh/85vh sheet with its rounded top corner,
+        // completely unchanged.
+        miniStage ? "inset-0" : "h-[70vh] max-h-full rounded-t-2xl landscape:h-[85vh]",
+      )}
       style={{
         transform: dragY > 0 ? `translateY(${dragY}px)` : undefined,
         transition: dragging ? "none" : "transform 200ms ease-out",
       }}
     >
+      {miniStage && (
+        <div data-testid="expanded-comments-mini-stage" className="h-32 shrink-0 overflow-hidden sm:h-36">
+          {miniStage}
+        </div>
+      )}
+
       <div
         data-testid="expanded-comments-handle"
         onPointerDown={handleDragStart}

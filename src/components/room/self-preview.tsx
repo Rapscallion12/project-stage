@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { LocalVideoTrack } from "livekit-client";
+import { cn } from "@/lib/utils";
 
 /**
  * Issue #22: the local candidate/speaker's own camera preview, rendered
@@ -55,8 +56,29 @@ import type { LocalVideoTrack } from "livekit-client";
  * `key`ing on the track's own `sid` (stable once created) is what
  * guarantees React reuses the same element across *this* component's own
  * re-renders, when it does stay at one call site.
+ *
+ * **`onTap`** (mobile UX correction, live-user-test finding): a seated
+ * speaker's own preview is the one persistent, always-visible anchor
+ * regardless of `SpeakerStage`'s `soloMode` — tapping it is what
+ * `PortraitSpeakerView`/`MobileLandscapeSpeakerView` wire to their own
+ * local `soloMode`/normal-stage-view toggle (see those components' own
+ * doc comments), letting a speaker see the room "the way the audience
+ * sees it" — both speakers at normal size, incoming reactions readable —
+ * without touching their seat, publications, or round/vote state at all.
+ * This component itself has no opinion on what tapping *means*; it just
+ * renders the tap target and a small affordance glyph when a handler is
+ * given. Purely additive: every caller that doesn't pass `onTap` (the
+ * ordinary pre-claim candidate self-preview, unaffected) renders exactly
+ * as before, non-interactive.
  */
-export function SelfPreview({ track }: { track: LocalVideoTrack }) {
+export function SelfPreview({
+  track,
+  onTap,
+}: {
+  track: LocalVideoTrack;
+  /** When provided, the preview becomes a real tap target — see this component's own doc comment above `onTap`. */
+  onTap?: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -91,12 +113,41 @@ export function SelfPreview({ track }: { track: LocalVideoTrack }) {
   return (
     <div
       data-testid="self-preview"
-      className="absolute top-3 right-3 h-24 w-16 overflow-hidden rounded-md border-2 border-accent bg-black shadow-lg sm:h-28 sm:w-20"
+      onClick={onTap}
+      role={onTap ? "button" : undefined}
+      tabIndex={onTap ? 0 : undefined}
+      onKeyDown={
+        onTap
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onTap();
+              }
+            }
+          : undefined
+      }
+      aria-label={onTap ? "Switch stage view" : undefined}
+      className={cn(
+        "absolute top-3 right-3 h-24 w-16 overflow-hidden rounded-md border-2 border-accent bg-black shadow-lg sm:h-28 sm:w-20",
+        onTap && "cursor-pointer",
+      )}
     >
       {/* Muted: this is the local camera's own preview, played back to the
           person it belongs to — never their own mic, same reasoning as
           SpeakerTile's local video element. */}
       <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+      {/* Discoverability affordance (Section 11: "should not rely only on
+          an invisible gesture") — a small, unobtrusive expand glyph, never
+          a label large enough to clutter the tiny preview. */}
+      {onTap && (
+        <span
+          aria-hidden="true"
+          data-testid="self-preview-expand-affordance"
+          className="absolute top-0.5 right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-[9px] leading-none text-white"
+        >
+          ⤢
+        </span>
+      )}
       <span className="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 text-[10px] font-medium leading-tight text-white">
         You
       </span>

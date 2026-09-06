@@ -257,6 +257,30 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
             onPrepareMedia={onPrepareMedia}
             hasPendingRequest={!isSpeaker && hasPendingRequest}
             onCancelPendingRequest={onCancelPromotion}
+            miniStage={
+              commentsOpen ? (
+                <SpeakerStage
+                  speakers={speakers}
+                  getParticipant={getParticipant}
+                  myIdentity={myIdentity}
+                  isSpeaker={isSpeaker}
+                  mySeatNumber={mySeatNumber}
+                  needsMediaActivation={false}
+                  activateMedia={activateMedia}
+                  mediaError={null}
+                  orientation="landscape"
+                  onTapEmptySeat={() => {}}
+                  isJoiningSeat={false}
+                  localVideoTrack={null}
+                  reconnectingIdentities={reconnectingIdentities}
+                  isPreviewBuild={isPreviewBuild}
+                  simulatedGuestIds={simulatedGuestIds}
+                  profileDirectory={profileDirectory}
+                  stageReactions={stageReactions}
+                  compact
+                />
+              ) : null
+            }
           />
         </>
       )}

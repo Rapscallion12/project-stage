@@ -76,6 +76,7 @@ export function SpeakerTile({
   onDoubleTapReact,
   onSpeakerReactions = [],
   showOnSpeakerReactions = false,
+  compact = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -202,6 +203,8 @@ export function SpeakerTile({
   onSpeakerReactions?: IncomingStageReaction[];
   /** Pre-launch interaction pass, Section 4: true only when the viewer's own display preference is "On speaker" *and* they haven't hidden reactions — "Side"/hidden modes render nothing here at all (see `ReactionSideLane`/`SpeakerStage` instead). */
   showOnSpeakerReactions?: boolean;
+  /** Mobile UX correction: this tile is rendered at a small, side-by-side "mini stage" scale (Expanded Comments' own mini stage — see `SpeakerStage`'s own `compact` doc comment). Only ever shrinks reaction-burst text so a burst doesn't visually overwhelm the tiny tile — everything else about this tile's own rendering is unchanged. Defaults to `false`. */
+  compact?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -332,7 +335,7 @@ export function SpeakerTile({
       onPointerUp={onDoubleTapReact ? doubleTap.onPointerUp : undefined}
     >
       {showOnSpeakerReactions && onSpeakerReactions.length > 0 && (
-        <OnSpeakerReactionBursts reactions={onSpeakerReactions} />
+        <OnSpeakerReactionBursts reactions={onSpeakerReactions} compact={compact} />
       )}
       {showBigVideo ? (
         // Only ever a remote participant's video now — the local

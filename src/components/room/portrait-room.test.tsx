@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -7,6 +7,29 @@ import type { Event } from "@/lib/repositories/events";
 import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+
+function seat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
+  return {
+    id: "s1",
+    event_id: "e1",
+    profile_id: "p1",
+    guest_id: null,
+    seat_number: 1,
+    display_name: "Alice",
+    joined_at: new Date().toISOString(),
+    left_at: null,
+    left_reason: null,
+    disconnected_at: null,
+    media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
+    ...overrides,
+  };
+}
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
   vi.hoisted(() => ({
@@ -533,6 +556,129 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(activateMedia).not.toHaveBeenCalled();
       expect(toggleMicrophone).not.toHaveBeenCalled();
       expect(toggleCamera).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Expanded Comments mini stage (mobile UX correction, live-user-test finding: the sheet was covering the entire stage)", () => {
+    const twoSpeakers = [
+      seat({ id: "s1", seat_number: 1, profile_id: "alice", display_name: "Alice" }),
+      seat({ id: "s2", seat_number: 2, profile_id: "bob", display_name: "Bob" }),
+    ];
+
+    function message(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
+      return {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+        ...overrides,
+      };
+    }
+
+    it("opening Expanded Comments does not remove the stage — both current speakers remain visible in the mini stage (the main stage, still mounted underneath, accounts for the other two)", () => {
+      render(<PortraitRoom {...baseProps} speakers={twoSpeakers} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+      expect(within(miniStage).getAllByTestId("speaker-tile")).toHaveLength(2);
+      expect(miniStage).toHaveTextContent("Alice");
+      expect(miniStage).toHaveTextContent("Bob");
+    });
+
+    it("the mini stage uses a side-by-side layout, not portrait's ordinary vertical stack", () => {
+      render(<PortraitRoom {...baseProps} speakers={twoSpeakers} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+      // Same container-query-safe row classes SpeakerStage's own compact
+      // mode always applies, regardless of the surrounding portrait
+      // composition's usual column stack.
+      expect(within(miniStage).getByTestId("room-stage").firstElementChild?.className).toMatch(/flex-row/);
+      expect(within(miniStage).getByTestId("speaker-divider")).toBeInTheDocument();
+    });
+
+    it("speaker identities map to the correct mini tiles, matching their actual seat assignment", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          speakers={[
+            seat({ id: "s1", seat_number: 1, profile_id: "alice", display_name: "Alice" }),
+            seat({ id: "s2", seat_number: 2, profile_id: "bob", display_name: "Bob" }),
+          ]}
+          messages={[message()]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const tiles = within(screen.getByTestId("expanded-comments-mini-stage")).getAllByTestId("speaker-tile");
+      expect(tiles[0]).toHaveTextContent("Alice");
+      expect(tiles[1]).toHaveTextContent("Bob");
+    });
+
+    it("closing Expanded Comments removes the mini stage — the main stage (never actually gone) is all that's left", () => {
+      render(<PortraitRoom {...baseProps} speakers={twoSpeakers} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(screen.queryByTestId("expanded-comments-mini-stage")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+    });
+
+    it("comments/RTS behavior (Top Speaker Requests, refresh pill, snapshot) is unaffected by the mini stage's presence", () => {
+      render(
+        <PortraitRoom
+          {...baseProps}
+          speakers={twoSpeakers}
+          messages={[message({ id: "m1", author_display_name: "Jordan", is_speaker_request: true })]}
+          pendingRequests={[
+            {
+              id: "r1",
+              event_id: "e1",
+              profile_id: "p2",
+              guest_id: null,
+              message_id: "m1",
+              status: "pending",
+              created_at: new Date().toISOString(),
+              resolved_at: null,
+              selection_round_id: null,
+              frozen_rank: null,
+              frozen_vote_count: null,
+              is_current_candidate: false,
+              selection_failed: false,
+              reserved_seat_number: null,
+              voteCount: 0,
+              isMyVote: false,
+            },
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-top-requests")).toHaveTextContent("Jordan");
+    });
+
+    it("no seat/round/vote/RTS/media authority changes just from opening Expanded Comments with a mini stage present", () => {
+      const onTapEmptySeat = vi.fn();
+      const activateMedia = vi.fn(async () => MEDIA_READY);
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      const stageReactions: ReactionsController = { ...MOCK_STAGE_REACTIONS, send: vi.fn(MOCK_STAGE_REACTIONS.send) };
+      render(
+        <PortraitRoom
+          {...baseProps}
+          speakers={twoSpeakers}
+          messages={[message()]}
+          onTapEmptySeat={onTapEmptySeat}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+          stageReactions={stageReactions}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+      expect(stageReactions.send).not.toHaveBeenCalled();
     });
   });
 

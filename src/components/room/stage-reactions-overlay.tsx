@@ -26,8 +26,20 @@ import { cn } from "@/lib/utils";
  * from the same spot fan out slightly instead of perfectly stacking, per
  * Section 3's explicit instruction. Reduced-motion drops the drift/
  * rotation/scale entirely (a plain fade), per Section 11.
+ *
+ * **`compact`** (mobile UX correction): Expanded Comments' own mini stage
+ * renders speaker tiles at a fraction of the normal size — the full-size
+ * `text-2xl`/`text-3xl` burst would visually overwhelm a tile that small.
+ * Shrinks the emoji glyph only; positioning, timing, and drift math are
+ * all unchanged. Defaults to `false`.
  */
-export function OnSpeakerReactionBursts({ reactions }: { reactions: IncomingStageReaction[] }) {
+export function OnSpeakerReactionBursts({
+  reactions,
+  compact = false,
+}: {
+  reactions: IncomingStageReaction[];
+  compact?: boolean;
+}) {
   const prefersReducedMotion = usePrefersReducedMotion();
 
   return (
@@ -37,7 +49,7 @@ export function OnSpeakerReactionBursts({ reactions }: { reactions: IncomingStag
         return (
           <span
             key={reaction.id}
-            className="absolute text-2xl sm:text-3xl"
+            className={cn("absolute", compact ? "text-base" : "text-2xl sm:text-3xl")}
             style={{
               left: `${reaction.x * 100}%`,
               top: `${reaction.y * 100}%`,
