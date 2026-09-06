@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideClaimEligibility, findOpenSeat, isEligibleToClaim, TOP_ELIGIBLE_COUNT } from "./speaker-queue";
+import { decideClaimEligibility, findOpenSeat, findOpenSeats } from "./speaker-queue";
 
 describe("findOpenSeat", () => {
   it("is seat 1 when nothing is occupied", () => {
@@ -19,100 +19,74 @@ describe("findOpenSeat", () => {
   });
 });
 
-describe("isEligibleToClaim", () => {
-  it("is eligible at and inside the top-N boundary", () => {
-    for (let rank = 1; rank <= TOP_ELIGIBLE_COUNT; rank++) {
-      expect(isEligibleToClaim(rank)).toBe(true);
-    }
+describe("findOpenSeats (issue #21, fifth corrective pass) — every open seat, not just the first", () => {
+  it("is [1, 2] when nothing is occupied", () => {
+    expect(findOpenSeats([])).toEqual([1, 2]);
   });
 
-  it("is not eligible just past the boundary", () => {
-    expect(isEligibleToClaim(TOP_ELIGIBLE_COUNT + 1)).toBe(false);
+  it("is [2] when only seat 1 is occupied", () => {
+    expect(findOpenSeats([{ seat_number: 1 }])).toEqual([2]);
+  });
+
+  it("is [1] when only seat 2 is occupied", () => {
+    expect(findOpenSeats([{ seat_number: 2 }])).toEqual([1]);
+  });
+
+  it("is [] when both seats are occupied", () => {
+    expect(findOpenSeats([{ seat_number: 1 }, { seat_number: 2 }])).toEqual([]);
   });
 });
 
-describe("decideClaimEligibility — the actual authorization gate claimOpenSeat relies on", () => {
-  const baseParams = {
-    identity: { type: "profile" as const, id: "p1" },
-    hasPendingRequest: true,
-    activeSpeakers: [{ seat_number: 1 as const }], // seat 2 open
-    rankedRequests: [{ profile_id: "p1", guest_id: null, rank: 1 }],
-  };
-
-  it("rejects a caller with no pending request, even if they'd otherwise be eligible", () => {
-    const decision = decideClaimEligibility({ ...baseParams, hasPendingRequest: false });
+describe("decideClaimEligibility (issue #21, fifth corrective pass) — reads the caller's own reserved_seat_number, not a re-derived 'the' open seat", () => {
+  it("rejects a caller with no pending request", () => {
+    const decision = decideClaimEligibility({
+      myPendingRequest: null,
+      activeSpeakers: [{ seat_number: 1 }],
+    });
     expect(decision).toEqual({ eligible: false, reason: "no-request" });
   });
 
-  it("rejects when both seats are full", () => {
+  it("rejects a pending requester who is not the round's current candidate for any seat", () => {
     const decision = decideClaimEligibility({
-      ...baseParams,
-      activeSpeakers: [{ seat_number: 1 as const }, { seat_number: 2 as const }],
-    });
-    expect(decision).toEqual({ eligible: false, reason: "no-open-seat" });
-  });
-
-  it("rejects a caller ranked outside the top eligible requests", () => {
-    const decision = decideClaimEligibility({
-      ...baseParams,
-      rankedRequests: [
-        { profile_id: "a", guest_id: null, rank: 1 },
-        { profile_id: "b", guest_id: null, rank: 2 },
-        { profile_id: "c", guest_id: null, rank: 3 },
-        { profile_id: "p1", guest_id: null, rank: 4 },
-      ],
+      myPendingRequest: { is_current_candidate: false, reserved_seat_number: null },
+      activeSpeakers: [{ seat_number: 1 }],
     });
     expect(decision).toEqual({ eligible: false, reason: "not-eligible" });
   });
 
-  it("rejects a caller who isn't in the ranking at all (a data inconsistency, not just low rank)", () => {
+  it("rejects a candidate marked current but with no reserved seat (defensive — shouldn't happen, but never trusted blindly)", () => {
     const decision = decideClaimEligibility({
-      ...baseParams,
-      rankedRequests: [{ profile_id: "someone-else", guest_id: null, rank: 1 }],
+      myPendingRequest: { is_current_candidate: true, reserved_seat_number: null },
+      activeSpeakers: [],
     });
     expect(decision).toEqual({ eligible: false, reason: "not-eligible" });
   });
 
-  it("allows a caller ranked within the top eligible requests, for the open seat", () => {
+  it("allows the currently-selected candidate to claim their own reserved seat", () => {
     const decision = decideClaimEligibility({
-      ...baseParams,
-      rankedRequests: [
-        { profile_id: "a", guest_id: null, rank: 1 },
-        { profile_id: "p1", guest_id: null, rank: 2 },
-      ],
+      myPendingRequest: { is_current_candidate: true, reserved_seat_number: 2 },
+      activeSpeakers: [{ seat_number: 1 }],
     });
     expect(decision).toEqual({ eligible: true, seatNumber: 2 });
   });
 
-  it("picks the lowest-numbered open seat when both are free", () => {
-    const decision = decideClaimEligibility({ ...baseParams, activeSpeakers: [] });
-    expect(decision).toEqual({ eligible: true, seatNumber: 1 });
+  it("targets the exact reserved seat, never 'the' lowest-numbered open one — the seat-aware fix for the two-simultaneous-candidates race", () => {
+    // Both seats are open, but this candidate is specifically reserved
+    // for seat 2 — the old findOpenSeat-based logic would have picked
+    // seat 1 regardless, racing whichever candidate was actually
+    // reserved for it.
+    const decision = decideClaimEligibility({
+      myPendingRequest: { is_current_candidate: true, reserved_seat_number: 2 },
+      activeSpeakers: [],
+    });
+    expect(decision).toEqual({ eligible: true, seatNumber: 2 });
   });
 
-  describe("guest identities (issue #16)", () => {
-    const guestBaseParams = {
-      identity: { type: "guest" as const, id: "g1" },
-      hasPendingRequest: true,
-      activeSpeakers: [{ seat_number: 1 as const }], // seat 2 open
-    };
-
-    it("matches a guest's own ranked entry by guest_id, never profile_id", () => {
-      const decision = decideClaimEligibility({
-        ...guestBaseParams,
-        rankedRequests: [
-          { profile_id: "a", guest_id: null, rank: 1 },
-          { profile_id: null, guest_id: "g1", rank: 2 },
-        ],
-      });
-      expect(decision).toEqual({ eligible: true, seatNumber: 2 });
+  it("rejects when the caller's own reserved seat isn't actually open anymore (stale read)", () => {
+    const decision = decideClaimEligibility({
+      myPendingRequest: { is_current_candidate: true, reserved_seat_number: 1 },
+      activeSpeakers: [{ seat_number: 1 }],
     });
-
-    it("rejects a guest whose id doesn't appear in the ranking, even if some profile shares the same rank position", () => {
-      const decision = decideClaimEligibility({
-        ...guestBaseParams,
-        rankedRequests: [{ profile_id: "g1", guest_id: null, rank: 1 }], // same string value, wrong column — must not match
-      });
-      expect(decision).toEqual({ eligible: false, reason: "not-eligible" });
-    });
+    expect(decision).toEqual({ eligible: false, reason: "no-open-seat" });
   });
 });

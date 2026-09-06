@@ -1,0 +1,11 @@
+-- Corrective: CREATE OR REPLACE FUNCTION with a new trailing DEFAULTed
+-- parameter did not replace claim_speaker_seat's existing 5-argument
+-- signature in place -- Postgres treated the 6-argument version as a
+-- genuine, separate overload instead, confirmed by the regenerated
+-- TypeScript types showing two distinct Args shapes for the same
+-- function name. That's a real security gap for migration
+-- 00000000000029's fix: any caller resolving to the *old* 5-argument
+-- overload would skip the new selection-authorization check entirely,
+-- silently. Drop the stale 5-argument overload explicitly so only the
+-- 6-argument version (with the authorization check) can ever be called.
+drop function if exists public.claim_speaker_seat(uuid, smallint, uuid, uuid, text);

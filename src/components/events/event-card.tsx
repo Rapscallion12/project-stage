@@ -7,7 +7,7 @@ export function EventCard({ event }: { event: Event }) {
   return (
     <Link
       href={`/events/${event.id}`}
-      className="block rounded-xl border border-border p-5 transition-colors hover:bg-foreground/5"
+      className="block rounded-xl border border-border p-5 transition-colors hover:bg-surface-hover"
     >
       <div className="mb-2 flex items-start justify-between gap-4">
         <h3 className="text-lg font-semibold">{event.title}</h3>

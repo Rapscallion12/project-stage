@@ -30,26 +30,44 @@ import type { ReactNode } from "react";
  * only a caller that explicitly wants the lighter treatment opts out.
  * The click-through-outer/interactive-inner structure — the actual bug
  * fix this component exists for — is identical either way.
+ *
+ * **`idle`** (pre-launch interaction pass, Section 8): when true, this
+ * background gradient — the actual scrim covering the lower speaker —
+ * fades to a lighter wash so more of the video shows through while the
+ * viewer is simply watching. Deliberately only the gradient's own
+ * opacity, never the inner `pointer-events-auto` wrapper or its
+ * children (foreground text/icons/controls) — those stay at full
+ * opacity/contrast and fully interactive regardless, per Section 8's own
+ * "do NOT make controls disappear completely" / "never let hit targets
+ * disappear" instructions. Caller (`PortraitRoom`/`MobileLandscapeRoom`)
+ * owns the actual idle-detection (`useIdleActivity`) — this component
+ * only renders whatever it's told. Defaults to `false` (today's full-
+ * opacity gradient, unchanged) so every existing caller/test is
+ * unaffected until it opts in.
  */
 export function StageOverlayShell({
   children,
   topClassName = "pt-14",
   className,
   gradient = true,
+  idle = false,
 }: {
   children: ReactNode;
   topClassName?: string;
   className?: string;
   gradient?: boolean;
+  idle?: boolean;
 }) {
   return (
     <div
       data-testid="stage-bottom-overlay"
       className={cn(
         "stage-overlay pointer-events-none absolute inset-x-0 bottom-0 z-10",
-        gradient && "bg-gradient-to-t from-black/90 via-black/60 to-transparent",
+        gradient && "bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300",
+        gradient && idle && "opacity-50",
         topClassName,
       )}
+      data-idle={idle ? "true" : "false"}
     >
       <div className={cn("pointer-events-auto flex flex-col gap-1 px-3 pb-3", className)}>{children}</div>
     </div>

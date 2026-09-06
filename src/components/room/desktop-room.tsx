@@ -1,4 +1,4 @@
-import { RoomHeader } from "@/components/room/room-header";
+import { DesktopRoomHeader } from "@/components/room/desktop-room-header";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomChatPanel } from "@/components/room/room-chat-panel";
 import { RoomControls } from "@/components/room/room-controls";
@@ -33,6 +33,17 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * composition, and every other one, is untouched. A hard minimum width
  * on the stage column itself would be a further, more thorough fix;
  * left to #18 rather than expanded here.
+ *
+ * **Desktop navigation pass (real-desktop regression)**: `DesktopRoomHeader`
+ * is now rendered as a full-width row *above* the stage+sidebar split
+ * below, not nested inside the stage column — this is what keeps it
+ * aligned with both the stage and the chat sidebar (Section 7's own
+ * "must span... align with stage + sidebar, no misaligned columns")
+ * without needing two coordinated header halves. The former in-column
+ * `RoomHeader` call is gone; `DesktopRoomHeader` embeds `RoomHeader`
+ * itself for the room-identity portion, so nothing about how the room's
+ * title/status/viewer count render actually changed — see that
+ * component's own doc comment.
  */
 export function DesktopRoom({
   event,
@@ -42,6 +53,7 @@ export function DesktopRoom({
   speakers,
   myIdentity,
   identity,
+  identityAvatarUrl,
   isSpeaker,
   mySeatNumber,
   hasPendingRequest,
@@ -60,77 +72,100 @@ export function DesktopRoom({
   needsMediaActivation,
   activateMedia,
   mediaError,
+  mediaReadiness,
+  acquiringMedia,
   localVideoTrack,
   onPrepareMedia,
   reconnectingIdentities,
+  isPreviewBuild,
+  simulatedGuestIds,
+  stageRound,
   messages,
   reactions,
+  pendingRequests,
+  profileDirectory,
+  onOpenRoomInfo,
+  stageReactions,
 }: RoomLayoutProps) {
   return (
-    <div className="flex h-full min-h-0 flex-row overflow-hidden">
-      <div className="flex min-h-0 flex-1 flex-col">
-        <RoomHeader
-          eventTitle={event.title}
-          roomStatus={roomStatus}
-          countdownText={countdownText}
-          participantCount={participantCount}
-          connectionStatus={connectionStatus}
-        />
-        <div className="min-h-0 flex-1">
-          <SpeakerStage
-            speakers={speakers}
-            getParticipant={getParticipant}
-            myIdentity={myIdentity}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <DesktopRoomHeader
+        eventTitle={event.title}
+        roomStatus={roomStatus}
+        countdownText={countdownText}
+        participantCount={participantCount}
+        connectionStatus={connectionStatus}
+        identity={identity}
+        identityAvatarUrl={identityAvatarUrl}
+        onOpenRoomInfo={onOpenRoomInfo}
+      />
+      <div className="flex min-h-0 flex-1 flex-row overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">
+            <SpeakerStage
+              speakers={speakers}
+              getParticipant={getParticipant}
+              myIdentity={myIdentity}
+              isSpeaker={isSpeaker}
+              mySeatNumber={mySeatNumber}
+              needsMediaActivation={needsMediaActivation}
+              activateMedia={activateMedia}
+              mediaError={mediaError}
+              orientation="landscape"
+              onTapEmptySeat={onTapEmptySeat}
+              isJoiningSeat={isJoiningSeat}
+              localVideoTrack={localVideoTrack}
+              reconnectingIdentities={reconnectingIdentities}
+              isPreviewBuild={isPreviewBuild}
+              simulatedGuestIds={simulatedGuestIds}
+              stageRound={stageRound}
+              viewerIdentity={identity}
+              pendingRequests={pendingRequests}
+              profileDirectory={profileDirectory}
+              stageReactions={stageReactions}
+            />
+          </div>
+          {joinSeatMessage && (
+            <p className="px-4 pt-2 text-xs text-red-500" role="alert">
+              {joinSeatMessage}
+            </p>
+          )}
+          <RoomControls
+            eventId={event.id}
             isSpeaker={isSpeaker}
-            mySeatNumber={mySeatNumber}
+            hasPendingRequest={hasPendingRequest}
+            promotionCountdown={promotionCountdown}
+            onCancelPromotion={onCancelPromotion}
+            canPublish={canPublish}
             needsMediaActivation={needsMediaActivation}
             activateMedia={activateMedia}
+            onPrepareMedia={onPrepareMedia}
             mediaError={mediaError}
-            orientation="landscape"
-            onTapEmptySeat={onTapEmptySeat}
-            isJoiningSeat={isJoiningSeat}
-            localVideoTrack={localVideoTrack}
-            reconnectingIdentities={reconnectingIdentities}
+            mediaReadiness={mediaReadiness}
+            acquiringMedia={acquiringMedia}
+            connectionStatus={connectionStatus}
+            phase={phase}
+            countdownText={countdownText}
           />
         </div>
-        {joinSeatMessage && (
-          <p className="px-4 pt-2 text-xs text-red-500" role="alert">
-            {joinSeatMessage}
-          </p>
-        )}
-        <RoomControls
-          eventId={event.id}
-          isSpeaker={isSpeaker}
-          hasPendingRequest={hasPendingRequest}
-          promotionCountdown={promotionCountdown}
-          onCancelPromotion={onCancelPromotion}
-          canPublish={canPublish}
-          needsMediaActivation={needsMediaActivation}
-          activateMedia={activateMedia}
-          onPrepareMedia={onPrepareMedia}
-          mediaError={mediaError}
-          connectionStatus={connectionStatus}
-          phase={phase}
-          countdownText={countdownText}
-        />
-      </div>
-      {/* w-64 below the xl breakpoint (1280px), not a fixed w-80 — real-device follow-up: right at the desktop threshold (1024px) a fixed 320px sidebar left the two side-by-side video tiles pathologically narrow. A small, isolated width reduction in the cramped zone only; the sidebar returns to its original, already-acceptable w-80 once there's room to spare. See DECISIONS.md. */}
-      <div className="flex w-64 shrink-0 flex-col border-l border-border xl:w-80">
-        {identity.type === "guest" && (
-          <div className="shrink-0 border-b border-border px-3 py-2">
-            <GuestNameEditor initialName={identity.displayName} />
-          </div>
-        )}
-        <RoomChatPanel
-          eventId={event.id}
-          messages={messages}
-          reactions={reactions}
-          micRequestMode={micRequestMode}
-          onMicRequestModeChange={onMicRequestModeChange}
-          onHasPendingRequestChange={onHasPendingRequestChange}
-          onPrepareMedia={onPrepareMedia}
-          className="min-h-0 flex-1"
-        />
+        {/* w-64 below the xl breakpoint (1280px), not a fixed w-80 — real-device follow-up: right at the desktop threshold (1024px) a fixed 320px sidebar left the two side-by-side video tiles pathologically narrow. A small, isolated width reduction in the cramped zone only; the sidebar returns to its original, already-acceptable w-80 once there's room to spare. See DECISIONS.md. */}
+        <div className="flex w-64 shrink-0 flex-col border-l border-border xl:w-80">
+          {identity.type === "guest" && (
+            <div className="shrink-0 border-b border-border px-3 py-2">
+              <GuestNameEditor initialName={identity.displayName} />
+            </div>
+          )}
+          <RoomChatPanel
+            eventId={event.id}
+            messages={messages}
+            reactions={reactions}
+            micRequestMode={micRequestMode}
+            onMicRequestModeChange={onMicRequestModeChange}
+            onHasPendingRequestChange={onHasPendingRequestChange}
+            onPrepareMedia={onPrepareMedia}
+            className="min-h-0 flex-1"
+          />
+        </div>
       </div>
     </div>
   );

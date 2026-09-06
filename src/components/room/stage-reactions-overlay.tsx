@@ -1,0 +1,139 @@
+"use client";
+
+import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
+import type { IncomingStageReaction } from "@/hooks/use-stage-reactions";
+import { cn } from "@/lib/utils";
+
+/**
+ * Pre-launch interaction pass, Section 3/4A: renders one speaker tile's
+ * own incoming reaction bursts — "On speaker" display mode, the default.
+ * Mounted *inside* `SpeakerTile`'s own `relative` root (see that
+ * component), already filtered to reactions whose `targetIdentity`
+ * matches this tile's seat — this component itself has no identity
+ * logic, purely presentation.
+ *
+ * **Ephemeral, never permanent UI**: each burst renders for exactly
+ * `REACTION_BURST_LIFETIME_MS` (the caller, `useStageReactions`, prunes
+ * it from the shared list after that — this component just stops
+ * receiving it in `reactions`) and animates via CSS only — no JS timer
+ * of its own, no layout reservation, `pointer-events-none` throughout so
+ * it never intercepts the next double-tap.
+ *
+ * **Subtle variation, not distraction**: each burst derives its own
+ * drift/rotation from its own `id` (a cheap, stable hash — not
+ * `Math.random()`, so a given reaction's animation doesn't jitter across
+ * re-renders) rather than sharing one fixed path — repeated reactions
+ * from the same spot fan out slightly instead of perfectly stacking, per
+ * Section 3's explicit instruction. Reduced-motion drops the drift/
+ * rotation/scale entirely (a plain fade), per Section 11.
+ */
+export function OnSpeakerReactionBursts({ reactions }: { reactions: IncomingStageReaction[] }) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+      {reactions.map((reaction) => {
+        const { driftX, rotate } = burstVariation(reaction.id);
+        return (
+          <span
+            key={reaction.id}
+            className="absolute text-2xl sm:text-3xl"
+            style={{
+              left: `${reaction.x * 100}%`,
+              top: `${reaction.y * 100}%`,
+              // Custom properties read by the keyframes themselves (see
+              // globals.css) — keeps the per-burst randomization here,
+              // next to the id it's derived from, rather than computing
+              // matching inline transforms by hand.
+              ["--drift-x" as string]: `${driftX}px`,
+              ["--rotate" as string]: `${rotate}deg`,
+              animation: prefersReducedMotion
+                ? "reaction-burst-rise-reduced 1.6s ease-out forwards"
+                : "reaction-burst-rise 1.8s ease-out forwards",
+            }}
+          >
+            {reaction.emoji}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Pre-launch interaction pass, Section 4B — refined by a real-device
+ * follow-up pass: the "Side" display mode, for *other viewers'*
+ * reactions (the caller, `SpeakerStage`, already excludes the current
+ * viewer's own reactions from what it passes here — their own feedback
+ * renders on-speaker instead, at their exact tap location, so they never
+ * lose precise spatial confirmation of what they just did; see that
+ * component's own doc comment). Rendered at the stage level, not
+ * per-tile.
+ *
+ * **`region`** (real-device follow-up: "Side mode must preserve which
+ * speaker was targeted"): a single shared bottom-corner lane originally
+ * treated every reaction identically regardless of target, which lost
+ * the directed reaction's whole point — a viewer had no way to tell
+ * "someone reacted to the top speaker" from "someone reacted to the
+ * bottom speaker." `SpeakerStage` now renders *two* instances of this
+ * component in the two-tile portrait case, one per currently-visible
+ * slot (`region="top"`/`region="bottom"`), each already pre-filtered to
+ * that slot's own target identity — this component itself still has no
+ * identity logic, it just positions itself differently per region.
+ * "Currently visible slot" tracks local timer-swap ordering (Section 7),
+ * not seat 1/2 — again, entirely the caller's job; by the time a
+ * reaction array reaches here it's already correctly bucketed.
+ * `region` omitted (landscape/solo/desktop) preserves the original
+ * single, unsplit lane position exactly — a deliberate, reported scope
+ * decision (see DECISIONS.md) to avoid guessing at a landscape/desktop
+ * spatial treatment ahead of the dedicated desktop UX audit.
+ */
+export function ReactionSideLane({
+  reactions,
+  region,
+}: {
+  reactions: IncomingStageReaction[];
+  region?: "top" | "bottom";
+}) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  // Only the most recent handful — a lane that never stops growing
+  // defeats "tasteful," and older bursts have already finished their
+  // own CSS animation and would just sit invisible (opacity 0) anyway.
+  const visible = reactions.slice(-8);
+
+  return (
+    <div
+      aria-hidden="true"
+      data-testid={region ? `reaction-side-lane-${region}` : "reaction-side-lane"}
+      className={cn(
+        "pointer-events-none absolute right-2 z-10 flex w-10 flex-col-reverse items-center gap-1 sm:right-3",
+        region === "top" ? "top-[18%]" : region === "bottom" ? "bottom-[12%]" : "bottom-24",
+      )}
+    >
+      {visible.map((reaction) => (
+        <span
+          key={reaction.id}
+          className="text-xl sm:text-2xl"
+          style={{
+            animation: prefersReducedMotion
+              ? "reaction-burst-rise-reduced 1.6s ease-out forwards"
+              : "reaction-lane-rise 2s ease-out forwards",
+          }}
+        >
+          {reaction.emoji}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Cheap, stable per-id hash — see OnSpeakerReactionBursts' own doc comment for why this isn't Math.random(). */
+function burstVariation(id: string): { driftX: number; rotate: number } {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  const driftX = (((hash % 40) + 40) % 40) - 20; // -20..20px
+  const rotate = ((((hash >> 8) % 24) + 24) % 24) - 12; // -12..12deg
+  return { driftX, rotate };
+}

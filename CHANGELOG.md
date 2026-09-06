@@ -11,6 +11,821 @@ Development continues on feature branches; nothing here ships to
 production until it's previewed and approved on real devices, then
 merged to `main`.
 
+### Added
+
+- **Live emoji reactions — double-tap a speaker to send them your
+  selected emoji.** Tap the new React button to pick from a curated set
+  (❤️ 😂 👏 🔥 😮 💀 👍 👎, ❤️ by default) and choose how incoming
+  reactions show up for you — on the speaker at the spot you tapped, in a
+  dedicated side lane that never covers the video, or hidden entirely
+  (purely your own local preference; sending always still works). Sending
+  is generous but not unlimited: a smoothly draining "heat" meter fills
+  the button as you react and cools on its own — brief bursts during an
+  exciting moment are never a problem, only sustained sending eventually
+  fills the meter and blocks you for a bit, and it's enforced for real on
+  the server, not just in your browser. Once the meter fills, it now
+  drains all the way back to empty before you can react again (previously
+  it unlocked partway through). Your own reaction appears instantly,
+  right where you tapped, without waiting on a network round trip
+  (real-device testing found a noticeable lag in an earlier version, and
+  then, after that first fix, an occasional duplicate copy of your own
+  reaction appearing a moment later — both traced and fixed); if you've
+  chosen the side-lane display for *other people's* reactions, your own
+  still shows exactly where you tapped, and that lane now clearly shows
+  which speaker each reaction was actually for — including correctly
+  following a speaker you've locally swapped to the other side of the
+  screen.
+- **Tap the round timer to swap which speaker is on top** (portrait/
+  mobile only) — a purely visual, personal fix for "my phone always puts
+  the same speaker on the bottom," with a smooth animated swap. Nothing
+  about the round, votes, or either speaker's actual seat changes for
+  anyone else.
+- **The interface gets out of your way while you're just watching** — the
+  translucent panels along the bottom of the stage — including the
+  comment box, not just the small React/Vote controls — fade to
+  noticeably more transparent, clearly showing more of the stage
+  underneath, when you haven't touched anything for a couple of seconds,
+  and return instantly to full opacity the moment you do (typing,
+  opening a panel, tapping anything). Text, icons, and emoji stay fully
+  legible throughout. (Real-device testing found the first version of
+  this too subtle to notice — the comment box hadn't been included and
+  the fade itself was too small; both fixed.)
+- **You can no longer take a speaker seat without a verified camera and
+  microphone** — previously a candidate could be seated with a dead
+  camera or mic, only noticed 30 seconds later by the existing
+  post-seating grace timer. A lightweight "Ready to speak?" prompt now
+  appears at the moment you'd go live, checks both devices, and shows
+  per-device status (Camera/Microphone: Ready / Needs permission / Not
+  available / In use elsewhere) with a real Try Again and a settings
+  hint if your browser blocked the permission dialog. Once both are
+  ready, joining continues automatically — no extra confirmation step.
+  If you never grant access, your reservation is released after a
+  bounded wait so the next eligible speaker isn't stuck behind you.
+  Already-seated speakers are completely unaffected — camera-off with
+  mic-on has always been (and remains) a fully valid on-stage state.
+- **Speakers with their camera off now show a live, voice-reactive
+  visualizer instead of a dead "Camera off" tile** — a subtle waveform
+  that responds to their actual transmitted audio (never a fake
+  animation), quiet when they're silent, visible to the audience, to
+  their co-speaker, and in your own self-view corner preview alike.
+  Turning the camera back on swaps back to video instantly, with no
+  interruption to the stage or the audio itself. (Real-device testing
+  caught two bugs in this and the readiness prompt above before either
+  shipped: your own camera preview could stay stuck on "camera off"
+  right after joining until manually toggling the camera, and the
+  visualizer never appeared for your own self-view at all — both fixed;
+  see DECISIONS.md for the root causes.)
+
+### Removed
+
+- **The Gift icon in the room's control row** — audited and confirmed it
+  never had any implemented function. No gifting, tipping, payments, or
+  virtual currency exist in this app; the placeholder icon is gone rather
+  than left as a dead tap target. Comment and Vote controls are
+  unaffected.
+
+### Changed
+
+- **The Session Simulator (internal testing tool) no longer shows itself
+  on ordinary preview deployments** — previews are now also used to test
+  the real launch-facing experience, so its panel, settings tab, and
+  floating control require an explicit internal flag to appear, on top
+  of the existing preview/dev-only requirement. Nothing about the
+  simulator itself was removed; a developer can still turn it on
+  intentionally. See DECISIONS.md.
+
+### Fixed
+
+- **Desktop room: global navigation was hidden behind a hamburger menu,
+  even though desktop has plenty of room for it** (real-desktop
+  regression report) — hiding the site-wide header for the whole time a
+  room is open was the right call for mobile (little vertical space to
+  spare there), but the same rule was also silently hiding Home/Events/
+  account access on desktop, where there's no such pressure. Desktop now
+  shows a compact, persistent header above the stage and Discussion
+  sidebar — Virtual Stage/Home, Events, the room's own name/status, a
+  viewer count, and the account avatar (or Log in/Sign up for a guest),
+  all one click away, using the exact same account menu already
+  established elsewhere. Room Info's own ☰ button is still there for
+  the room's description and other detail — it just no longer has to
+  double as basic navigation. Mobile and tablet are completely
+  unaffected — this only ever appears at the same width the room's
+  existing sidebar layout already requires.
+- **Room Info's close button could become unreachable on iPhone in
+  landscape** (real-device bug report) — the sheet's header now stays
+  pinned in place while its content scrolls beneath it, so ✕ is always
+  visible and tappable no matter the orientation, viewport height, or
+  how long the room's description is. Also enlarged the close button to
+  this app's own 44px minimum touch-target size (it was 36px). Confirmed
+  across portrait, landscape, and rotating between them mid-sheet, on
+  several phone sizes plus desktop.
+- **The primary filled button's contrast in dark mode** — white text on
+  the "Join Live Audience"-style filled button now measures 4.80:1
+  (was 4.37:1, just under WCAG AA's 4.5:1 requirement). The general
+  brand blue used for links/icons/focus rings is unchanged; only the
+  filled-button background got a slightly richer, more accessible shade
+  of the same color. See DECISIONS.md for the full contrast math.
+- **The guest home header could wrap "VIRTUAL STAGE" or "Log in" onto
+  two lines** on narrower phones (~375-390px wide) — tightened spacing
+  and prevented wrapping outright at that width; unaffected above it,
+  and the signed-in header (a single avatar) was never affected.
+
+### Changed
+
+- **New visual identity — moved off the near-black + orange combination**
+  (real user feedback: it read as an unwanted, specific resemblance to
+  an adult-content site). Virtual Stage now uses a cool blue-violet
+  accent instead, applied everywhere the old orange showed up — the
+  primary "Join Live Audience" button, links, the profile/account menus,
+  focus rings, the live room's own mic/comment/reaction controls, vote
+  bars stay their own distinct green/red (never re-themed to the new
+  accent — those colors mean something specific and different from
+  "brand"). Dark mode stays the primary look; both light and dark now
+  share one coherent, distinctive palette instead of the previous
+  near-black/orange pairing. See DECISIONS.md for the full color system
+  and an honest accessibility/contrast writeup.
+- **Redesigned the Room Info sheet** (real-iPhone feedback: it read as a
+  developer/settings drawer, not part of the product) — reorganized into
+  three clear groups instead of one flat list of text. Home and Browse
+  Events are now real icon-and-label rows that look and feel tappable,
+  not a plain-text breadcrumb. A long room description no longer pushes
+  navigation off the bottom of the screen — it clamps to two lines with
+  a "Show more" control. The signed-in account section now leads with
+  the account holder's own photo, name, and @username, with My Profile/
+  Edit Profile grouped tightly beneath it and Log out demoted to small,
+  clearly secondary text instead of a button competing with the
+  account holder's own name. The same layout and hierarchy now apply on
+  both the mobile bottom sheet and the desktop popover. See
+  DECISIONS.md/SESSION_LOG.md.
+
+### Added
+
+- **The home page now has a real profile entry point** (issue #29,
+  profile UX polish pass, based on real-iPhone feedback): a signed-in
+  visitor's own avatar now appears in the top-right of the header on
+  every page outside the live room, replacing the old bare email + a
+  full-width "Log out" button. Tapping it opens a small menu — My
+  Profile, Edit Profile, and Log out (or, for an account that hasn't
+  chosen a username yet, a single "Complete Profile" — never a link to a
+  profile page that doesn't exist). On the Edit Profile screen, the
+  avatar circle itself is now the photo picker — tap or click it directly
+  to add or replace a photo, with a small camera icon showing it's
+  interactive — and the old separate "Add photo" button is gone. A
+  "Remove photo" option stays available, as small text, once a photo
+  exists. Nothing about the underlying upload, storage, or save behavior
+  changed — guests, the live room, and every other part of the profile
+  system are unaffected. See DECISIONS.md and SESSION_LOG.md.
+- **Profiles are real now** (issue #29, first profile/social-identity
+  pass): every registered account gets a public profile page at
+  `/profile/<username>` — a photo, a unique @username, a display name, a
+  short bio, and up to six social links (Instagram, TikTok, YouTube, X,
+  Twitch, personal website). A new "Edit profile" screen lets an account
+  holder choose their username, upload/remove a photo, and manage
+  everything above, with proper Save/Cancel and validation (including
+  rejecting unsafe link input like `javascript:`/`data:` URLs outright).
+  Registered users can now follow/unfollow each other, with live
+  follower/following counts visible to everyone, including guests — no
+  account needed just to look. Inside the live room, tapping a
+  registered speaker's or commenter's photo/name now opens their profile
+  directly from the speaker tiles and Discussion Expanded, without
+  accidentally triggering the vote/like/comment control underneath it. A
+  small "My Profile" link was added to the existing room account menu.
+  Guests are entirely unaffected — nothing about watching, commenting,
+  reacting, voting, requesting the mic, or speaking changed, and no
+  guest is ever prompted to create an account except by choosing to tap
+  Follow. Follower/following *lists* (not just the counts) are
+  deliberately deferred to a future pass. See DECISIONS.md and
+  SESSION_LOG.md.
+
+### Changed
+
+- **Fixed a rare case where a Request-to-Speak candidate who just won a
+  seat could keep blocking that same seat's *next* opening** (issue #21,
+  nineteenth corrective pass) — this specifically needed both seats
+  opening up at once, with one candidate winning and getting seated
+  quickly while the other candidate hadn't claimed their own seat yet;
+  if the *first* candidate's own seat then opened up again before the
+  second candidate ever claimed theirs, the system could keep treating
+  the first candidate's now-finished turn as if it were still an open
+  reservation, silently blocking anyone new from being offered that
+  seat. Confirmed this can genuinely happen during ordinary use — not
+  just something a testing tool could trigger — using only the same real
+  actions any two people can take, and fixed at the source: a candidate's
+  reservation is now correctly marked finished the instant they're
+  actually seated. Verified with dedicated automated tests and by
+  deliberately hammering the preview's testing tools as fast as possible
+  afterward — no stale reservation ever resurfaced. See DECISIONS.md.
+- **Fixed a speaker's own Final-30 grace window never actually finishing
+  on its own** (issue #21, eighteenth corrective pass — closes the bug
+  flagged at the end of the seventeenth) — a narrowly-losing speaker
+  correctly entered their 30-second grace window and the countdown
+  correctly showed on their own row, but the automatic replacement that's
+  supposed to happen once it runs out silently never fired for a real
+  (non-simulated) participant; someone in that state could sit there
+  indefinitely until a moderator or another lifecycle event intervened.
+  Root cause: the database view every live client reads seat state
+  through was defined before the two columns this exact feature depends
+  on existed, so those columns were silently never actually delivered to
+  the browser, despite the app's own code assuming they always were. That
+  view now explicitly includes every column real clients need, closing
+  the gap at its source. Verified against a real, unscripted run, letting
+  the real 30-second deadline expire naturally end to end (no manual
+  shortcuts): the seat vacated automatically the instant its deadline
+  passed, a replacement was chosen the same way it always is, and the
+  shared round resumed normally, all within about 3 seconds, matching
+  the product's existing rules throughout (no shared-round or replacement
+  behavior changed). Also confirmed a real browser refresh mid-countdown
+  correctly keeps counting down from the same authoritative deadline
+  instead of restarting at 30. See DECISIONS.md.
+- **Fixed the shared 60-second round timer disappearing while both
+  speakers were still genuinely seated** (issue #21, seventeenth
+  corrective pass) — this happened specifically once one speaker
+  narrowly lost their Continue/Replace vote and entered their own
+  individual 30-second "Final 30" grace window: even though both seats
+  were still occupied and the pairing was intact, the shared round was
+  being demoted as if the pairing had broken, hiding the timer for
+  *both* speakers, including the one who had nothing to do with the
+  Final-30 window. The shared round now correctly stays active — and
+  the continuing speaker gets their normal fresh round — the whole time
+  the other speaker's own Final 30 plays out independently. Added a
+  small, preview/dev-only diagnostic recording why the round's phase
+  last changed. Also found, while verifying this fix against a real
+  running room: a *separate*, pre-existing bug where a speaker's own
+  Final-30 grace window never actually finishes on its own for real
+  participants (the two-minute automatic replacement it's supposed to
+  trigger doesn't fire) — flagged for a dedicated corrective pass rather
+  than folded into this one. See DECISIONS.md.
+- **Fixed a case where the stage could show both seats as empty for
+  several seconds after they actually became occupied** (issue #21,
+  sixteenth corrective pass) — most noticeable right after starting the
+  Session Simulator, but the same general improvement now protects real
+  live rooms too: the room's own live speaker list now double-checks
+  itself directly the moment a seat change is confirmed server-side,
+  instead of only waiting for the normal live-update message to arrive
+  on its own — and, as a safety net, now also periodically re-checks
+  itself in the background and re-checks itself whenever the app is
+  reopened or refocused, matching protections already in place elsewhere
+  in the room. See DECISIONS.md.
+- **Fixed the Session Simulator still needing repeated Reset → Start
+  attempts specifically on a room that had already been used before**
+  (issue #21, fifteenth corrective pass, preview/dev tooling only) — on
+  such a room, Start was submitting real speaking requests for its own
+  two starting speakers and then waiting for the normal competitive
+  selection system to eventually pick them, which it had no obligation
+  to do (and a leftover request from an earlier attempt could win
+  instead). Start now establishes its own known-good starting pair
+  directly and reliably, the same way it already did for a brand-new
+  room, and automatically clears out any leftover requests from an
+  earlier attempt first. It still never touches a seat held by an actual
+  person. Once the starting pair is in place, everything afterward — a
+  round ending, someone new joining, being picked, being seated — still
+  goes through the exact same real, competitive selection system as
+  before; only the very first setup step changed. See DECISIONS.md.
+- **Fixed the Session Simulator sometimes needing two or three Reset →
+  Start attempts before producing a genuinely running session**
+  (issue #21, fourteenth corrective pass, preview/dev tooling only) — a
+  real-device report showed a contradiction: startup logged "Seat 1 seed
+  failed" (a redacted production error — the real, underlying cause was
+  a genuine, specific database error, never a client bug), yet that same
+  seat later showed up occupied. Traced to a leftover seat from an
+  earlier incomplete attempt colliding with every retry until a manual
+  Reset. Startup now authoritatively confirms every seat attempt instead
+  of trusting whether the request threw or not, automatically clears a
+  leftover seat it created itself and retries, and never touches a seat
+  it didn't create. Also closed a rapid double-tap race on the Start
+  button and a narrow timing gap where Reset's own delayed cleanup
+  could, in rare cases, disturb a brand-new session that started right
+  after it. See DECISIONS.md.
+- **Fixed a recurring drift between the live Request-to-Speak vote
+  count shown on a real device and the actual count in the database**
+  (issue #21, thirteenth corrective pass) — the underlying vote-transfer
+  logic was already correct; the real gap was that a Realtime update can
+  be silently dropped in transit on a real cellular connection without
+  the connection itself ever appearing to drop, which neither of the
+  existing resync mechanisms could catch. A bounded, infrequent
+  background check now catches and corrects this automatically; live
+  updates remain instant as the primary path. See DECISIONS.md.
+- **Confirmed Request-to-Speak selection has no random or "weighted"
+  behavior anywhere, and removed misleading old wording that suggested
+  otherwise** (issue #21, thirteenth corrective pass) — a full audit
+  found no executable weighted/random logic exists (that system was
+  fully retired earlier); two Session Simulator activity-log messages
+  still said "weighted selection" from before that retirement. Renamed
+  to describe what actually decides it: the highest-voted eligible
+  candidate, deterministically. See DECISIONS.md.
+- **Fixed a genuine server-side bug that could permanently block
+  next-speaker selection for an event, silently, indefinitely, across
+  completely unrelated future sessions** (issue #21, twelfth corrective
+  pass) — found via a clean real-device debug-snapshot capture and
+  root-caused against the real database: a selection round that goes
+  stale (its own candidates all claimed, withdrawn, or expired by later,
+  unrelated activity) without a specific later event ever marking it
+  resolved was being reused forever instead of ever creating a fresh
+  round from the event's own current pending pool. Fixed at the source
+  — a stale round now self-heals the moment it's next encountered. See
+  DECISIONS.md.
+- **Every path that can vacate a speaker seat now reconciles selection
+  directly** (issue #21, twelfth corrective pass) — closed the one
+  remaining gap (the Session Simulator's own "Open Seat" action, plus
+  its own request/withdrawal equivalents), matching the direct-trigger
+  fix every *production* path already received in the ninth and tenth
+  passes. See DECISIONS.md.
+- **Session Simulator's activity log now records what actually happened
+  to a seat/reservation/round, regardless of what caused it** (issue
+  #21, twelfth corrective pass) — previously only ever recorded actions
+  its own buttons initiated, giving no trace of a transition it merely
+  observed. Copy Debug Snapshot gained explicit per-seat vacancy/
+  invariant diagnostics and now checks RTS vote counts for client/
+  database disagreement. See DECISIONS.md.
+- **Session Simulator now shows a prominent "Next Speaker Candidate"
+  during an active round — the live #1-ranked eligible RTS requester,
+  reactive to vote changes, with no vacancy or reservation required to
+  see it** (issue #21, eleventh corrective pass) — the previous "Next
+  Speaker" section only ever answered a different question (who has
+  already been frozen/reserved at a real vacancy, correctly empty
+  otherwise), renamed to "Selected / Committed" to make the distinction
+  explicit. Nothing is reserved by being displayed. See DECISIONS.md.
+- **Copy Debug Snapshot rebuilt as a two-phase capture** (issue #21,
+  eleventh corrective pass) — a real-device report that it "did not give
+  an immediate usable result" was traced to the client-state section
+  being needlessly delayed behind the authoritative database read, and
+  the eventual clipboard write starting well after the tap's own user
+  gesture (a shape some mobile browsers silently refuse). Client state
+  is now captured synchronously the instant the button is tapped; the
+  database read and the clipboard write are both time-bounded, and a
+  failed or hung clipboard write now opens a visible, selectable text
+  panel automatically instead of losing the capture. See DECISIONS.md.
+- **Selection now reconciles immediately from five more state changes
+  that used to depend entirely on a reactive client round trip**
+  (issue #21, tenth corrective pass) — voluntary speaker leave,
+  inactivity eviction, a Request-to-Speak arriving after a vacancy
+  already exists, a withdrawal leaving a round exhausted, and an
+  authorized candidate's claim itself failing. The last of these is new
+  behavior, not just a faster trigger: an authorized candidate whose
+  claim failed previously stayed stuck "reserved" for a seat they'd
+  never occupy, with the next-ranked eligible candidate never
+  advancing — now released and advanced automatically, without
+  disturbing any other seat's own valid reservation, and without
+  permanently disqualifying the failed candidate from a later,
+  independent round. Proven with real-database tests, including
+  dual-replacement and cancel/fallback chains. See DECISIONS.md.
+- **Session Simulator's diagnostics now show a live "Replacement Queue"
+  during an active round, distinct from reservation** (issue #21, tenth
+  corrective pass) — a real-device report found the diagnostics giving
+  no sense of who was "next" during an active session even though the
+  underlying vote ordering was already correct; this was a diagnostics-
+  clarity gap, not a selection bug (nothing is ever reserved before a
+  replacement is actually decided). Also adds "Established mode" and a
+  "Selected / Reserved" summary. See DECISIONS.md.
+- **Fixed a real Session Simulator Reset Session bug**: a simulator-
+  generated comment or request could remain visible after Reset,
+  despite Reset itself reporting success (issue #21, tenth corrective
+  pass) — traced to a genuine ordering race (a scheduled background
+  write already in flight when Reset ran, landing in the database just
+  after Reset's own cleanup), not a wrong guest-id list or stale client
+  rendering. Fixed with a silent, delayed follow-up cleanup pass; Reset
+  remains one tap and immediate. See DECISIONS.md.
+- **Added a preview-only "Copy Debug Snapshot" tool to Session
+  Simulator** (issue #21, tenth corrective pass) — one tap copies a
+  fresh, read-only, human-readable snapshot of authoritative and local
+  client state (seats, live RTS ranking/queue, reservations, and any
+  detected client/database mismatches) to the clipboard, for pasting
+  directly into a future debugging session from a real device. See
+  DECISIONS.md.
+- **The highest-voted eligible Request-to-Speak candidate is now
+  reserved immediately when the shared round boundary resolves, in the
+  same call — not seconds later, after a separate client notices the
+  vacancy** (issue #21, ninth corrective pass) — the two authoritative
+  functions that resolve a round/closing-period boundary and create a
+  vacant seat never themselves triggered selection; it depended entirely
+  on a Realtime round trip plus a client-side React effect making a
+  second, separate call. A real-database test proved 10 consecutive
+  replacement cycles in one continuously-running event with real
+  measured boundary→reservation latency under a second every time,
+  corroborated live in a real browser. No selection ranking, threshold,
+  or authorization behavior changed. See DECISIONS.md.
+- **Session Simulator gained a "Selection Forensics" panel** (issue #21,
+  ninth corrective pass), collapsed by default — per seat, shows the RTS
+  ranking frozen at the moment selection actually happened, separately
+  from the live current ranking (which can keep changing afterward), the
+  expected winner, the actual reserved candidate (flagged if they ever
+  diverge), and why a still-vacant seat is waiting. See DECISIONS.md.
+- **Fixed a genuine server-side bug that could permanently hide a
+  Request-to-Speak candidate from next-speaker selection** (issue #21,
+  eighth corrective pass) — found via live inspection of the real
+  database while investigating a real-device latency report, not
+  simulator-specific: withdrawing a request that had been ranked for a
+  selection round but never actually reserved for a seat could leave
+  that round stuck open forever, and because candidate selection
+  deliberately reuses an already-open round rather than creating a
+  second one, every later-arriving Request-to-Speak became invisible to
+  selection until that round was manually cleared. Fixed at the
+  database level; no authorization or selection-ranking behavior
+  changed. See DECISIONS.md.
+- **Next-speaker promotion for Session Simulator's own simulated
+  candidates is now reactive**, matching the real-candidate path fixed
+  in the sixth corrective pass (issue #21, eighth corrective pass) — a
+  simulated candidate previously depended entirely on the simulator's
+  own 4-6 second background check to notice it had been reserved, even
+  though the reservation itself is already fast; now noticed
+  immediately, with the background check remaining as a bounded
+  backstop. See DECISIONS.md.
+- **Shared round and speaker-request state now resyncs when a browser
+  tab becomes visible again**, not only when its live connection first
+  connects (issue #21, eighth corrective pass) — closes a real gap
+  where a tab whose live connection had quietly gone stale could keep
+  showing outdated round/request information indefinitely until the
+  page was reloaded. See DECISIONS.md.
+- **Desktop/landscape speaker tiles now stack vertically instead of
+  side-by-side once the stage's own available area gets too narrow for
+  useful landscape video** (issue #21, seventh corrective pass) — driven
+  by a real CSS container query on the stage's own geometry, not a
+  device-class or viewport-width breakpoint, so it adapts correctly to
+  a fixed-width chat sidebar and works the same whether the window is
+  merely narrow or genuinely small. The shared round timer needed no
+  change — it was already centered on the stage's own geometric center,
+  which is the tile seam in either layout. See DECISIONS.md.
+- **The site-wide header now hides for the entire time a room is
+  mounted, in every viewport** (issue #21, seventh corrective pass) —
+  previously only in one narrow mobile-landscape case, leaving mobile
+  portrait's full header permanently visible above the room's own
+  already-minimal video-first chrome. A new room/navigation overlay
+  (opened from the existing room-identity status pill, or a new small
+  button in desktop's header — no new floating control) provides
+  Home/Events navigation, room info, and account actions as a
+  dismissible overlay instead, without resizing or remounting the
+  stage underneath it. See DECISIONS.md.
+- **Session Simulator's Reset Session is now one tap, with real
+  pressed/executing feedback on every simulator button** (issue #21,
+  seventh corrective pass) — the previous two-tap confirmation step is
+  gone; a shared button control now gives immediate, pointer-event-
+  tracked visual feedback on every simulator control (working
+  reliably on touchscreens, unlike CSS `:hover`/bare `:active`) and
+  automatically prevents a duplicate concurrent Reset while one is
+  already running. Also fixes a real bug where a stale round status
+  could survive Reset indefinitely (a Realtime deletion event was being
+  silently discarded client-side). See DECISIONS.md.
+- **Next-speaker promotion starts as soon as a candidate's own client
+  sees they've been reserved, instead of waiting up to 4 seconds for
+  the next background poll** (issue #21, sixth corrective pass) — a
+  real-device pass found selection still "taking far too long" even
+  after the fifth pass's atomic reservation fix; tracing (not
+  guessing) found the server-side reservation itself was already fast
+  (measured directly against the linked database: ~440ms to reserve
+  both seats, ~430-450ms per seat to claim+authorize) and already
+  reactive (triggered by any connected client's own occupancy/pending
+  changes, not a timer) — the actual delay was a *candidate's own*
+  client polling its eligibility on a blind 4-second interval,
+  completely disconnected from the Realtime state the app already had
+  live. Now checks that live state first and starts the intentional
+  3-second Going Live countdown immediately when it already shows a
+  reservation; the poll remains, unchanged, as a backstop for a missed
+  Realtime delta. The claim itself still independently re-validates
+  eligibility server-side regardless of which path started the
+  countdown, so this doesn't reopen the seat-claim race. See
+  DECISIONS.md.
+- **"Selecting next speaker…" no longer stays visible through a
+  candidate's entire Going Live countdown** (issue #21, sixth
+  corrective pass) — once a candidate is actually reserved for a seat,
+  it now reads "Joining…" instead, so the label only ever means
+  selection is still genuinely in progress. See DECISIONS.md.
+- **New preview-only Session Simulator diagnostics**: a real, observed
+  per-seat promotion timeline (issue #21, sixth corrective pass) —
+  actual timestamps (never estimated) for vacant → candidates found →
+  reserved → occupied, with a specific `WAITING AT: <reason>` line
+  (Going Live countdown / reservation pending / no eligible requests /
+  fallback open) whenever a seat isn't yet occupied. Preview-only;
+  never read by anything that decides selection or authorization. See
+  DECISIONS.md.
+- **Next-speaker selection now reserves a distinct candidate for every
+  currently-open seat, not just one per event** (issue #21, fifth
+  corrective pass) — with both stage seats empty at once, the highest-
+  ranked eligible Request-to-Speak candidate is reserved for one seat
+  and the next-highest for the other, atomically (a new database
+  function locks the decision so two simultaneous selectors can never
+  reserve the same candidate for two different seats); claiming one
+  seat no longer wipes out the other seat's own already-reserved
+  candidate. Fixes a real-device-found bug where both seats could show
+  "Selecting next speaker…" indefinitely despite eligible, already-
+  voted-for candidates existing. See DECISIONS.md.
+- **Small-room direct-join fallback** (issue #21, fifth corrective
+  pass) — once a stage is established, an empty seat is normally
+  controlled entirely by Request-to-Speak selection, but if *both*
+  seats are empty and there are *zero* eligible pending requests, a
+  direct seat claim is temporarily permitted again so the room can't
+  die permanently with nobody on stage and nobody requesting the mic.
+  The two speakers who were just removed the last time both seats
+  emptied together cannot immediately reclaim a fallback seat (though
+  they can still submit a fresh Request-to-Speak); everyone else can. A
+  real Request-to-Speak arriving at any point closes the fallback and
+  hands priority back to selection. Enforced server-side, the same
+  authoritative tier as every other seat-claim rule. See DECISIONS.md.
+- **Ambient (live/floating) comments redesigned for readability** (issue
+  #21, fifth corrective pass, real-device finding: messages were
+  chopped mid-word in a single-line "Name: message…" format) — now
+  avatar + display name on its own line (with a "requesting to speak"
+  badge beside it, not crammed into the message line) + the full
+  comment text below, wrapped up to two lines before truncating with an
+  ellipsis. The container and its existing top-edge fade both grew
+  modestly to suit the taller rows while staying a compact overlay, not
+  a full chat panel. Expanded Comments (the deliberate full-reading
+  surface) is unaffected. See DECISIONS.md.
+- **Session Simulator seat seeding now respects seat-claim authorization
+  once a stage is already established** (issue #21, fourth corrective
+  pass) — closes a simulator-only loophole: re-seeding an already-
+  established stage (Start's own automatic seeding, or the standalone
+  "Seed 2 Speakers" button) now goes through the real Request-to-Speak →
+  selection → authorized-claim pipeline instead of the direct-join
+  bypass, matching the authorization model the third corrective pass
+  introduced for every other seat claim. The direct-join bypass remains
+  available only for a genuinely new, never-established stage's initial
+  pairing. See DECISIONS.md.
+- **Next-speaker selection is now deterministic — highest votes wins**
+  (issue #21, third corrective pass) — replaces the previous weighted-
+  random draw among a frozen Top 3 (fixed rank weights, 50/33/17 odds)
+  entirely. The eligible Request-to-Speak candidate with the most
+  audience votes is selected; an exact tie is broken by the earliest
+  still-active request — both authoritative in the database
+  (`freeze_speaker_candidates`' existing ranking already ordered by
+  `vote_count desc, created_at asc, id asc`), shared identically by real
+  users and the simulator, never re-derived per caller. `lib/speaker-
+  selection.ts` (the weighted-draw module) is retired entirely, not left
+  half-active. A candidate can withdraw their Request-to-Speak at any
+  point before actually occupying the seat — while simply waiting in the
+  pool, or during their own Going Live transition — immediately removing
+  them from eligibility; the next-highest-voted eligible candidate is
+  authorized in their place, using the same deterministic ranking, never
+  a fresh random draw. The Session Simulator now shows "Next Speaker"
+  observability (frozen ranking, selected candidate, and a plain-language
+  reason — "Highest vote count" or "Tied at N votes · earlier request")
+  with no weighted-odds display, and occasionally withdraws a simulated
+  candidate's own pending request as part of natural simulated activity.
+  See DECISIONS.md.
+- **Seat claims after initial stage formation require Request-to-Speak
+  selection authorization** (issue #21, third corrective pass,
+  real-device finding) — after a speaker was removed, tapping the newly
+  open seat let the tapper become the next speaker directly, bypassing
+  Request-to-Speak entirely. The stage now distinguishes *initial
+  formation* (before the event's first two speakers are both seated —
+  direct joins remain available, as always) from *ongoing replacement*
+  (an empty seat is controlled by selection, never first-tap): once
+  established — permanently, for the rest of the event — a direct seat
+  claim is rejected server-side (`claim_speaker_seat` itself, migration
+  00000000000029, re-checking authorization at the source of truth, not
+  merely trusted from the caller) unless the claiming identity is the
+  event's currently authorized selected candidate. An unauthorized claim
+  loses even when submitted concurrently with the authorized candidate's
+  own claim — never a race. The empty-seat tile itself stops being
+  tappable and shows "Selecting next speaker…" instead of a misleading
+  "Tap to join" CTA. See DECISIONS.md.
+- **Vote surface now shows live sentiment, and dismisses like an ordinary
+  popover** (issue #21, third corrective pass) — tapping outside the
+  open Vote panel, or pressing Escape, closes it; the viewer's own
+  Continue/Replace selection is never erased by closing it, and reopening
+  shows the same choice highlighted.
+- **Avatars in Expanded Comments and the ambient comment feed** (issue
+  #21, third corrective pass, real-device finding: no avatar/placeholder
+  was visible at all for either surface) — a new shared
+  `ParticipantAvatar` component (profile-photo-ready, currently always
+  falling through to an initials placeholder since no such column exists
+  yet) replaces the previous bare-text rows, and replaces `SpeakerTile`'s
+  own four duplicated inline initials circles — one canonical avatar
+  presentation, reused everywhere, not a second avatar system per
+  surface. Works identically for authenticated, guest, and simulated
+  identities, since all three already resolve to a plain display name.
+
+### Fixed
+
+- **Session Simulator: seeding race, shared-round timer placement,
+  Reset leaving a stale round counter** (issue #21, second corrective
+  pass) — real-device testing found `ensure_stage_round`'s cold-start
+  INSERT had no conflict handling: two seats claimed within the same
+  instant (the simulator's own concurrent seeding, or two real people
+  tapping both open seats together) could race a genuine database bug
+  that silently rolled back one seat's claim entirely, intermittently
+  leaving only one speaker seated. Fixed at the database layer
+  (migration 28), plus the simulator now seeds seats sequentially with
+  step-by-step progress reporting ("Seeding Seat 1…", "Seeding Seat
+  2…", "Starting Round 1…") and surfaces a genuine failure's real error
+  message instead of a generic one. The shared round timer badge
+  previously overlapped the room header (both sat at the same top-of-
+  screen position); it now sits at the visual seam between the two
+  speaker tiles, in both orientations. Reset Session now clears the
+  shared `stage_rounds` row when it leaves the stage empty, so the next
+  session starts cleanly at "Round 1" instead of continuing a stale
+  counter — and correctly resyncs (never deletes) it when a real
+  speaker is still seated, so their own round state is never destroyed.
+  See DECISIONS.md.
+
+### Added
+
+- **Hide/Show Live Comments** (issue #21, fifth corrective pass) — a
+  one-tap, easily reversible control on the ambient comment feed. Hiding
+  it only hides the floating overlay itself — comments keep arriving,
+  the composer, Request-to-Speak, likes/votes, and Expanded Comments are
+  all completely unaffected. Persisted per-browser via `localStorage`
+  (a lightweight client preference, not a database column) so it
+  survives room re-renders and navigation within the same browser. A
+  small restore control stays visible whenever comments are hidden.
+- **Weighted-selection observability + Continue/Replace vote detail in
+  the Session Simulator** (issue #21, second corrective pass) — a
+  replaced speaker not being who was expected is answerable now: the
+  panel shows the frozen Top 3 (name, vote count, and the real weighted
+  odds each rank actually drew against — never invented math), which
+  candidate was selected, and whether they're still joining or have
+  promoted into a specific seat. Each occupied seat's Continue/Replace
+  block now shows raw counts, percentages, and the total votes cast, all
+  read from the same authoritative tally the round resolver uses.
+- **Audience Vote surface now shows live sentiment** (issue #21, second
+  corrective pass) — opening the Vote panel shows each speaker's
+  Continue/Replace percentages (a compact two-color bar), reusing the
+  exact same tally/percentage calculation the resolver and the
+  simulator both use. Zero participation reads "No votes yet · defaults
+  to Continue" rather than a bare 0%/0% that could look like a real,
+  decided sentiment. A speaker whose round has entered its Final 30s
+  closing period shows "Replacement decided" and its Continue/Replace
+  buttons disappear entirely — that outcome is already locked, not open
+  for another vote. As a round's shared deadline approaches its final
+  ~10 seconds, the Vote trigger itself gains a "Vote · Ns" countdown
+  label and increased visual emphasis, without ever auto-opening the
+  panel. See DECISIONS.md.
+
+- **Discussion Expanded** (issue #21) — a tap-opened bottom sheet for
+  intentionally browsing the live comment stream, opened from an
+  ambient comment bubble's tap. Refined after real-device confirmation
+  of the foundation: `AmbientComments` rebuilt from a self-expiring
+  bubble stack into a small always-scrollable live-stream feed (auto-
+  follows the live edge, preserves position while reading history,
+  resumes on scroll-back); Expanded Comments now shows a frozen
+  newest→oldest snapshot with a "↻ N new comments" refresh control
+  instead of live-following; a new "Top Speaker Requests" section (up
+  to 3, live); double-tap-to-like on comment rows (reuses the existing
+  reactions schema/action, no new backend); grabber-handle
+  swipe-to-close. See DECISIONS.md.
+- **Request-to-Speak voting + ranked Top 3 + server-authoritative
+  weighted selection** (issue #21, Phase 1) — the first functional
+  piece of audience-driven speaker selection. A Request-to-Speak's 👍 is
+  now a real, exclusive, transferable vote (new `speaker_request_votes`
+  table); Top Speaker Requests ranks by live vote count instead of
+  arrival order; when a seat opens, the vote-ranked Top 3 is frozen and
+  one candidate is chosen by weighted-random selection (fixed rank
+  weights, leader capped at 50% odds regardless of vote-count margin),
+  server-side, feeding the existing Going Live countdown; a withdrawn
+  pick advances to the next candidate in the same frozen pool; a
+  successful join resets the entire candidate pool. Two new migrations.
+  60-second Continue/Replace voting (Phase 2) is not built yet. See
+  DECISIONS.md.
+- **Per-speaker Continue/Replace rounds** (issue #21, Phase 2) — the Vote
+  control is now real. Each occupied seat runs an independent
+  60-second round, resolved authoritatively server-side on a
+  deadline-in-the-row/trusted-RPC pattern (same shape as the existing
+  speaker reconnect grace), never by client-reported elapsed time. Zero
+  votes or Replace ≤50% continues the speaker for another 60s; Replace
+  >50% and <66% is a narrow loss with a 30-second closing period (no
+  further voting) before replacement; Replace ≥66% replaces the speaker
+  decisively at the round boundary. Replacement reuses the existing
+  Phase 1 candidate-selection path — no second selection system.
+  Thresholds and durations are centralized, not hardcoded. Round
+  countdown stays hidden until the final 10 seconds in production. Two
+  new migrations. See DECISIONS.md.
+- **Preview-only Session Simulator** (issue #21, Phase 2) — a tooling
+  panel, gated to non-production deployments only, that drives a
+  generated simulated audience through the real comment, like,
+  Request-to-Speak, request-voting, and round-voting pathways (the same
+  functions a real guest session uses), plus deterministic buttons to
+  force each round outcome for guided testing. Not part of the consumer
+  product UI. See DECISIONS.md.
+
+### Changed
+
+- **Session Simulator panel — compact, collapsible, draggable** (issue
+  #21, real-device follow-up) — the preview-only panel above was too
+  large on a phone, covering most of the app. It now has a minimize
+  control that collapses it to a small "SIM" pill (without stopping the
+  simulation running behind it), is substantially smaller and internally
+  scrollable when expanded, respects safe-area insets, and can be
+  dragged by its header (touch and mouse) without ever going fully
+  offscreen. Presentation-only — no change to simulation behavior,
+  voting, round logic, or any production code path. See DECISIONS.md.
+- **Session Simulator — round-testing presentation** (issue #21, second
+  real-device follow-up) — the round-timer badge now shows "Round N ·
+  Ns" / "Final Ns" on the stage itself; a seeded simulated speaker's tile
+  now shows an unambiguous "Simulated speaker" placeholder instead of
+  the generic "Camera off" one; the round-outcome force controls are now
+  per-seat (Force Continue/Narrow Loss/Replace, or "Force Replace Now"
+  during closing) instead of one ambiguous global control, each with
+  live vote tallies and a "what would happen if this round ended now"
+  projection; forced-outcome feedback now reflects the real resolver's
+  return value; "Seed 2 Speakers" reuses the same two identities for the
+  whole run instead of a fresh random pair per click. Presentation/
+  test-control only — no change to voting, round-resolution, or
+  selection logic. See DECISIONS.md.
+- **Session Simulator — Reset Session** (issue #21, third real-device
+  follow-up) — a new destructive "Reset Session" action (with an inline
+  "Reset simulated session? Cancel | Reset" confirmation) that deletes
+  every DB row the current simulation run created — comments, likes,
+  Request-to-Speak entries and their votes, speaker seats, and
+  Continue/Replace votes — by an exact tracked guest-id list, and clears
+  the panel's own log/tallies/state so the next Start begins a genuinely
+  clean run. Real user-generated activity is never touched. Distinct
+  from Stop Simulation, which only pauses future activity and leaves
+  existing test state in place. See DECISIONS.md.
+- **Session Simulator — one-tap full session + automatic replacement
+  loop** (issue #21, fifth real-device follow-up) — Start Simulated
+  Session now seeds both stage seats itself (no separate Seed 2 Speakers
+  press required), and a new `simulateAdvanceSelection` adapter closes
+  the loop after a speaker is replaced: it completes the exact
+  claim/grant/pool-reset sequence a real candidate's own browser would,
+  for a *known-simulated* winner only — a real user's request winning
+  the same selection pool is always left untouched, for their own
+  device to claim normally. Round voting now rolls an independent
+  continue-bias per round instead of one fixed constant, so a
+  long-running session naturally produces Continue, narrow-loss, and
+  decisive-Replace outcomes over time rather than always converging on
+  one. See DECISIONS.md.
+
+### Fixed
+
+- **Reset Session left old simulated comments visible in the room**
+  (issue #21, fourth real-device follow-up) — the database deletion was
+  already correct, but the live comment feed, Expanded Comments, and Top
+  Speaker Requests didn't reflect it without a manual page reload. Root
+  cause: none of the room's realtime hooks (`useLobbyRealtime`,
+  `useActiveSpeakerRequests`, `useActiveSpeakers`) had ever needed to
+  handle a Postgres `DELETE` event before, since ordinary product usage
+  never hard-deletes these rows — Reset Session is the first thing that
+  does. Added `DELETE` handling to all three hooks, plus a migration
+  enabling `REPLICA IDENTITY FULL` on the four affected tables so those
+  events carry enough data to act on. Benefits every tab watching a
+  room, not just the one running the simulator. See DECISIONS.md.
+
+### Changed
+
+- **Shared round model — one clock per stage pairing, not two**
+  (issue #21, corrective pass) — real-device testing found the
+  independent per-speaker 60s round timers were the wrong product
+  behavior for a two-person conversation. The two occupied seats now
+  share one authoritative round/deadline (new `stage_rounds` table,
+  `ensure_stage_round`/`resolve_stage_round` RPCs); Continue/Replace is
+  still voted on and resolved *per speaker* at that same shared
+  boundary — Speaker A can Continue while Speaker B Replaces. A narrow
+  loss still gets its own individual 30s closing period, and the
+  retained partner is deliberately not handed a fresh independent timer
+  while that closing period runs — the next full shared round begins
+  only once the resulting pairing is re-established. `event_speakers`'
+  existing round columns are unchanged in shape (kept in sync as
+  mirrors of the shared clock), so the existing per-seat vote-casting
+  RPCs needed zero changes. `SpeakerStage` now shows one "Round N · Ns"
+  badge for the pairing; `SpeakerTile`'s own per-seat badge is
+  closing-only ("Final Ns"). The Session Simulator's per-seat Force
+  Continue/Narrow Loss/Replace buttons now only configure that seat's
+  vote split for the next shared resolution; a new "Resolve Round Now"
+  button advances the shared deadline and reports both seats' real
+  outcomes at once. See DECISIONS.md.
+
+### Fixed
+
+- **Simulator background polling could steal a real user's own seat
+  claim** (issue #21, corrective pass, real-device finding) — a real
+  join and the Session Simulator's automatic candidate-promotion loop
+  both ultimately call the same `claim_speaker_seat` RPC, which had no
+  optimistic-concurrency check: it always unconditionally ended
+  whichever row was active for a seat and inserted a new one. A lost
+  race was silent — no exception on either side — so the simulator's
+  background poll could (and once did) overwrite a real user's
+  brand-new seat with a simulated identity. Fixed at the RPC layer for
+  every caller, not just the simulator: `claim_speaker_seat` now raises
+  if the seat already has an active occupant, so a lost race always
+  surfaces as a caught, non-fatal error. The simulator's own
+  auto-advance loop additionally pauses outright whenever `EventRoom`
+  reports a real join or promotion actually in flight
+  (`realJoinInProgress`), so a real user's explicit action never has to
+  win a race at all — it's yielded to. A follow-up migration also
+  closes a gap the fix itself introduced: the new "already occupied"
+  guard originally didn't know about the existing 11-second
+  disconnect-grace/expiration logic, so a genuinely stale (past-grace,
+  never cleaned up) occupant would have permanently blocked anyone else
+  from ever claiming that seat — `claim_speaker_seat` now releases a
+  logically-expired occupant of the *target* seat first, the same
+  distinction `release_if_expired` already made for the caller's own
+  identity. See DECISIONS.md.
+- **A lost seat-claim race could leave a stuck self-preview with no way
+  to leave the stage** (issue #21, corrective pass, real-device
+  finding) — tapping an open seat prepares local camera/mic tracks
+  before the async join completes, and deliberately leaves them held on
+  a *retryable* failure (queue exists, promoted candidate, etc.) so the
+  candidate/audience state the user returns to can still use them. That
+  discipline had no matching release for the *terminal* case this
+  pass's real-device test hit: a real join lost a race and landed back
+  in plain audience — not a candidate, not pending, not mid-countdown —
+  while still holding a local track, which `SpeakerStage`'s self-preview
+  slot renders on regardless of role. New `useReleaseStuckLocalMedia`
+  hook (general, not simulator-specific — reuses `EventRoom`'s own
+  existing state) releases local media whenever every legitimate reason
+  to hold it is absent, closing the same class of role/permission
+  contradiction issue #18 fixed for the analogous `canPublish`/
+  `isSpeaker` case. See DECISIONS.md.
+
 ## [public-beta-v1] - 2026-08-26
 
 First production release of Virtual Stage to the live site

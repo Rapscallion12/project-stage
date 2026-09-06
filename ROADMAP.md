@@ -35,6 +35,18 @@ Supabase call scattered into a page or action.
 - [x] Repository, Next.js/TS/Tailwind scaffold, documentation suite
 - [x] Supabase client setup (browser + server) and session-refresh proxy
 - [x] `profiles` table + auto-provisioning trigger
+- [x] Visual identity — a real semantic color-token system
+      (`background`/`surface`/`surface-elevated`/`surface-hover`,
+      `foreground`/`secondary`/`muted`, `border`/`border-strong`,
+      `accent`/`accent-hover`/`accent-soft`, `success`/`warning`/
+      `danger`, `vote-continue`/`vote-replace`) replacing the original
+      near-black + saturated-orange pairing (moved off it on real user
+      feedback that it read as an unwanted, specific adult-content-site
+      association) with a distinctive blue-violet brand accent. State/
+      functional colors (vote continue/replace, warnings) were
+      deliberately preserved, not re-themed to the brand color. See
+      DECISIONS.md for the full palette, contrast math, and the orange-
+      usage audit.
 - [x] Landing page (guest-first — no signup/login funneling as the primary
       call to action; see DECISIONS.md for the correction that drove this)
 - [ ] "Join Live Audience" one-click fast path (issue #26) — `/join`
@@ -662,6 +674,849 @@ different dependencies. Current order:
       done and shipped in public-beta-v1. The outer checkbox above stays
       unchecked because it belongs to #21's still-open mega-entry, not to
       this sub-item.
+      **Discussion Expanded built (issue #21, 2026-08-26, on
+      `feature/expanded-comments` — post-public-beta, not yet merged to
+      `main`)**: a tap-opened bottom sheet (`ExpandedComments`) for
+      intentionally browsing the live comment stream, without turning
+      the default room into a conventional chat screen. Opened only from
+      an ambient comment bubble's tap — the `data-message-id` seam
+      `AmbientComments` carried since Phase 3 specifically for this;
+      an earlier version tried opening from the composer's own
+      focus/tap instead and that broke the already-approved "tap,
+      type, send" flow, so it was reverted. **Its original live-follow/
+      jump-to-latest scroll design was replaced outright the same day**
+      — see the refinement entry immediately below; this paragraph's
+      "jump to latest" description is superseded, kept only for history.
+      Reuses the same `messages`/`ChatPanel` compact composer every
+      collapsed composition already has — no new backend, no duplicated
+      send path. `commentsOpen` is local `useState` in each of the four
+      room compositions (portrait/landscape × audience/speaker), never
+      lifted to `EventRoom` — no causal path to role/seat/media state at
+      all. Schema checked for one-level replies first, per instruction:
+      `event_chat_messages` has no self-referencing column anywhere in
+      the migrations or `database.ts` — real migration work, not a small
+      additive change — so replies are deliberately deferred; the
+      comment list is structured (flat, keyed by `message.id`) so a
+      future `repliesByParentId` grouping can slot in without a
+      rewrite. Desktop untouched (existing persistent sidebar, out of
+      scope per instruction). See DECISIONS.md.
+      **Refinement pass (issue #21, 2026-08-26, same branch)**, after
+      real-device confirmation of the foundation above: `AmbientComments`
+      rebuilt from a self-expiring 3-bubble stack into a small
+      always-scrollable live-stream feed (no more hard 7s removal — it
+      conflicted with being able to scroll back through older ambient
+      comments). `ExpandedComments` rebuilt around a frozen
+      newest→oldest snapshot (captured on open/refresh only, never
+      mutated by background arrivals) with a "↻ N new comments" refresh
+      control, replacing the live-follow/jump-to-latest design entirely.
+      New "Top Speaker Requests" section (up to 3, FIFO-ordered at the
+      time — later superseded by real vote-based ranking the same day,
+      see immediately below — kept live rather than frozen, a
+      deliberate, reported choice). Double-tap-to-like on comment rows,
+      reusing the fully-existing `event_chat_message_reactions`
+      schema/RLS/`addReaction` action verbatim — investigated first, no
+      schema or backend expansion needed. Grabber-handle swipe-to-close,
+      scoped to the handle only so list scrolling can never trigger a
+      dismiss. See DECISIONS.md's matching entry for the full reasoning.
+      **Request voting + ranked Top 3 + weighted selection (issue #21,
+      Phase 1 of the audience voting loop, 2026-08-26, same branch)**:
+      first functional piece of "the audience decides who speaks next."
+      Request-to-Speak 👍 is now a real vote — one active vote per
+      viewer per event, transferable, toggle-off on re-tap (new
+      `speaker_request_votes` table, deliberately not a reuse of
+      ordinary comment likes — different exclusivity semantics). Top
+      Speaker Requests now ranks by real live vote count, not FIFO. When
+      a seat opens, the current pool freezes and one candidate is picked
+      by weighted-random selection among the vote-ranked Top 3 (fixed
+      rank weights `[3,2,1]` — the leader never exceeds 50% odds
+      regardless of vote-count magnitude), authoritatively server-side,
+      committed via the *existing* Going Live countdown (no second
+      winner/join system). A failed pick (withdrawal, this pass's only
+      practical failure signal) advances to the next unfailed candidate
+      in the same frozen pool; exhausting it returns the seat to normal
+      open/request state. A successful join resets the *entire*
+      candidate pool (bulk-expire every other pending request, clear
+      every vote) — runners-up don't stay queued, the former speaker can
+      request again immediately, no cooldown. Two new migrations
+      (00000000000019/20), 11 real-database integration tests + 13
+      weighted-selection boundary unit tests. **Not built this pass**:
+      60-second Continue/Replace protected blocks and the Vote control's
+      emphasis UI (Sections F–H) — explicitly phased out per the user's
+      own suggested split; see DECISIONS.md's matching entry, including
+      the flagged per-speaker-vs-per-pairing conflict resolution Phase 2
+      will need.
+      **Continue/Replace rounds + preview-only Session Simulator (issue
+      #21, Phase 2, 2026-08-26, same branch)**: the Vote control is now
+      real. Each occupied seat runs an independent 60-second round
+      (`event_speakers.round_number`/`round_started_at`/`round_ends_at`/
+      `round_phase`/`closing_ends_at`, migrations 00000000000021/22),
+      resolved authoritatively server-side (`resolve_speaker_round` RPC)
+      on the same deadline-in-the-row pattern as #18's reconnect grace —
+      never by a client's own elapsed-time count. Outcome thresholds
+      (0 votes/≤50%/>50%–<66%/≥66%) are centralized in
+      `lib/speaker-round.ts` and mirrored in SQL via integer
+      cross-multiplication to avoid rounding ambiguity exactly at the
+      boundaries. A narrow Replace loss gets a 30-second closing period
+      (no further voting) before replacement; a decisive Replace (≥66%)
+      replaces at the round boundary with no closing period; replacement
+      reuses the *existing* Phase 1 freeze/rank/weighted-selection/Going
+      Live path — no second candidate-selection system. Round countdown
+      is hidden in production until the final 10 seconds
+      (`ROUND_TIMER_REVEAL_SECONDS`) but shown for the round's full
+      duration on preview/dev builds, an explicit test-only behavior
+      split. New preview-only **Session Simulator** panel
+      (`SessionSimulatorPanel`, gated by a new `isPreviewOrDevBuild()`
+      check on Vercel's own `VERCEL_ENV` signal — the existing
+      `NODE_ENV`-based dev-tools gate would never appear on a deployed
+      preview URL, since Next.js force-sets `NODE_ENV=production` for
+      every build) drives a generated ~20-person simulated audience
+      through the real comment, like, Request-to-Speak, request-vote, and
+      round-vote pathways (`insertMessage`, `insertReaction`,
+      `requestToSpeakAsGuest`, `castSpeakerRequestVoteAsGuest`,
+      `castSpeakerRoundVoteAsGuest`, `claimSpeakerSeat`, `endSpeakerSeat`
+      — same functions a real guest session calls), plus deterministic
+      buttons to force each round outcome and open a seat. The one
+      simulation-specific adapter, `forceRoundDeadline`, backdates a
+      round's deadline via the service client and then calls the real
+      resolution action, so only the clock is faked — the decision logic
+      never is. Real-time (not accelerated) round/closing/Going-Live
+      timing is used by default per instruction. 10 real-database
+      integration tests for the round state machine plus unit/component
+      tests for the decision logic, resolution hook, countdown display,
+      vote panel, and simulator gating/actions/panel. See DECISIONS.md's
+      matching entry.
+      **Simulator UI real-device follow-up (2026-08-27, same branch)**:
+      the panel was too large on a phone, covering most of the app.
+      Added a minimize control (collapses to a small "SIM" pill without
+      stopping the simulation running behind it), shrank the expanded
+      panel to a `dvh`-based max-height with internal scroll and
+      safe-area-aware positioning, and made it draggable by its header
+      (Pointer Events, touch and mouse alike) clamped so it can never go
+      fully offscreen and re-clamped on resize/orientation/collapse.
+      Presentation-only — no change to simulation behavior, voting,
+      round logic, or any production code path. See DECISIONS.md.
+      **Round-testing presentation follow-up (2026-08-27, same branch)**:
+      the panel still didn't let the user clearly test the round system
+      itself. Round-timer badge now reads "Round N · Ns"/"Final Ns" on
+      the stage; a seeded simulated speaker's tile shows an unambiguous
+      "Simulated speaker" placeholder instead of the generic "Camera
+      off" one (cosmetic only, via a `simulatedGuestIds` set threaded
+      the same way as `isPreviewBuild`); the round-outcome force
+      controls are now per-seat (never one ambiguous global control),
+      each with live vote tallies and a projected-outcome line;
+      `forceRoundDeadline` now returns the real resolver's outcome so
+      forced-outcome feedback always matches what was actually decided;
+      "Seed 2 Speakers" reuses the same two stable identities for the
+      whole run. Presentation/test-control only. See DECISIONS.md.
+      **Reset Session (2026-08-27, same branch)**: Stop only ever halted
+      future activity, leaving old test data piled up. New destructive
+      "Reset Session" control (inline confirm, not a native dialog)
+      deletes every row the current run created — comments, likes,
+      requests/votes, seats, round votes — by an exact tracked guest-id
+      list, investigated first and chosen over a new `simulation_run_id`
+      schema column since the exact-id-list approach is already safe and
+      precise without a migration or touching four production RPCs.
+      `speaker_selection_rounds` deliberately left untouched (no owner
+      column, shared production writer — see DECISIONS.md). 5 new
+      real-database integration tests proving real activity survives a
+      reset even when paired with same-shape simulated data. See
+      DECISIONS.md.
+      **Visible-feed follow-up (2026-08-27, same branch)**: the DB
+      deletion was correct but old comments stayed visible without a
+      manual reload. Root cause: `useLobbyRealtime`/
+      `useActiveSpeakerRequests`/`useActiveSpeakers` had never needed
+      Postgres `DELETE` handling before (ordinary usage only ever
+      UPDATEs these rows) — migration 00000000000023 enables `REPLICA
+      IDENTITY FULL` on the four affected tables and each hook gained a
+      pure, tested DELETE handler. Fixes every tab watching a room, not
+      just the simulator's own. See DECISIONS.md.
+      **One-tap full session + replacement loop (2026-08-27, same
+      branch)**: Start now auto-seeds both speakers itself (no separate
+      Seed 2 Speakers press). Root finding: production's automatic
+      promotion resolves "who" from the calling tab's own session — a
+      simulated identity has none, so no real pathway could ever promote
+      one. New `simulateAdvanceSelection` adapter reuses the identity-
+      agnostic freeze/weighted-pick (`ensureActiveSelectionRound`,
+      exported) unmodified and only adapts the claim step, gated by one
+      safety property verified via a real-DB test built to try to break
+      it: it never claims on behalf of a real user's winning request,
+      even alone in the pool. Round voting rolls an independent
+      continue-bias per round instead of one fixed constant, so outcomes
+      vary naturally over a long session. See DECISIONS.md.
+      **Corrective pass (2026-08-28, same branch)**: real-device testing
+      found the simulator's background promotion loop could race and
+      steal a real join, leaving a stuck self-preview with no Leave
+      Stage, and confirmed the per-speaker independent round timers were
+      the wrong product behavior. `claim_speaker_seat` now raises rather
+      than silently replacing an occupied seat (migration 24, closing
+      the race for every caller); two immediate follow-up migrations
+      fixed a stale-seat regression the guard introduced (25) and a
+      round-number-starts-at-2 cosmetic bug (26/27), both caught by the
+      real-database test suite before merge consideration. Round model
+      rebuilt around one shared `stage_rounds` clock per pairing —
+      Continue/Replace still resolved per speaker at that shared
+      boundary — while `event_speakers`' own round columns stay
+      unchanged in shape, so the existing vote-casting RPCs needed no
+      changes. New `useReleaseStuckLocalMedia` hook and a
+      `realJoinInProgress` guard on the simulator's own polling loop
+      close the two real-device findings generally, not with a
+      simulator-specific patch. Simulator panel rebuilt: one shared
+      round badge, per-seat force buttons now configure a vote split
+      rather than resolving immediately, new "Resolve Round Now"
+      control. Full suite 899/899, lint/tsc/build clean. See
+      DECISIONS.md and SESSION_LOG.md's Session 42.
+      **Second corrective pass (2026-08-28, same branch)**: traced the
+      simulator's intermittent incomplete-seeding bug to a real database
+      race — `ensure_stage_round`'s cold-start INSERT had no conflict
+      handling, so two seats claimed within the same instant (concurrent
+      simulator seeding, or two real people) could roll back one seat's
+      claim entirely via an uncaught unique-constraint violation, exactly
+      matching the "Stop/Start fixes it" symptom. Fixed in the database
+      (migration 28: `ON CONFLICT DO NOTHING` plus reading occupancy
+      after the round row locks), verified with a real-`Promise.all`
+      concurrency test; simulator seeding also made sequential with
+      per-step progress logging. Round timer moved from the stage's top
+      edge (overlapping the room header's own top-of-screen chrome) to
+      dead center — the seam between the two equal-width/height tiles in
+      both orientations. Investigated a "wrong candidate replaced the
+      speaker" report by re-reading the weighted-selection algorithm end
+      to end — found no bug (a rank-1 candidate losing the draw ~33-50%
+      of the time is the agreed design) — delivered observability instead
+      of touching it: the simulator now shows the frozen Top 3 with real
+      weighted odds, the selected candidate, and joining/promoted status.
+      Reset Session now deletes the shared `stage_rounds` row when it
+      leaves the stage empty (clean "Round 1" next time) or resyncs
+      (never deletes) it when a real speaker remains seated. Audience
+      Vote panel gained live Continue/Replace percentages (polled only
+      while open), a "No votes yet" zero-participation state, a locked
+      "Replacement decided" presentation during Final 30s, and a
+      "Vote · Ns" final-10s emphasis label. Full suite 919/919,
+      lint/tsc/build clean. See DECISIONS.md and SESSION_LOG.md's
+      Session 43.
+      **Third corrective pass (2026-08-29, same branch)**: removed the
+      weighted-random selection draw entirely — highest votes now wins
+      deterministically, tie broken by earliest active request, reusing
+      `freeze_speaker_candidates`' already-correct ranking rather than
+      adding new tiebreak logic. The significant fix: seat claims now
+      require Request-to-Speak selection authorization once the stage's
+      initial two-speaker pairing has ever been established (reusing
+      `stage_rounds.round_number >= 1` as the authoritative, permanent
+      signal) — enforced inside `claim_speaker_seat` itself (migration
+      29), not just a UI hide, proven with a real-database test where an
+      unauthorized claim submitted concurrently with the authorized
+      candidate's own claim always loses. Caught (and fixed, migrations
+      30/31) a real Postgres gotcha along the way: `CREATE OR REPLACE`
+      with a new trailing parameter created a stale, ungoverned function
+      overload rather than replacing in place. New shared
+      `ParticipantAvatar` component replaces four duplicated inline
+      initials circles in `SpeakerTile` and adds avatars to Expanded
+      Comments/ambient comments, previously bare text. Vote panel now
+      dismisses on outside-tap/Escape without erasing the viewer's
+      selection. Full suite 935/935, lint/tsc/build clean. See
+      DECISIONS.md and SESSION_LOG.md's Session 44.
+      **Fourth corrective pass (2026-08-29, same branch)**: real-device
+      testing caught a genuine invariant violation — both seats showing
+      "Selecting next speaker…" while a shared round kept counting down.
+      `startSimulation` used to flip `running` (and schedule every
+      natural-activity loop) before seeding had actually finished or even
+      succeeded; rebuilt around an explicit bounded startup state machine
+      (`establishInitialPairing`/`establishSeat`, new preview-only
+      `startupState`) that only reaches "running" after both seats are
+      confirmed occupied *and* the shared round is confirmed active — a
+      failure at any step reports why and never half-starts. Startup now
+      also respects the same seat-authorization model the third pass
+      introduced: seeding a genuinely new stage still uses the direct
+      initial-formation join (Case A), but re-seeding an *already-
+      established* stage — including the standalone "Seed 2 Speakers"
+      button — now goes through the real Request-to-Speak → selection →
+      authorized-claim pipeline (Case B), never a bypass, closing a
+      simulator-only authorization loophole the same principle the third
+      pass established for production. New client-side reactive backstop
+      (`reconcileStageRoundAction`/`useStageRoundReconciliation`) calls
+      the already-idempotent `ensure_stage_round` whenever any connected
+      client's own view of seat occupancy changes, independent of
+      whichever server path changed it. New compact "Startup" panel
+      section (Simulation/Audience/Seat 1-2/Pairing/Shared round) visible
+      only during startup or on failure. Also fixed: toggling Request-to-
+      Speak while typing a comment was dismissing the keyboard
+      (`onMouseDown` `preventDefault()` on the mic button — stops the
+      browser's own default focus-shift before it happens, no
+      compensating refocus); ambient comments now fade at the top edge
+      via a container-level CSS mask instead of a hard clip (Expanded
+      Comments deliberately unaffected — it's a reading surface, not the
+      livestream feed). Vote UI left untouched per explicit instruction.
+      3 new real-database integration tests
+      (`stage-round-invariant.test.ts`) prove the invariant directly:
+      zero/one occupied seats never show an active round, exactly one new
+      round begins once both are authoritatively occupied, both via fresh
+      seeding and via the speaker-loss/replacement path. See DECISIONS.md
+      and SESSION_LOG.md's Session 45.
+      **Fifth corrective pass (2026-08-29, same branch)**: real-device
+      testing found replacement selection getting stuck for far too
+      long despite eligible, already-voted-for Request-to-Speak
+      candidates existing — traced to selection being event-wide, not
+      seat-aware: with two seats open at once, only one candidate could
+      ever be reserved (a leftover unique index from the single-seat
+      model), and claiming that one seat wiped every other pending
+      request — including the second seat's own legitimate candidate —
+      via the existing bulk pool reset. Fixed by making reservation
+      seat-scoped (`speaker_requests.reserved_seat_number`, migration
+      32) — up to two simultaneous reservations per round, one per open
+      seat, the pool reset now deferred until no seat has a live
+      reservation left. A real-database concurrency test then caught a
+      *second*, subtler race the fix's first cut still had: two
+      genuinely concurrent selectors could still reserve the same
+      candidate for two different seats from a stale snapshot before
+      either committed. Closed by moving the whole per-seat reservation
+      decision into one atomic, row-locked SQL function
+      (`reserve_speaker_candidates_for_seats`, migrations 36/37 — 37 a
+      same-pass fix for an ambiguous-column bug 36's first version had,
+      caught immediately by the test suite) rather than a TypeScript
+      loop making one RPC call per seat. New small-room direct-join
+      fallback: once a stage is established, a direct claim is illegal
+      everywhere except one narrow case — both seats empty and zero
+      eligible requests — with the two just-removed speakers excluded
+      from immediately reclaiming it (an authoritative exclusion stamped
+      from `event_speakers`' own departure history, cleared once a
+      fresh pairing is established — no timer, no ban table). Two
+      same-pass corrective migrations (34, 35) fixed real gaps the test
+      suite caught in the fallback's own lifecycle: the fallback
+      needed to keep covering a second still-empty seat once the first
+      filled through it, and a lingering exclusion flag needed clearing
+      on an unrelated later occupancy. New reactive selection-
+      reconciliation backstop
+      (`reconcileSpeakerSelectionAction`/`useSpeakerSelectionReconciliation`),
+      same shape as the fourth pass's round-invariant backstop. Ambient
+      comments redesigned (avatar, name on its own line, wrapped
+      two-line comment text below, replacing the old single-line
+      hard-truncated pill) with a new Hide/Show control (a
+      `localStorage`-persisted client preference, hides only the
+      floating feed — composer/Request-to-Speak/Expanded Comments
+      untouched). Vote UI left untouched per explicit instruction. New
+      real-database integration test file
+      (`two-seat-selection-fallback.test.ts`) covers two-seat
+      reservation, all seven fallback cases, and an explicit true-
+      concurrency race test proving the atomic RPC. See DECISIONS.md and
+      SESSION_LOG.md's Session 46.
+
+      **Sixth corrective pass (2026-08-30, same branch)**: real-device
+      testing still found next-speaker promotion "taking far too long" —
+      up to two eligible, already-voted-for candidates visible while
+      both seats stayed on "Selecting next speaker…". A diagnostic-first
+      pass (no fix attempted before tracing) found the *server-side*
+      reservation from the fifth pass was never the problem — a new
+      real-database timing test measured a representative reservation +
+      both seats' authorization at 440ms/432ms/448ms, and
+      `useSpeakerSelectionReconciliation` already re-triggers selection
+      reactively from any connected client's own occupancy/pending-pool
+      changes, not a timer. The actual bottleneck was entirely
+      client-side: `useAutomaticPromotion`'s own eligibility check — the
+      thing that starts a *candidate's* 3-second Going Live countdown —
+      was a blind 4-second `setInterval` poll, completely disconnected
+      from the `pendingRequests` Realtime state `EventRoom` already held
+      live. Fixed by deriving `isCurrentlyReservedCandidate` from that
+      already-live state and checking it first, before falling back to
+      the unchanged 4s poll as a bounded backstop for a missed Realtime
+      delta — the poll's own claim-time server revalidation is untouched,
+      so this closes no existing race-safety guarantee. A companion fix:
+      "Selecting next speaker…" was staying visible through a candidate's
+      *entire* Going Live countdown even after they'd been reserved —
+      `SpeakerStage`/`SpeakerTile` gained a "Joining…" state, checked
+      before "Selecting…", so the label only ever means "still executing
+      selection." New preview-only SIM diagnostic timeline
+      (`useSeatPromotionTiming`) shows real, observed per-seat timestamps
+      (vacant → candidates found → reserved → occupied) with a specific
+      `WAITING AT: <reason>` line instead of a generic status whenever a
+      seat is blocked — never an estimated number. See DECISIONS.md and
+      SESSION_LOG.md's Session 47.
+
+      **Seventh corrective pass (2026-08-30, same branch)**: four UX/
+      simulator issues found testing the sixth pass's preview, none
+      touching speaker selection. `SpeakerStage`'s two-tile arrangement
+      now responds to a real CSS container query on the stage's own
+      geometry (`@container stage (aspect-ratio < 1.5)`) rather than
+      always being side-by-side — the initial threshold (`< 2`) was
+      wrong and only caught by loading the app in a real browser at real
+      window sizes (jsdom can't execute container queries), since a
+      fixed-width sidebar keeps the stage's own aspect ratio roughly
+      constant across ordinary desktop windows. The site-wide header now
+      hides unconditionally for the whole time a room is mounted
+      (previously only in one narrow short-landscape case), recovering
+      that space for the stage; a new `RoomInfoOverlay`, rendered once
+      by `EventRoom` as a sibling of the composition branch, provides
+      the navigation/room-info/account content that lived there, opened
+      via the existing status pill (no new floating control) or a new
+      small button in desktop's `RoomHeader`. Session Simulator's Reset
+      had a real bug, traced before fixing: `useStageRound`'s Realtime
+      handler silently discarded every `DELETE` event, so the shared
+      round row Reset deletes stayed stuck on screen indefinitely — the
+      one production path that ever deletes that row, so likely never
+      exercised before. Fixed via a directly-tested pure reducer. Reset
+      is now one tap (the confirmation step is gone), and a new shared
+      `SimButton` gives every simulator control real pointer-tracked
+      press feedback and an automatic executing/disabled state for async
+      actions only — what actually prevents a duplicate concurrent
+      Reset now, not a second confirmation. See DECISIONS.md and
+      SESSION_LOG.md's Session 48.
+
+      **Eighth corrective pass (2026-08-30, same branch)**: a real
+      iPhone still showed "Selecting next speaker…" for an extended
+      period with a visibly eligible candidate — the sixth pass's
+      reactive fix only helps a *real* candidate's own browser tab.
+      Diagnostic-first again, this time finding and fixing four
+      independent, real bugs rather than one: (1) `useStageRound`/
+      `useActiveSpeakerRequests` were missing the visibility/focus
+      resync `useSeatReconciliation` already had for seat occupancy —
+      live-reproduced as a tab stuck showing a round from before the
+      stage was even established, long after the real round had
+      advanced; (2) simulated candidates had no reactive promotion path
+      at all (only production's own poll), fixed with a sequential
+      drain after two earlier attempts were each proven wrong live
+      (both left a second simultaneously-open seat's own reservation
+      permanently unclaimed), plus a `try/finally` closing a related bug
+      where an unhandled rejection silently disabled the whole mechanism
+      for the rest of a run; (3) the simulator's own startup retry
+      budget (750ms total) was measured too tight for this environment's
+      real reconciliation round-trip time, live-reproduced to fail
+      startup outright and silently disable every subsequent promotion
+      mechanism — widened to a 6s ceiling; (4) a genuine server-side bug,
+      not simulator-specific — `withdraw_speaker_request(_as_guest)`'s
+      "mark this round exhausted" check only ran when the withdrawing
+      request was itself the round's reserved candidate, so a
+      frozen-but-never-reserved straggler withdrawing could leave a
+      round stuck `active` forever, making every later-arriving request
+      permanently invisible to selection (migration 00000000000038 —
+      applied to the linked project). A related, deeper finding
+      (`reset_speaker_candidate_pool`'s own reservation check being
+      event-wide rather than round-scoped) was surfaced rather than
+      fixed, as a genuine design decision rather than an obvious bug.
+      See DECISIONS.md and SESSION_LOG.md's Session 49.
+
+      **Ninth corrective pass (2026-08-30, same branch)**: a focused
+      re-investigation, discarding a prior branch entirely, found the
+      round boundary itself never triggered selection — the two
+      authoritative functions that resolve a round/closing-period
+      boundary and create a vacancy (`resolveStageRoundAction`,
+      `resolveSeatClosingAction`) never called `ensureActiveSelectionRound`
+      directly; selection depended entirely on a separate chain (DB
+      write → Realtime delivery → a client's own reconciliation effect
+      → a second Server Action call). Fixed by calling the same
+      idempotent, row-locked selection function directly from both
+      boundary actions, immediately after the vacancy is created —
+      collapsing that chain into the call that already resolves the
+      boundary, not a second competing selection path. A real-database
+      test proved 10 consecutive replacement cycles in one
+      continuously-running event, no reset between, with real measured
+      boundary→reservation latency of 719-824ms (avg 747ms); corroborated
+      live in a real browser (548-559ms observed). Session Simulator
+      gained a collapsible "Selection Forensics" panel distinguishing
+      the ranking frozen at the boundary from the live current ranking.
+      Deliberately not extended to `checkAndEvictInactiveSpeaker`/
+      `leaveSpeakerSeat` (same gap exists there, left for a future pass —
+      this pass's own instructions scoped it to the round boundary
+      specifically). See DECISIONS.md and SESSION_LOG.md's Session 50.
+
+      **Tenth corrective pass (2026-08-30, same branch)**: the deferred
+      extension happened this pass, plus more — a full trigger-matrix
+      audit found the identical gap in `leaveSpeakerSeat`,
+      `checkAndEvictInactiveSpeaker`, `requestToSpeak`,
+      `withdrawSpeakerRequest`, and `claimOpenSeat`'s failed-claim path;
+      all five now call the same reconciliation mechanism via a new
+      failure-swallowing `bestEffortReconcileSelection` helper. A
+      genuinely new mechanism (migration 00000000000039,
+      `release_failed_speaker_claim`) releases and advances past a
+      candidate whose authorized claim itself failed — previously left
+      stuck forever — deliberately without permanently disqualifying
+      them (a real design decision, flagged and proven with a real-
+      database test showing the same candidate winning a later
+      independent round). Dual-replacement/fallback chains (two seats,
+      three ranked candidates; a winner cancelling advances the fallback
+      without disturbing the other seat's valid reservation) proved with
+      real-database tests, not just asserted unchanged. Separately: a
+      real-device report of active-session diagnostics showing no sense
+      of "who's next" turned out to be a genuine diagnostics-clarity gap,
+      not a selection bug (`ensureActiveSelectionRound` already correctly
+      refuses to reserve early) — fixed by adding a "Live Replacement
+      Queue"/"Established mode"/"Selected-Reserved" summary to Selection
+      Forensics. A real Reset Session bug was traced to an actual
+      ordering race (a scheduled background write landing in the
+      database *after* Reset's own DELETE already ran, not a wrong
+      guest-id list or stale client rendering) and fixed with a delayed
+      follow-up sweep. New preview-only "Copy Debug Snapshot" tool for
+      pasting real-device state directly into a future session —
+      deliberately scoped down from the full requested spec (no
+      persisted rolling event-history subsystem this pass; flagged as
+      deferred). See DECISIONS.md and SESSION_LOG.md's Session 51.
+
+      **Eleventh corrective pass (2026-08-31, same branch)**: the user
+      clarified "Next Speaker" had been answering a different question
+      than intended — a prospective #1 live RTS candidate, not a
+      reservation. Renamed the old frozen-only section to "Selected /
+      Committed" and added a new, prominent "Next Speaker Candidate"
+      section reading the same already-correct live vote ordering,
+      reactive, never reserving anything by being shown. Copy Debug
+      Snapshot (tenth pass) rebuilt as a two-phase T0/T1 capture after a
+      real-device report that it "did not give an immediate usable
+      result" — traced to the client section being needlessly delayed
+      behind an authoritative fetch, and (more consequentially) the
+      clipboard write only starting well after the tap's own user
+      gesture, a shape several mobile browsers can silently refuse.
+      Client state now captures synchronously at T0; both the
+      authoritative fetch and the clipboard write are bounded, and a
+      failed/hung clipboard write opens a visible, selectable fallback
+      text panel automatically rather than losing the capture. A
+      delayed real-device snapshot showing a vacant seat with eligible
+      candidates but no reservation was investigated by live
+      reproduction (not concluded from the snapshot alone, per the
+      user's own explicit instruction): found `simulateOpenSeat` (the
+      SIM's own vacancy action, distinct from the five production paths
+      the ninth/tenth passes fixed) has the same missing-direct-trigger
+      gap, relying entirely on the reactive
+      `useSpeakerSelectionReconciliation` hook — reproduced live that
+      reservation itself happens correctly regardless of simulator
+      running/stopped state, and separately confirmed that *claim
+      completion* for a simulated identity specifically (not
+      reservation) is intentionally gated on the simulator running,
+      since it's SIM-only machinery with no real browser tab behind a
+      fake identity. Could not reproduce the user's own exact "no
+      reservation at all" state through live testing — reported as
+      unresolved, most consistent with the delayed snapshot's own
+      capture-timing uncertainty, rather than concluded either way. See
+      DECISIONS.md and SESSION_LOG.md's Session 52.
+
+      **Twelfth corrective pass (2026-08-31, same branch)**: the
+      eleventh pass's own two-phase debug snapshot delivered exactly
+      the clean, trustworthy real-device capture it was built for — 591ms
+      T0→T1 latency, no state change during capture, client and
+      authoritative state fully agreeing on an established room, a
+      freshly vacant seat, two eligible RTS candidates, and no
+      reservation. Root-caused by querying the real linked database
+      directly: the permanent test room had a
+      `speaker_selection_rounds` row frozen two days earlier, still
+      `status = 'active'`, with nothing live left referencing it —
+      `freeze_speaker_candidates`'s own "reuse an existing active round"
+      idempotency check had no liveness check, so it kept reusing this
+      dead round forever, on every call, silently blocking the event
+      from ever freezing a fresh round from its own current pool.
+      Fixed at the source (migration 00000000000040): the function now
+      verifies an existing "active" round actually has a live
+      reservation or a remaining viable candidate before reusing it,
+      self-healing (marking it exhausted, then creating a genuinely
+      fresh round) otherwise. Also closed the one remaining vacancy path
+      with no direct reconciliation trigger (`simulateOpenSeat`,
+      deliberately left alone in the ninth/tenth passes) and the same
+      gap in the simulator's own `simulateRequestToSpeak`/
+      `simulateWithdrawRequest` — matching architecture consistency
+      across every path, though none were provably the cause of this
+      specific capture (that transition's own row-level evidence had
+      already been cleared by later ordinary use of the shared room —
+      reported honestly as unrecoverable). New "OBSERVED" transition
+      logging (seat occupancy/reservation/round-phase changes, from prop
+      diffs, regardless of cause) and "VACANCY DIAGNOSTICS" with an
+      explicit per-seat `INVARIANT STATUS` added to Copy Debug Snapshot;
+      RTS vote-count comparison added to `STATE MISMATCHES` after the
+      same capture showed a real, previously-undetected 4-vs-3 client/
+      authoritative disagreement. A 20-cycle real-database stress test
+      measured avg 463ms/max 532ms vacancy→reservation latency. See
+      DECISIONS.md and SESSION_LOG.md's Session 53.
+
+      **Thirteenth corrective pass (2026-08-31, same branch)**: a
+      narrow, diagnostic pass on two smaller issues surfaced by the
+      twelfth pass's own diagnostics, with the replacement architecture
+      itself untouched. RTS vote-count drift (client under-counting a
+      live authoritative count, caught twice on real-device captures)
+      traced through the full vote lifecycle — `cast_speaker_request_vote`'s
+      own DELETE-then-INSERT transfer is handled correctly by the client
+      hook, no logic bug found — to a real gap neither of the hook's two
+      existing resync triggers (on-SUBSCRIBED, visibility/focus) can
+      ever close: a single WAL message silently dropped in transit
+      without the connection itself closing, a known cellular-network
+      failure mode and exactly how both captures were taken. Fixed with
+      a bounded 20s backstop resync, explicitly secondary to the instant
+      Realtime path, matching `useAutomaticPromotion`'s own established
+      backstop-poll precedent. Separately audited "weighted selection"
+      wording appearing in the Session Simulator's activity log —
+      confirmed directly (codebase search, not assumption) that no
+      executable weighted/random selection logic exists anywhere
+      (`lib/speaker-selection.ts` is genuinely gone;
+      `freeze_speaker_candidates`' SQL ranking has no randomness); the
+      two live log strings were stale terminology only, renamed to
+      "deterministic RTS ranking — #1 by votes." Proved determinism
+      directly against the real database across 5 independent repeated
+      rounds each for both a clear-winner and a tied-vote scenario.
+      Debug Snapshot's RTS mismatch diagnostics expanded into a
+      dedicated per-candidate block (both counts, signed delta, both
+      ranks) with an explicit `PROSPECTIVE RANKING MISMATCH` call-out.
+      See DECISIONS.md and SESSION_LOG.md's Session 54.
+
+      **Fourteenth corrective pass (2026-08-31, same branch)**: a third,
+      separate real-device pattern, isolated from the now-healthy
+      replacement/RTS work — the Session Simulator sometimes needed
+      multiple Reset→Start attempts before becoming useful. Grounded
+      "Minified React error #441" (via React's real error-codes table
+      for this project's version) to what it actually is: production
+      redaction of a genuine, specific Server Action throw from
+      `claim_speaker_seat` ('seat already occupied'), never a client
+      rendering bug. Traced the real gap to `establishSeat`'s Case A
+      branch trusting the mutation promise alone instead of authoritative
+      state — a leftover occupant from an earlier incomplete Start
+      collided with every retry on the same seat, deterministically,
+      until a manual Reset. Fixed with authoritative confirmation after
+      every attempt (throw or not): the intended identity already seated
+      is treated as a real success and never retried; a leftover
+      simulator-owned occupant (tracked via this tab's own guest-id
+      bookkeeping) is cleared via the existing `simulateOpenSeat` adapter
+      and retried, bounded; anyone else is never evicted, and startup
+      reports a precise FAILED PHASE/ATTEMPTS/EXPECTED/AUTHORITATIVE/
+      LAST ERROR/RECOVERY detail instead of a generic message. Closed two
+      structural races alongside it: a synchronous re-entrancy guard for
+      Start (`SimButton`'s own executing-state depends on a React
+      re-render, never synchronous with the triggering click) and a
+      Reset-Start completion barrier. Found and closed a third, genuinely
+      narrow Reset race while investigating: `resetSimulatorSession`'s
+      `stage_rounds` reconciliation was never guest-id-scoped, so the
+      panel's own delayed follow-up sweep could delete a brand-new run's
+      round row if occupancy was transiently zero at the exact moment it
+      fired — proven directly against the real database, fixed with a new
+      `reconcileStageRound` parameter the follow-up sweep now passes
+      `false`. Debug Snapshot gained a `SIMULATOR STARTUP` block (state,
+      phase, run/reset generation, per-seat intended vs. authoritative
+      occupant, last error). New real-database coverage proved the real
+      "already occupied" error, the leftover-seat self-heal, a genuine
+      concurrent-claim race, the `reconcileStageRound` fix both ways, and
+      a 20-cycle Reset→Start stress test at 20/20 first-attempt
+      successes. See DECISIONS.md and SESSION_LOG.md's Session 55.
+
+      **Fifteenth corrective pass (2026-08-31, same branch)**: even
+      after the fourteenth pass, the simulator still needed repeated
+      Reset→Start on an already-established room — a new snapshot
+      showed startup submitting real Request-to-Speak requests for its
+      own bootstrap candidates and timing out, because a *stale* request
+      from an earlier, superseded generation won the deterministic
+      tie-break instead. Confirmed the diagnosis: the fourth pass's own
+      "Case B" (established stage seeds via real Request-to-Speak +
+      bounded selection wait, deliberately never bypassing production
+      authorization) asks the real competitive system to eventually pick
+      two specific identities it has no obligation to pick — correctly
+      exercising the real system, but never suited to be a bootstrap
+      mechanism. Retired that path for bootstrap: every seat now uses
+      the same authoritative bypass-claim-and-self-heal mechanism the
+      fourteenth pass already proved for a fresh stage, regardless of
+      established mode — not a new capability (`claim_speaker_seat`'s
+      own bypass flag was always documented for exactly this; migration
+      24's "never steal an occupied seat" guard is unconditional and
+      untouched), only a retired client-side self-restriction. Added
+      stale-generation cleanup (withdraws any pending simulator-owned
+      Request-to-Speak from an earlier generation before every bootstrap
+      attempt, via the real "Cancel Request" pathway) so repeated Start
+      presses stop accumulating candidates that can silently win a
+      future tie-break. A partial bootstrap failure (one seat succeeds,
+      the other blocked by a real participant) is left as-is rather than
+      rolled back — the next attempt's own self-heal recovers cleanly,
+      no Reset required. Debug Snapshot's per-seat fields are now frozen
+      at bootstrap time (`Initial bootstrap Seat N`) instead of
+      re-fetched live, closing a second real-device confusion (a real
+      later replacement was reading as "startup drift"). New
+      real-database coverage proved bootstrap success on an established
+      stage, real-participant protection, the full partial-failure→
+      recovery sequence, and that a real post-bootstrap vacancy still
+      flows entirely through the unmodified real RTS pipeline. See
+      DECISIONS.md and SESSION_LOG.md's Session 56.
+
+      **Sixteenth corrective pass (2026-09-01, same branch)**: with
+      bootstrap now authoritatively succeeding, a new snapshot showed a
+      different gap — bootstrap's own confirmation ("Seat 1/2 = ...",
+      "Round active," "Startup READY") coexisting with the stage-facing
+      client still reporting both seats vacant, 13+ seconds later.
+      Traced to two genuinely separate sources of truth: bootstrap's own
+      direct authoritative read, and `useActiveSpeakers` (the canonical
+      client speaker state), which only updated via incremental Realtime
+      deltas plus a full resync on-SUBSCRIBED — no bounded backstop, no
+      visibility/focus resync, unlike its sibling hooks already fixed
+      for the identical class of problem. Fixed with one canonical
+      `reconcile(reason)` inside `useActiveSpeakers`, reused by every
+      trigger (SUBSCRIBED, visibility, focus, a new 20s backstop, and any
+      external caller) — bootstrap's own `establishSeat` now calls it
+      directly, tagged "bootstrap," the instant its own authoritative
+      confirmation lands, rather than depending on Realtime to
+      redeliver the same INSERT its own mutation caused. No simulator-
+      specific duplicate speaker store — `EventRoom` passes its own hook
+      instance's `refetch` straight through. Closed a second race found
+      while building this: overlapping reconciles could let an older,
+      slower read clobber a newer one — fixed with a monotonic sequence
+      number. `Startup READY` now performs one final, bounded, awaited
+      client-state verification before declaring success; genuine non-
+      convergence reports a distinct "CLIENT SYNC" failure, never
+      conflated with a bootstrap failure. Added `useSpeakerInvariantRecovery`
+      (the inverse of the existing `useStageRoundReconciliation`) as a
+      bounded, event-driven safety net for the general "active round +
+      <2 local speakers" shape, firing at most once per round transition.
+      Debug Snapshot gained side-by-side `AUTHORITATIVE SPEAKER STATE`/
+      `CANONICAL CLIENT SPEAKER STATE` blocks plus a `SPEAKER SYNC`
+      section (channel status, timestamps, reconcile reason/result,
+      mutation source). Live-browser measurement: Start tap → both seats
+      confirmed → stage tiles showing both real names at ~1.9s → round
+      active ~1.93s → Startup READY ~2.0s — canonical state converged
+      *before* READY, not 13+ seconds after. See DECISIONS.md and
+      SESSION_LOG.md's Session 57.
+
+      **Seventeenth corrective pass (2026-09-01, same branch)**: a new
+      real-device snapshot showed both seats authoritatively occupied by
+      the same two speakers, canonical client state matching perfectly,
+      yet the shared round sitting in `awaiting_pairing` with the 60s
+      timer gone. Traced (not assumed) `stage_rounds.phase` to its one
+      and only writer, `ensure_stage_round`: since its first version
+      (migration 24), it required *both* both-seats-occupied *and*
+      nobody currently in their own Final-30 "closing" window before
+      treating the round as active — a narrow-loss outcome puts the
+      losing seat into `round_phase = 'closing'` without vacating it, so
+      the still-fully-paired stage fell into the function's own `else`
+      branch and got demoted, hiding the timer for the *continuing*
+      speaker too, who had nothing to do with the other seat's own
+      Final 30. This was a deliberate, documented design choice at the
+      shared-round architecture's own introduction — reversed here per
+      this pass's own explicit instruction that a seat merely closing,
+      still occupied and still part of the pairing, must not demote the
+      shared round. Proved (not assumed) this isn't a stale-read/stale-
+      write race: `ensure_stage_round` always re-derives occupancy fresh
+      under a row lock at the top of its own execution; every one of its
+      six callers now also tags its call with its own literal source
+      name. Fix: the "is this round active" gate now depends only on
+      both-seats-occupied; a seat being closing no longer excludes it,
+      and the (unchanged) renewal condition correctly gives the
+      continuing seat a fresh round at the normal boundary even while
+      the other seat's own independent 30s countdown keeps running. Added
+      a small, preview/dev-only `last_transition_reason` column,
+      populated only on an actual phase/round-number change, encoding
+      the initiating source and the old/new phase and round number — a
+      pre-existing real-database test had been asserting the *old, buggy*
+      behavior as correct, and its own failure after the fix is
+      independent confirmation the diagnosis was right. Live-browser
+      verification ran the simulator through 7 consecutive rounds
+      (several decisive replacements, one narrow-loss/closing) — the
+      exact bug scenario (one seat closing, one continuing) was observed
+      live three separate round boundaries in a row with the timer
+      correctly staying visible and ticking throughout, then a full
+      replacement cycle completed cleanly. That same verification also
+      surfaced a genuinely separate, pre-existing bug: `event_speakers_active`
+      (the view every live client read of seat state goes through) was
+      defined before `round_phase`/`closing_ends_at` existed as columns,
+      so Postgres's own `select *` column-freezing means those two
+      columns never actually reach any client — the Final-30 UI and its
+      automatic replacement-after-30s timer are consequently non-
+      functional for real participants right now. Not fixed in this
+      pass (different root cause, different fix shape); flagged clearly
+      for its own corrective pass. See DECISIONS.md and SESSION_LOG.md's
+      Session 58.
+
+      **Eighteenth corrective pass (2026-09-01, same branch)**: the
+      narrow, follow-up fix the seventeenth pass's own final finding
+      flagged. `event_speakers_active` — the view every live client reads
+      seat state through — was created (migration 18) before
+      `round_number`/`round_started_at`/`round_ends_at`/`round_phase`/
+      `closing_ends_at` existed as columns (migration 21, three
+      migrations later); Postgres freezes a view's `select *` at creation
+      time, so live-database introspection (not assumption) proved all
+      five, not just the two the previous pass's own finding named, were
+      silently absent from every client read. Realtime deltas already
+      carried them correctly (Postgres CDC replicates off the base table,
+      never a view); it was specifically every *reconcile* — on-
+      SUBSCRIBED, visibility/focus, the 20s backstop — that clobbered a
+      just-delivered correct value back to `undefined`, which is why a
+      real speaker's Final-30 grace window could enter `closing`
+      correctly and still never auto-resolve: `useStageRoundResolution`'s
+      client-side replacement timer depends on exactly the field a
+      reconcile kept erasing. Fixed with a `create or replace view` using
+      an explicit column list (not another `select *`, to prevent this
+      exact class of drift recurring silently) — no SQL-level dependents
+      existed to break (confirmed by grep), and this is the only view in
+      the entire schema (a narrow, one-off fix, not a wider pattern).
+      Simplified the Session Simulator's own debug snapshot, whose prior
+      pass had worked around the same gap with a second, redundant base-
+      table query — no longer needed once the view itself is fixed — and
+      added an explicit FINAL 30 / CLOSING STATE section (authoritative
+      vs. client `round_phase`/`closing_ends_at`/remaining, side by
+      side). Verified against a real, unscripted simulator run, letting
+      the real 30s deadline expire with no manual shortcut (no Force
+      Replace Now): narrow loss resolved and the seat entered `closing`
+      with authoritative and client state matching exactly; ~30s later
+      the seat vacated automatically (the client's own scheduled timer
+      firing on its own); a replacement was deterministically selected
+      and seated, and the shared round resumed active — the entire
+      vacancy-to-resumed-pairing cycle completed in about 3 seconds, all
+      without intervention. A real browser reload mid-countdown confirmed
+      the remaining time comes from the authoritative deadline, not a
+      restarted local timer (also pinned as a deterministic hook-level
+      test, since the countdown function takes the deadline and current
+      time as plain arguments with no local "when did I start counting"
+      state at all). Migration 41's shared-round behavior reconfirmed
+      unaffected throughout: active while merely closing, legitimately
+      demoted only once the seat genuinely vacated, reactivated once the
+      resulting pairing was restored. Found, but explicitly left
+      unfixed as a separate, pre-existing issue unrelated to this view
+      (Request-to-Speak reservation/selection, not seat-state data): a
+      stale seat reservation left pointing at an already-refilled seat
+      after an unusually rapid sequence of manual test actions, blocking
+      that one vacancy's own selection reconciliation — flagged for
+      whoever picks up Request-to-Speak selection edge cases next,
+      distinct from Final 30. See DECISIONS.md and SESSION_LOG.md's
+      Session 59.
+
+      **Nineteenth corrective pass (2026-09-01, same branch)**: the
+      previous pass's own flagged finding — investigated per explicit
+      instruction to prove production reachability before touching
+      anything, not assume the bug and start redesigning. Mapped the
+      full reservation lifecycle (`is_current_candidate`/
+      `reserved_seat_number` on `speaker_requests`) and traced every
+      place that clears it: withdrawal, a failed claim
+      (`release_failed_speaker_claim`), and `set_current_speaker_candidate`'s
+      own clear-before-set — but never a *successful* claim. A winning
+      candidate's own row kept `is_current_candidate = true` forever
+      after `markSpeakerRequestGranted`, because `resetSpeakerCandidatePool`
+      deliberately excludes the winner's own row from its bulk wipe and,
+      in the ordinary dual-replacement case, defers entirely (does
+      nothing at all) while the *other* seat's own reservation is still
+      pending. Reproduced this directly against the real linked database
+      using only real production RPCs — no simulator, no bypass: both
+      seats open, two candidates each reserved for one seat, the first
+      claims quickly while the second is still pending (a completely
+      ordinary timing difference, not an artificial race), then the
+      first candidate's own seat opens *again* before the second ever
+      claims — the still-active, deferred round gets reused for the new
+      vacancy, and the first candidate's stale reservation silently
+      blocks a fresh one. **Confirmed production-reachable, not
+      simulator-only** — this exact sequence needs no force/debug
+      controls, no unusual timing pressure, nothing a real two-person
+      Q&A couldn't produce on its own. Fixed at the source:
+      `markSpeakerRequestGranted` now clears the reservation the instant
+      a claim is granted (always safe — strictly after the claim itself
+      already succeeded and independently re-validated eligibility, so
+      nothing about authorization depends on the flag staying `true` a
+      moment longer), paired with a defense-in-depth guard in
+      `reserve_speaker_candidates_for_seats` so a reservation whose own
+      `status` isn't `'pending'` can never again be mistaken for a live
+      blocker, whatever set it stale. Dual-replacement isolation
+      re-verified explicitly throughout: the *other* seat's own still-
+      valid reservation is never disturbed by any of this. Added preview/
+      dev debug snapshot sections — RESERVATION LIFECYCLE (per-reservation
+      target seat, selection round, created time, eligibility, occupancy
+      match, validity) and SELECTION RECONCILIATION (last trigger,
+      before/after reservation snapshots) — via a small extension to
+      `useSpeakerSelectionReconciliation`'s own diagnostics, the same
+      shape `useActiveSpeakers`' sync diagnostics already established.
+      Verified with new deterministic real-database tests (the
+      reproduction itself, withdrawal/Cancel advancing correctly, a
+      failed-claim release, third-party-claim rejection preserved,
+      structural one-seat-per-reservation, duplicate-reconciliation
+      idempotency, concurrent-reconcile-vs-claim safety) plus a live
+      real-browser run: a natural decisive replacement, a natural
+      Final-30 expiration, then a deliberate rapid-fire stress test
+      (several Force Replace/Resolve Round Now clicks as fast as
+      possible, including one genuine dual-simultaneous-closing) — the
+      new RESERVATION LIFECYCLE section stayed clean throughout and the
+      dual replacement that followed correctly reserved two distinct
+      candidates, one per seat, with no stale state surfacing anywhere.
+      See DECISIONS.md and SESSION_LOG.md's Session 60.
 - [ ] Refresh/reconnect media recovery + speaker reconnect grace period
       (2026-08-22, real-device follow-up) — a seated speaker who
       hard-refreshed and re-activated media published correctly but never
@@ -730,10 +1585,22 @@ different dependencies. Current order:
 - [ ] Replace speaker voting — guest-eligible, same as above
 - [ ] Timer extension (tied to continue voting) — guest-eligible by
       inheritance from continue voting
-- [ ] Live emoji reactions (Realtime broadcast, ephemeral — no `reactions`
-      table needed unless we decide to persist them for analytics) —
-      guest-eligible, rate-limited per identity (guest or account, same
-      limit)
+- [x] Live emoji reactions (issue #21, pre-launch interaction pass,
+      2026-09-04) — double-tap a speaker tile to send your selected
+      emoji directly at them, rendered at the tapped position (or a
+      dedicated side lane, or hidden — a local presentation preference).
+      Realtime broadcast only, exactly as scoped here: no `reactions`
+      table, ephemeral by design. Guest-eligible, rate-limited per
+      identity (guest or account, same limit) via a server-authoritative
+      continuously-draining heat/hysteresis budget
+      (`record_stage_reaction_attempt`, migration 00000000000045) — the
+      client's own heat meter is UX only. See DECISIONS.md and
+      SESSION_LOG.md's Session 68 entry.
+- [x] Tap-center-timer speaker swap, adaptive idle transparency for the
+      lower-stage UI, and removal of the dead Gift-icon affordance (issue
+      #21, same pass) — local-only presentation polish, no product-scope
+      additions; not separately tracked line items before this pass. See
+      SESSION_LOG.md's Session 68 entry.
 - [ ] Pinned/featured comments + general "top comments" ranking
       **(account-only** to post — per PRODUCT.md; guests may still *view*
       the comment feed). Partially unlocked by issue #14: request
@@ -760,6 +1627,138 @@ score to (see ARCHITECTURE.md's Guest identity section).
 - [ ] Queue ordering that factors in reputation (Principle 4: priority, not
       control — reputation must never let someone skip the queue's
       first-come structure entirely, only move up within it)
+
+## Phase 5 — Profile & social identity
+
+A lightweight but real social profile system (issue #29) — not a full
+social network. Guest-eligible by construction throughout: nothing here
+gates comment/react/vote/RTS/speak, per the progressive-authentication
+model. Only the Follow action itself may prompt signup, inline, never a
+redirect.
+
+- [x] Profile data model — unique case-insensitive `@username` (reserved-
+      name list, DB `CHECK` constraints), avatar, display name (already
+      existed), bio (≤160 chars, plain text, no markup/auto-hyperlinking),
+      extensible `social_links` jsonb map. `public_profiles` view is the
+      anon-readable slice; the base `profiles` table's RLS stays
+      authenticated-only, unchanged.
+- [x] `/profile/[username]` public profile page — avatar, display name,
+      @username, bio, social icons, follower/following counts, join date,
+      stage-appearance count (derived, not stored). Guest-viewable, no
+      account required.
+- [x] `/profile/edit` — avatar upload/remove (new `avatars` Storage
+      bucket, owner-scoped RLS, client-side resize/compression, fallback
+      initials avatar), display name, username (prompts existing accounts
+      to choose one on first visit rather than requiring it retroactively),
+      bio, social links. Explicit Save/Cancel, per-field validation.
+- [x] Social links — Instagram/TikTok/YouTube/X/Twitch/website; accepts a
+      handle, `@handle`, or full profile URL, normalized to one canonical
+      stored value; website is allow-listed to `http(s)` only (rejects
+      `javascript:`/`data:`/other unsafe schemes); architected so a new
+      platform is one more entry in `SOCIAL_PLATFORMS`, never a migration.
+- [x] Follow system — follow/unfollow, follower/following counts visible
+      to guests, DB-enforced no-self-follow + no-duplicates, idempotent.
+- [ ] Follower/following **lists** (not just counts) — deferred; counts
+      are correct and live, but browsing the actual list of followers is
+      out of this pass's scope. See SESSION_LOG.md.
+- [x] Live-room identity integration — a registered speaker's/commenter's
+      avatar becomes tappable into their profile in speaker tiles and
+      Discussion Expanded, without triggering the surrounding vote/like/
+      comment/speaker control underneath it. Guests and accounts without a
+      username yet stay non-navigable — no fake guest profile pages.
+- [x] "My Profile" entry point inside the existing room account menu
+      (`RoomInfoOverlay`) — no revived site-wide header inside the room.
+- [x] **Profile UX polish pass** (real-iPhone feedback): the home page
+      header now shows a signed-in visitor's own avatar (`HomeAccountMenu`)
+      — tapping it opens My Profile/Edit Profile/Log out (or "Complete
+      Profile" alone, pre-username), replacing the old bare email + full-
+      width Log out button. The room's own account menu
+      (`RoomInfoOverlay`) now shares the exact same profile-link logic
+      (`AccountMenuLinks`), so both surfaces behave identically. On Edit
+      Profile, the avatar circle itself is now the photo picker (with a
+      small camera-icon affordance) — the separate "Add photo" button is
+      gone, and Remove Photo survives as small secondary text. The
+      underlying upload/resize/storage pipeline is completely unchanged.
+- [x] **Room Info redesign** (real-iPhone feedback: the sheet read as a
+      developer/settings drawer): reorganized into room identity/
+      navigation/account groups with real visual hierarchy — Home and
+      Browse Events are icon+label+description rows, not plain text; a
+      long description clamps with "Show more"; the account section
+      leads with the account holder's own avatar/name/@username (shared
+      `getOwnProfile` read, no separate identity store), with Log out
+      demoted to small secondary text. Same architecture on the mobile
+      sheet and the desktop popover.
+- [x] **Responsive/accessibility polish pass** (real iPhone landscape bug
+      report): Room Info's close button could become unreachable in
+      landscape — its header is now structurally pinned above a
+      separately-scrolling content region (not just a `vh`→`dvh` unit
+      fix, though that changed too), so ✕ can never scroll away
+      regardless of orientation, viewport height, or description length;
+      also enlarged to a real 44px touch target. Fixed the dark-mode
+      filled-button contrast the previous pass had honestly flagged
+      (4.37:1 → 4.80:1) via a new `accent-filled` token distinct from
+      the general brand `accent`, so links/icons/focus rings keep their
+      existing color. Fixed the guest home header's text wrapping at
+      narrow phone widths.
+- [x] **Desktop room navigation pass** (real-desktop regression report):
+      hiding the site-wide header for the whole time a room is mounted
+      was correct for mobile but was also silently hiding Home/Events/
+      account on desktop, where there's no comparable space pressure.
+      Desktop now gets a compact, persistent `DesktopRoomHeader` —
+      Virtual Stage/Home, Events, room name/status, viewer count, and
+      the same shared account-avatar menu, all one click away — rendered
+      as a full-width row above the stage+sidebar split, reusing the
+      existing 1024px desktop-composition breakpoint rather than a new
+      one. Mobile/tablet completely unaffected; `RoomInfoOverlay`'s own
+      content untouched (its trigger's role narrowed to secondary detail
+      now that basic navigation doesn't route through it on desktop).
+- [x] **Media Readiness + Audio Visualizer pass** (issue #21): a
+      candidate could reach a real speaker seat before camera+microphone
+      were ever verified — the only safety net was a 30s *post-seating*
+      grace timer that noticed both-off only after the fact. Added a
+      hard pre-claim invariant instead: `claimOpenSeat` (direct-join) and
+      `useAutomaticPromotion`'s auto-promotion claim both now withhold
+      the real seat claim until `prepareLocalMedia` reports camera *and*
+      microphone ready, reusing the existing selection/reservation/
+      candidate-lifecycle machinery unchanged (no new replacement queue,
+      no new client-only authorization system) — a bounded 45s readiness
+      timeout releases through the *existing* `cancel()`/
+      `withdrawSpeakerRequest` path if the candidate never grants media.
+      New `StageReadinessPrompt` ("Ready to speak?", per-device status,
+      Try Again, permission-blocked settings hint) fills the same
+      countdown-overlay/pending-control slots `CountdownOverlay`/
+      `RoomControls` already owned. Camera/mic acquisition itself changed
+      from one combined `createLocalTracks` call to two independent
+      `createLocalAudioTrack`/`createLocalVideoTrack` calls so one
+      device's failure never blocks the other's success or forces a
+      needless re-acquisition on retry. New `AudioOnlyVisualizer`
+      (camera off, mic actually publishing) uses `livekit-client`'s own
+      `createAudioAnalyser` utility against the real LiveKit audio track
+      — never fake/random motion — replacing the dead "Camera off" tile
+      area for local self-view, remote-viewed-by-audience, and
+      speaker-viewing-co-speaker alike. The existing post-seating
+      both-off inactivity grace period is completely untouched — this
+      pass only closes the *before*-join gap. Simulator seats are
+      structurally unaffected (they claim via `claimSpeakerSeat`
+      directly, never through the gated `claimOpenSeat`/
+      `checkPromotionEligibility` actions this pass wraps).
+- [x] **Media rendering bugfix pass** (real-device report on the above):
+      the local camera preview could stay stuck on "camera off" right
+      after joining until manually toggling the camera — root-caused to
+      `SelfPreview` mounting a second time (a fresh `<video>` element)
+      when the role router swaps to Speaker View on claim, reattaching an
+      already-flowing track; fixed with the same "reset `srcObject` to
+      force a repaint" nudge `livekit-client` already uses for an
+      equivalent Safari/Firefox bug, applied universally. Separately, the
+      audio-only visualizer never appeared for the local speaker's own
+      self-view at all (Speaker View's `soloMode` never renders the local
+      seat's own tile) and could stay silent even with real audio
+      flowing (a suspended `AudioContext` `createAudioAnalyser` never
+      explicitly resumes). Fixed by extracting one shared
+      `deriveParticipantMediaState` derivation used by both `SpeakerTile`
+      and a new video-or-visualizer decision in `SpeakerStage`'s own
+      self-view corner slot, and by resuming the analyser's `AudioContext`
+      explicitly. See DECISIONS.md for the full root-cause trace.
 
 ## Explicitly not on this roadmap
 

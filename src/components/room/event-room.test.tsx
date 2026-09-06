@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventRoom } from "./event-room";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 /**
@@ -42,6 +43,7 @@ const {
   mockRefetchSpeakers,
   mockJoinOpenSeat,
   mockCanPublish,
+  mockPrepareLocalMedia,
 } = vi.hoisted(() => ({
   mockHasMountedOnClient: vi.fn(() => false),
   mockIsDesktopViewport: vi.fn(() => false),
@@ -49,6 +51,14 @@ const {
   mockRefetchSpeakers: vi.fn(async () => {}),
   mockJoinOpenSeat: vi.fn(),
   mockCanPublish: vi.fn(() => false),
+  // Media Readiness pass (issue #21): defaults to fully-ready so every
+  // existing tap-empty-seat test below keeps exercising the join path
+  // unchanged — the readiness-gate describe block overrides this
+  // per-test via mockResolvedValueOnce/mockResolvedValue.
+  mockPrepareLocalMedia: vi.fn(async (): Promise<MediaReadinessState> => ({
+    camera: { ready: true, error: null },
+    microphone: { ready: true, error: null },
+  })),
 }));
 
 vi.mock("@/hooks/use-has-mounted-on-client", () => ({
@@ -80,16 +90,31 @@ vi.mock("@/hooks/use-lobby-realtime", () => ({
   }),
 }));
 vi.mock("@/hooks/use-live-room-connection", () => ({
+  // Media Readiness pass (issue #21): a real, pure function (not a
+  // vi.fn()) — handleTapEmptySeat imports this directly from the same
+  // module useLiveRoomConnection itself lives in, so the mock factory
+  // must re-export it too, same reasoning as every other named export
+  // this file's tests actually exercise.
+  describeMediaReadinessFailure: (readiness: { camera: { ready: boolean }; microphone: { ready: boolean } }) => {
+    const cameraFailed = !readiness.camera.ready;
+    const micFailed = !readiness.microphone.ready;
+    if (cameraFailed && micFailed) return "Camera and microphone access are required to join the stage.";
+    if (cameraFailed) return "Camera access is required to join the stage.";
+    if (micFailed) return "Microphone access is required to join the stage.";
+    return "";
+  },
   useLiveRoomConnection: () => ({
     status: "connected",
     participantCount: 1,
     mediaError: null,
     canPublish: mockCanPublish(),
     needsMediaActivation: false,
-    activateMedia: vi.fn(async () => {}),
+    activateMedia: vi.fn(async () => MEDIA_READY),
+    mediaReadiness: { camera: { ready: true, error: null }, microphone: { ready: true, error: null } },
+    acquiringMedia: false,
     getParticipant: () => undefined,
     localVideoTrack: null,
-    prepareLocalMedia: vi.fn(async () => {}),
+    prepareLocalMedia: mockPrepareLocalMedia,
     releaseLocalMedia: vi.fn(),
     microphoneMuted: false,
     cameraMuted: false,
@@ -109,11 +134,33 @@ vi.mock("@/hooks/use-now", () => ({
 vi.mock("@/lib/dev-demo", () => ({
   isDevToolsAvailable: () => false,
 }));
+vi.mock("@/app/auth/actions", () => ({
+  // RoomInfoOverlay (rendered unconditionally by EventRoom, see below)
+  // imports this "use server" action for its Log out form — never
+  // actually submitted in these tests, so a bare mock is enough.
+  signOut: vi.fn(),
+}));
 vi.mock("@/app/events/[id]/room/actions", () => ({
   joinOpenSeat: mockJoinOpenSeat,
   reportSpeakerMediaActive: vi.fn(),
   reportSpeakerMediaInactive: vi.fn(),
   confirmOwnSeatExpiration: vi.fn(),
+  // Issue #21, fourth corrective pass: useStageRoundReconciliation (now
+  // wired into EventRoom) calls this whenever occupancy changes — a
+  // harmless no-op mock, same as every other action here this file's
+  // own composition tests don't otherwise care about.
+  reconcileStageRoundAction: vi.fn(),
+  // Issue #21, fifth corrective pass: useSpeakerSelectionReconciliation's
+  // own equivalent — same reasoning.
+  reconcileSpeakerSelectionAction: vi.fn(),
+}));
+
+vi.mock("@/components/room/session-simulator-panel", () => ({
+  // Pre-launch interaction pass: a thin stand-in — this file's own tests
+  // exercise only whether EventRoom mounts this at all (the
+  // isPreviewBuild && isSimulatorUiEnabled gate), never the real panel's
+  // own extensive behavior (covered by session-simulator-panel.test.tsx).
+  SessionSimulatorPanel: () => <div data-testid="session-simulator-panel" />,
 }));
 
 vi.mock("@/components/room/portrait-room", () => ({
@@ -123,9 +170,15 @@ vi.mock("@/components/room/portrait-room", () => ({
   // branch, and every other existing test in this file ignores an
   // unclicked button, so this is safe to add unconditionally rather than
   // needing a second, parallel mock just for that describe block.
-  PortraitRoom: (props: { participantRole: string; onTapEmptySeat?: () => void; joinSeatMessage?: string | null }) => (
+  PortraitRoom: (props: {
+    participantRole: string;
+    onTapEmptySeat?: () => void;
+    joinSeatMessage?: string | null;
+    onOpenRoomInfo?: () => void;
+  }) => (
     <div data-testid="portrait-room" data-role={props.participantRole}>
       <button type="button" data-testid="tap-empty-seat" onClick={() => props.onTapEmptySeat?.()} />
+      <button type="button" data-testid="open-room-info" onClick={() => props.onOpenRoomInfo?.()} />
       {props.joinSeatMessage && <p>{props.joinSeatMessage}</p>}
     </div>
   ),
@@ -141,7 +194,8 @@ vi.mock("@/components/room/desktop-room", () => ({
   ),
 }));
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
@@ -166,11 +220,19 @@ function mySeat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
 
-function renderEventRoom(initialSpeakers: EventSpeaker[]) {
+function renderEventRoom(
+  initialSpeakers: EventSpeaker[],
+  overrides: { isPreviewBuild?: boolean; isSimulatorUiEnabled?: boolean } = {},
+) {
   return render(
     <EventRoom
       event={event}
@@ -181,6 +243,9 @@ function renderEventRoom(initialSpeakers: EventSpeaker[]) {
       initialMessages={[]}
       initialReactions={{}}
       initialHasPendingRequest={false}
+      initialPendingRequests={[]}
+      isPreviewBuild={overrides.isPreviewBuild ?? false}
+      isSimulatorUiEnabled={overrides.isSimulatorUiEnabled ?? false}
     />,
   );
 }
@@ -264,6 +329,9 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
+          isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
 
@@ -288,6 +356,9 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
+          isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -312,6 +383,9 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
+          isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.queryByTestId("portrait-room")).not.toBeInTheDocument();
@@ -328,6 +402,9 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
+          isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -389,6 +466,100 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
     });
   });
 
+  describe("Media Readiness pass (issue #21): direct-join (handleTapEmptySeat) is gated on verified camera+microphone readiness, not just an uncontested seat", () => {
+    beforeEach(() => {
+      // Issue #18's own "ownership contradiction"/"ordinary rejection"
+      // tests immediately above also tap the empty seat, which also
+      // calls prepareLocalMedia (handleTapEmptySeat's own gate) — their
+      // own afterEach clears joinOpenSeat/refetchSpeakers but not this
+      // mock, so its call count carries into whichever test runs next.
+      // Cleared here (not just this describe's own afterEach) so every
+      // test's own toHaveBeenCalledTimes assertion starts from zero
+      // regardless of what ran before this describe block.
+      mockPrepareLocalMedia.mockClear();
+    });
+    afterEach(() => {
+      mockJoinOpenSeat.mockClear();
+      mockRefetchSpeakers.mockClear();
+      mockPrepareLocalMedia.mockReset();
+      mockPrepareLocalMedia.mockResolvedValue({
+        camera: { ready: true, error: null },
+        microphone: { ready: true, error: null },
+      });
+    });
+
+    it("never calls joinOpenSeat when camera readiness fails — no real seat claim before both devices are verified", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockPrepareLocalMedia.mockResolvedValueOnce({
+        camera: { ready: false, error: "permission-denied" },
+        microphone: { ready: true, error: null },
+      });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockPrepareLocalMedia).toHaveBeenCalledTimes(1);
+      });
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByText(/camera access is required/i)).toBeInTheDocument();
+    });
+
+    it("never calls joinOpenSeat when microphone readiness fails", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockPrepareLocalMedia.mockResolvedValueOnce({
+        camera: { ready: true, error: null },
+        microphone: { ready: false, error: "no-device" },
+      });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockPrepareLocalMedia).toHaveBeenCalledTimes(1);
+      });
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByText(/microphone access is required/i)).toBeInTheDocument();
+    });
+
+    it("never calls joinOpenSeat when both camera and microphone readiness fail", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockPrepareLocalMedia.mockResolvedValueOnce({
+        camera: { ready: false, error: "no-device" },
+        microphone: { ready: false, error: "no-device" },
+      });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockPrepareLocalMedia).toHaveBeenCalledTimes(1);
+      });
+      expect(mockJoinOpenSeat).not.toHaveBeenCalled();
+      expect(screen.getByText(/camera and microphone access are required/i)).toBeInTheDocument();
+    });
+
+    it("calls joinOpenSeat once both camera and microphone report ready — the real claim proceeds normally when readiness succeeds", async () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+      mockJoinOpenSeat.mockResolvedValue({ ok: true });
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("tap-empty-seat"));
+
+      await waitFor(() => {
+        expect(mockJoinOpenSeat).toHaveBeenCalledWith("e1");
+      });
+    });
+  });
+
   describe("automatic seat reconciliation — no second Join tap required (issue #18 real-device finding, 2026-08-28: the split-layout bug reproduced again; a second manual Join tap fixed it, proving the reconciliation mechanism existed but nothing triggered it automatically)", () => {
     afterEach(() => {
       mockRefetchSpeakers.mockClear();
@@ -426,6 +597,9 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
+          isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
 
@@ -465,6 +639,9 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
           initialMessages={[]}
           initialReactions={{}}
           initialHasPendingRequest={false}
+          initialPendingRequests={[]}
+          isPreviewBuild={false}
+          isSimulatorUiEnabled={false}
         />,
       );
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
@@ -480,6 +657,77 @@ describe("EventRoom — first-load composition consistency (issue #18 finding)",
       renderEventRoom([mySeat()]); // participantRole already "speaker" — no contradiction
       expect(screen.getByTestId("portrait-room")).toHaveAttribute("data-role", "speaker");
       expect(mockRefetchSpeakers).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #21, seventh corrective pass, Sections 8-15, 41: the collapsed
+  // room/navigation overlay is rendered once, by EventRoom itself, as a
+  // sibling of the composition branch — opening/closing it must never
+  // remount the composition or touch any live room state. See
+  // RoomInfoOverlay's own doc comment.
+  describe("room/navigation overlay (Sections 8-15) — rendered once, never wrapping the composition", () => {
+    it("is closed by default, and opens when the composition's own trigger calls onOpenRoomInfo", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+
+      renderEventRoom([]);
+      expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("open-room-info"));
+      expect(screen.getByTestId("room-info-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("room-info-panel")).toHaveTextContent(event.title);
+    });
+
+    it("opening and closing the overlay never remounts the composition underneath it — the exact same DOM node throughout (Section 41: 'must not unnecessarily reconnect/reset state')", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+
+      renderEventRoom([]);
+      const compositionBeforeOpen = screen.getByTestId("portrait-room");
+
+      fireEvent.click(screen.getByTestId("open-room-info"));
+      expect(screen.getByTestId("portrait-room")).toBe(compositionBeforeOpen);
+
+      fireEvent.click(screen.getByTestId("room-info-close"));
+      expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("portrait-room")).toBe(compositionBeforeOpen);
+    });
+
+    it("closes on a backdrop click, restoring the stage exactly as before", () => {
+      mockHasMountedOnClient.mockReturnValue(true);
+      mockIsDesktopViewport.mockReturnValue(false);
+      mockOrientation.mockReturnValue("portrait");
+
+      renderEventRoom([]);
+      fireEvent.click(screen.getByTestId("open-room-info"));
+      expect(screen.getByTestId("room-info-panel")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("room-info-backdrop"));
+      expect(screen.queryByTestId("room-info-panel")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Session Simulator launch visibility (pre-launch interaction pass): a separate, narrower gate than isPreviewBuild alone", () => {
+    it("does not render the simulator panel when both isPreviewBuild and isSimulatorUiEnabled are false (ordinary production)", () => {
+      renderEventRoom([], { isPreviewBuild: false, isSimulatorUiEnabled: false });
+      expect(screen.queryByTestId("session-simulator-panel")).not.toBeInTheDocument();
+    });
+
+    it("does not render the simulator panel on an ordinary Vercel preview (isPreviewBuild true) when isSimulatorUiEnabled is not explicitly on — a preview deployment alone must not expose it", () => {
+      renderEventRoom([], { isPreviewBuild: true, isSimulatorUiEnabled: false });
+      expect(screen.queryByTestId("session-simulator-panel")).not.toBeInTheDocument();
+    });
+
+    it("does not render the simulator panel merely because isSimulatorUiEnabled is true, if isPreviewBuild is somehow false — both are required, defense in depth", () => {
+      renderEventRoom([], { isPreviewBuild: false, isSimulatorUiEnabled: true });
+      expect(screen.queryByTestId("session-simulator-panel")).not.toBeInTheDocument();
+    });
+
+    it("renders the simulator panel only when both isPreviewBuild and isSimulatorUiEnabled are explicitly true — the intentional internal-development condition", () => {
+      renderEventRoom([], { isPreviewBuild: true, isSimulatorUiEnabled: true });
+      expect(screen.getByTestId("session-simulator-panel")).toBeInTheDocument();
     });
   });
 });

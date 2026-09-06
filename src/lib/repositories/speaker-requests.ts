@@ -4,10 +4,15 @@ import type { SeatIdentity } from "@/lib/repositories/event-speakers";
 
 /**
  * `status` is a Postgres CHECK-constrained text column, not a native
- * enum — see migration 00000000000011. Kept in sync with that CHECK by
- * hand, same discipline as `LeftReason` in event-speakers.ts.
+ * enum — see migration 00000000000011 (widened by 00000000000019 to add
+ * 'expired'). Kept in sync with that CHECK by hand, same discipline as
+ * `LeftReason` in event-speakers.ts.
+ *
+ * 'expired' (issue #21, Phase 1): the bulk pool-reset outcome — every
+ * other still-pending request when a new speaker successfully joins,
+ * distinct from 'withdrawn' (the requester's own voluntary action).
  */
-export type RequestStatus = "pending" | "granted" | "withdrawn";
+export type RequestStatus = "pending" | "granted" | "withdrawn" | "expired";
 
 export type SpeakerRequest = {
   id: string;
@@ -19,6 +24,41 @@ export type SpeakerRequest = {
   status: RequestStatus;
   created_at: string;
   resolved_at: string | null;
+  /** Issue #21, Phase 1: which frozen selection round (if any) this request was captured into — see freeze_speaker_candidates. Null until frozen. */
+  selection_round_id: string | null;
+  /** 1-indexed rank within its frozen round at the moment of freezing (never recomputed against live votes mid-round) — null until frozen. */
+  frozen_rank: number | null;
+  /** Vote count snapshot at freeze time — null until frozen. */
+  frozen_vote_count: number | null;
+  /** True for at most one request per (round, seat) — the current deterministic (highest-votes) pick for whichever seat `reserved_seat_number` names, or the runner-up after an advance. Issue #21, fifth corrective pass: up to *two* requests in the same round can be `is_current_candidate` simultaneously now, one per open seat — never two for the same seat. */
+  is_current_candidate: boolean;
+  /** True once this request was the current candidate and failed to claim the seat (withdrew) — excluded from future re-selection within the same round, per Section D. */
+  selection_failed: boolean;
+  /** Issue #21, fifth corrective pass: which seat (1 or 2) this request is currently reserved for — set only alongside `is_current_candidate`, null otherwise. See migration 00000000000032. */
+  reserved_seat_number: 1 | 2 | null;
+};
+
+export type SpeakerRequestVote = {
+  id: string;
+  event_id: string;
+  voter_profile_id: string | null;
+  voter_guest_id: string | null;
+  request_id: string;
+  created_at: string;
+};
+
+export type FrozenCandidate = {
+  round_id: string;
+  request_id: string;
+  profile_id: string | null;
+  guest_id: string | null;
+  message_id: string;
+  rank: number;
+  vote_count: number;
+  /** Whether this candidate is already the round's committed current pick — lets the caller skip re-selecting when freeze_speaker_candidates returns an already-resolved round (its own idempotent-repeat-call path). */
+  is_current: boolean;
+  /** Issue #21, fifth corrective pass: which seat this candidate is currently reserved for, if `is_current` — null otherwise. */
+  reserved_seat_number: 1 | 2 | null;
 };
 
 export type RankedSpeakerRequest = {
@@ -52,6 +92,37 @@ export async function getPendingRequestForIdentity(
     .eq("status", "pending")
     .maybeSingle();
   return (data as SpeakerRequest | null) ?? null;
+}
+
+/**
+ * Every currently-pending request for an event, oldest first (FIFO) —
+ * issue #21's "Top Speaker Requests" section. `speaker_requests` has a
+ * public "publicly viewable" select policy (migration 00000000000011),
+ * so this is a plain ordinary-client read, not a service-role query —
+ * same tier as `listRecentMessages`/`listActiveSpeakers`.
+ *
+ * **Ordering, documented per explicit instruction**: this is FIFO by
+ * `created_at`, a deliberately temporary signal — there is no vote/like/
+ * score column on this table today, and the one real ranking signal
+ * that exists (`rank_pending_speaker_requests`, reputation-weighted) is
+ * a trusted-server-only RPC that reads `profiles.reputation_score`
+ * directly, and was already explicitly decided *not* to be exposed as a
+ * public leaderboard when issue #23 built it (see this file's own
+ * `rankPendingSpeakerRequests` doc comment and DECISIONS.md) — reusing
+ * it here would silently reverse that decision, not extend it. FIFO
+ * order needs no new column and reverses cleanly once a real audience
+ * signal (likes on the request's own chat message, e.g.) exists to
+ * order by instead.
+ */
+export async function listPendingSpeakerRequests(eventId: string): Promise<SpeakerRequest[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("speaker_requests")
+    .select("*")
+    .eq("event_id", eventId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+  return (data as SpeakerRequest[] | null) ?? [];
 }
 
 /**
@@ -173,14 +244,213 @@ export async function rankPendingSpeakerRequests(eventId: string): Promise<Ranke
  * already made in TypeScript before this is ever called; this is just
  * recording the outcome. Identity-agnostic (operates on the request id,
  * not the identity that made it), so issue #16 needed no change here.
+ *
+ * **Issue #21, nineteenth corrective pass: also consumes the
+ * reservation itself** (`is_current_candidate: false`,
+ * `reserved_seat_number: null`), not just the request's own `status`.
+ * Root cause this closes: every reservation-aware reader in this schema
+ * (`reserve_speaker_candidates_for_seats`'s "already has a live
+ * reservation" check, `withdraw_speaker_request(_as_guest)`'s exhaustion
+ * check, `release_failed_speaker_claim`'s own idempotency guard) treats
+ * `is_current_candidate = true` as "this reservation is still live and
+ * meaningful" — but before this fix, a winning candidate's own row kept
+ * that flag `true` forever after their claim succeeded, because
+ * `resetSpeakerCandidatePool`'s bulk wipe deliberately excludes the
+ * winner's own row (`id != p_winning_request_id`) and, in the dual-
+ * replacement case, *defers entirely* (does nothing at all) whenever the
+ * *other* seat still has a live reservation in flight. A real production
+ * sequence reproduces this with no simulator/bypass involved: both seats
+ * open, candidate X reserved for seat 1 and candidate Y for seat 2 in
+ * the same round; X claims first (their own promotion countdown simply
+ * finishes before Y's) — the pool reset defers because Y is still
+ * pending; if seat 1 then becomes vacant *again* before Y ever claims
+ * (X disconnects, leaves voluntarily, or loses a fast subsequent
+ * narrow-loss), the still-`active` round is reused for that new vacancy,
+ * and X's stale-but-never-cleared `is_current_candidate = true` makes
+ * every reservation-aware reader above believe seat 1 already has a live
+ * candidate — silently blocking real selection for it. Clearing the
+ * flag the instant a claim is granted — always safe, since this is
+ * strictly *after* `claimSpeakerSeat` has already succeeded and
+ * independently re-validated eligibility itself; nothing about the
+ * claim's own authorization depends on this flag staying `true` a moment
+ * longer — closes this at its actual source rather than teaching every
+ * downstream reader to second-guess a flag that should have meant
+ * "still live" in the first place. See migration 00000000000043's own
+ * doc comment for the paired defense-in-depth guard and DECISIONS.md for
+ * the full investigation.
  */
 export async function markSpeakerRequestGranted(requestId: string): Promise<void> {
   const supabase = createServiceClient();
   const { error } = await supabase
     .from("speaker_requests")
-    .update({ status: "granted", resolved_at: new Date().toISOString() })
+    .update({ status: "granted", resolved_at: new Date().toISOString(), is_current_candidate: false, reserved_seat_number: null })
     .eq("id", requestId)
     .eq("status", "pending");
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Issue #21, Phase 1: casts/transfers/toggles the caller's one active
+ * vote for an event onto the currently-pending request behind a given
+ * message — see migration 00000000000019's `cast_speaker_request_vote`
+ * for the actual transfer/toggle semantics (Section A: voting for B
+ * removes the vote from A; re-voting for the same request removes it
+ * entirely). Self-service, auth.uid()-derived, same tier as
+ * `requestToSpeak`.
+ */
+export async function castSpeakerRequestVote(
+  eventId: string,
+  messageId: string,
+): Promise<{ votedRequestId: string | null }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("cast_speaker_request_vote", {
+    p_event_id: eventId,
+    p_message_id: messageId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return { votedRequestId: data?.[0]?.voted_request_id ?? null };
+}
+
+/** A guest's own vote (issue #16-style exception) — service-role-only, same tier as `requestToSpeakAsGuest`. */
+export async function castSpeakerRequestVoteAsGuest(
+  eventId: string,
+  messageId: string,
+  guestId: string,
+): Promise<{ votedRequestId: string | null }> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("cast_speaker_request_vote_as_guest", {
+    p_event_id: eventId,
+    p_message_id: messageId,
+    p_guest_id: guestId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return { votedRequestId: data?.[0]?.voted_request_id ?? null };
+}
+
+/**
+ * Issue #21, Phase 1: ranks currently-pending requests by vote count and
+ * freezes the Top 3 into a new selection round — see migration
+ * 00000000000019's `freeze_speaker_candidates`. Trusted-server-only
+ * (writes selection state); returns an empty array when there are no
+ * pending requests at all (Section C's "0 candidates" case — the caller
+ * creates no round and leaves the seat open normally).
+ */
+export async function freezeSpeakerCandidates(eventId: string): Promise<FrozenCandidate[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("freeze_speaker_candidates", { p_event_id: eventId });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => ({
+    round_id: row.round_id,
+    request_id: row.request_id,
+    profile_id: row.profile_id,
+    guest_id: row.guest_id,
+    message_id: row.message_id,
+    rank: row.rank,
+    vote_count: row.vote_count,
+    is_current: row.is_current,
+    reserved_seat_number: row.reserved_seat_number as 1 | 2 | null,
+  }));
+}
+
+/**
+ * Issue #21, fifth corrective pass, Section 4: the atomic, seat-aware
+ * reservation step — see migration 00000000000036's own doc comment for
+ * the exact race this closes (two concurrent callers each deciding the
+ * same top-ranked candidate for two different seats from a stale
+ * snapshot). Whole decision — "for every seat in `seatNumbers`, reserve
+ * the highest-ranked still-unreserved candidate" — happens in one
+ * transaction, with the frozen round's own rows locked for its
+ * duration; a second concurrent call blocks until the first commits,
+ * then sees the now-current reservations and skips whatever's already
+ * taken. Assumes the round is already frozen (call `freezeSpeakerCandidates`
+ * first) — a no-op (empty array) if there's no active round at all.
+ */
+export async function reserveSpeakerCandidatesForSeats(eventId: string, seatNumbers: (1 | 2)[]): Promise<FrozenCandidate[]> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc("reserve_speaker_candidates_for_seats", {
+    p_event_id: eventId,
+    p_seat_numbers: seatNumbers,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return (data ?? []).map((row) => ({
+    round_id: row.round_id,
+    request_id: row.request_id,
+    profile_id: row.profile_id,
+    guest_id: row.guest_id,
+    message_id: row.message_id,
+    rank: row.rank,
+    vote_count: row.vote_count,
+    is_current: row.reserved_seat_number !== null,
+    reserved_seat_number: row.reserved_seat_number as 1 | 2 | null,
+  }));
+}
+
+/**
+ * Commits the deterministic highest-votes pick (or a runner-up
+ * advancement) computed in application code — see actions.ts'
+ * `ensureActiveSelectionRound`. Trusted-server-only.
+ *
+ * Issue #21, fifth corrective pass: now seat-aware — `seatNumber` is
+ * which open seat this candidate is being reserved for, so two
+ * candidates can be simultaneously reserved (one per seat) without
+ * clobbering each other. See migration 00000000000032's own doc comment
+ * for the exact clear-then-set semantics (scoped to this seat only,
+ * never the whole round).
+ */
+export async function setCurrentSpeakerCandidate(roundId: string, requestId: string, seatNumber: 1 | 2): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("set_current_speaker_candidate", {
+    p_round_id: roundId,
+    p_request_id: requestId,
+    p_seat_number: seatNumber,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Issue #21, tenth corrective pass, Section 13: an authorized candidate's
+ * seat claim itself failed (a genuine race, not a withdrawal) — releases
+ * their reservation and atomically advances the next-ranked eligible
+ * candidate into it, server-side, under this round's own row lock. See
+ * migration 00000000000039's own doc comment for the full reasoning,
+ * including why this deliberately does *not* set `selection_failed`
+ * (unlike withdrawal) — a claim failure is presumptively transient, not
+ * a permanent disqualification. Trusted-server-only; a safe no-op if the
+ * request has already changed underneath the caller (claimed, withdrawn,
+ * or released by a concurrent caller).
+ */
+export async function releaseFailedSpeakerClaim(requestId: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("release_failed_speaker_claim", { p_request_id: requestId });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Issue #21, Phase 1, Section E: the authoritative, race-safe candidate-
+ * pool reset — called once, immediately after a successful claim/grant.
+ * See migration 00000000000019's `reset_speaker_candidate_pool` for the
+ * exact bulk-expire + vote-clear behavior. Trusted-server-only.
+ */
+export async function resetSpeakerCandidatePool(eventId: string, winningRequestId: string): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("reset_speaker_candidate_pool", {
+    p_event_id: eventId,
+    p_winning_request_id: winningRequestId,
+  });
   if (error) {
     throw new Error(error.message);
   }

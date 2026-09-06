@@ -1,12 +1,16 @@
 import type { LocalVideoTrack, Participant } from "livekit-client";
-import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
+import type { ConnectionStatus, MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { EventPhase } from "@/lib/events";
 import type { Identity } from "@/lib/identity";
 import type { ParticipantRole } from "@/lib/participant-role";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { RoomStatus } from "@/lib/room-status";
+import type { StageRound } from "@/lib/repositories/stage-rounds";
+import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 
 /**
  * Shared props for the portrait/landscape presentation components —
@@ -26,6 +30,8 @@ export type RoomLayoutProps = {
   myIdentity: string;
   /** The caller's actual identity — used for RoomControls' guest/account branching, distinct from `myIdentity` above. */
   identity: Identity;
+  /** Desktop navigation pass: the signed-in account's own avatar, for `DesktopRoomHeader`'s account menu — `null` for a guest or an account without one yet. Threaded through from `EventRoom`'s own `identityAvatarUrl` prop (see its doc comment); PortraitRoom/MobileLandscapeRoom receive it too but don't use it. */
+  identityAvatarUrl?: string | null;
   isSpeaker: boolean;
   /** Issue #18 consistency fix: which seat (if any) the viewer holds — computed once in EventRoom, alongside isSpeaker, from the same data (see lib/participant-role.ts). Only ever non-null when isSpeaker is also true. Passed to SpeakerStage so it never has to re-derive this itself. */
   mySeatNumber: 1 | 2 | null;
@@ -80,20 +86,49 @@ export type RoomLayoutProps = {
   /** True once canPublish but camera/mic hasn't been activated in this tab — RoomControls shows an explicit tap-to-enable affordance for this (see activateMedia's own doc comment for why it can't just happen automatically). */
   needsMediaActivation: boolean;
   /** Must be invoked directly from a click handler — see useLiveRoomConnection's activateMedia. */
-  activateMedia: () => Promise<void>;
+  activateMedia: () => Promise<MediaReadinessState>;
   mediaError: MediaError;
+  /** Media readiness pass: per-device camera/microphone readiness — see useLiveRoomConnection's own doc comment on MediaReadinessState. */
+  mediaReadiness: MediaReadinessState;
+  /** Media readiness pass: true while a prepareLocalMedia()/activateMedia() acquisition is in flight. */
+  acquiringMedia: boolean;
   /** Issue #22: the local participant's own held camera track (prepared ahead of promotion, or already published), or null when there's nothing to preview — see SpeakerStage/SelfPreview. */
   localVideoTrack: LocalVideoTrack | null;
   /** Issue #22: acquires camera+mic once, ahead of any seat — triggered from the mic-request composer's own submit gesture (see ChatPanel), never automatically. */
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   /** Real-device reconnect-grace-period finding: LiveKit identities currently believed disconnected-but-within-grace — see useSpeakerReconnectGrace and SpeakerTile's own isReconnecting doc comment. */
   reconnectingIdentities: ReadonlySet<string>;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /** Issue #21, Phase 1: every currently-pending speaker request, ranked by live vote count — the live (never frozen) source for Expanded Comments' "Top Speaker Requests" section. See useActiveSpeakerRequests' own doc comment for why this stays live while Recent Comments freezes. */
+  pendingRequests: RankedPendingRequest[];
+  /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible speaker/comment-author/RTS-candidate with a public profile — computed once in EventRoom (`useProfileDirectory`), passed straight through to SpeakerStage/ExpandedComments. */
+  profileDirectory: Record<string, ProfileDirectoryEntry>;
   /** Issue #18, Speaker View Phase 2: whether the local participant's own published microphone/camera are currently muted — see useLiveRoomConnection's own doc comment. */
   microphoneMuted: boolean;
   cameraMuted: boolean;
   /** Toggles mute in place on the already-published track — see useLiveRoomConnection's own doc comment for why this is never setMicrophoneEnabled/setCameraEnabled. */
   toggleMicrophone: () => Promise<void>;
   toggleCamera: () => Promise<void>;
+  /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`), never re-derived client-side — see lib/preview-mode.ts. Governs the full-time speaker-round timer test presentation only; the real product default is final-~10s-only. */
+  isPreviewBuild: boolean;
+  /**
+   * Issue #21, Session Simulator real-device follow-up: guest ids the
+   * Session Simulator has generated *in this browser tab* — cosmetic-only,
+   * lets SpeakerTile render an obviously-simulated placeholder ("Simulated
+   * speaker") instead of the ambiguous generic "Camera off" state for a
+   * seat it knows is fake. Never authoritative (a different tab that never
+   * opened the simulator won't have these ids and will show the ordinary
+   * placeholder instead — acceptable since this is a testing aid for
+   * whoever is running the simulator, not a synced piece of room state).
+   * Always an empty set outside `isPreviewBuild` — SessionSimulatorPanel
+   * (the only thing that ever populates it) isn't mounted in production.
+   */
+  simulatedGuestIds: ReadonlySet<string>;
+  /** Issue #21 corrective pass: the shared round clock for the current stage pairing — see lib/repositories/stage-rounds.ts. Null before any seat has ever been claimed for the event. Rendered once, at the stage level (SpeakerStage), never per-tile — see that component's own doc comment. */
+  stageRound: StageRound | null;
+  /** Issue #21, seventh corrective pass, Sections 8-15: opens the collapsed room/navigation overlay — see RoomInfoOverlay's own doc comment. Owned by EventRoom (the overlay itself renders once, there); every composition just wires its own trigger to this. */
+  onOpenRoomInfo: () => void;
+  /** Pre-launch interaction pass: the one shared directed-reactions controller (`useReactionsController`, instantiated once in EventRoom) — see SpeakerStage's own `stageReactions` doc comment for why this isn't named `reactions` (that name is already taken, above, by the unrelated lobby comment-reaction counts). */
+  stageReactions: ReactionsController;
 };

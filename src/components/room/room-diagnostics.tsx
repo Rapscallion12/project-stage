@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import type { ConnectionStatus, MediaError } from "@/hooks/use-live-room-connection";
+import { Track, type Participant } from "livekit-client";
+import { getParticipantIdentity } from "@/lib/livekit/token";
+import { deriveParticipantMediaState } from "@/lib/participant-media-state";
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 /**
  * TEMPORARY — added to diagnose issue #15's real-device failure (camera/mic
@@ -37,6 +41,10 @@ export function RoomDiagnostics({
   needsMediaActivation,
   mediaError,
   participantCount,
+  speakers,
+  getParticipant,
+  myIdentity,
+  reconnectingIdentities,
 }: {
   identityType: "profile" | "guest";
   isSpeaker: boolean;
@@ -47,6 +55,20 @@ export function RoomDiagnostics({
   needsMediaActivation: boolean;
   mediaError: MediaError;
   participantCount: number;
+  /**
+   * Media rendering bugfix pass: added so this panel can show, per seat,
+   * exactly which fields `SpeakerTile`/`SpeakerStage`'s own render
+   * branch actually reads — real-device reports of a stale camera
+   * preview or a missing audio-only visualizer are otherwise
+   * unreproducible in this environment (no camera/mic hardware) without
+   * something exposing the live values a real device sees. Optional —
+   * every existing caller/test that doesn't care about this section can
+   * omit all four and see nothing added.
+   */
+  speakers?: EventSpeaker[];
+  getParticipant?: (identity: string) => Participant | undefined;
+  myIdentity?: string;
+  reconnectingIdentities?: ReadonlySet<string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
@@ -103,8 +125,88 @@ export function RoomDiagnostics({
             {testing ? "Testing…" : "Test camera/mic permission directly"}
           </button>
           {testResult && <p className="mt-2 font-medium">{testResult}</p>}
+          {speakers && getParticipant && myIdentity && (
+            <MediaRenderDebug
+              speakers={speakers}
+              getParticipant={getParticipant}
+              myIdentity={myIdentity}
+              reconnectingIdentities={reconnectingIdentities ?? new Set()}
+            />
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * TEMPORARY — media rendering bugfix pass (real-device report): per-seat
+ * dump of exactly what `SpeakerTile`/`SpeakerStage`'s own render branch
+ * reads, so a real device can pin down which field is actually stale
+ * without guessing. Remove once the two reported bugs (stale camera
+ * preview immediately after joining, missing audio-only visualizer) are
+ * confirmed fixed on a real device — see SESSION_LOG.md/DECISIONS.md.
+ */
+function MediaRenderDebug({
+  speakers,
+  getParticipant,
+  myIdentity,
+  reconnectingIdentities,
+}: {
+  speakers: EventSpeaker[];
+  getParticipant: (identity: string) => Participant | undefined;
+  myIdentity: string;
+  reconnectingIdentities: ReadonlySet<string>;
+}) {
+  return (
+    <div className="mt-3 border-t border-dashed border-amber-600 pt-2">
+      <p className="mb-1 font-semibold">MEDIA RENDER DEBUG</p>
+      {[1, 2].map((seatNumber) => {
+        const seat = speakers.find((s) => s.seat_number === seatNumber) ?? null;
+        if (!seat) return <p key={seatNumber}>Seat {seatNumber}: empty</p>;
+        const identity = getParticipantIdentity(
+          seat.profile_id ? { type: "profile", id: seat.profile_id } : { type: "guest", id: seat.guest_id! },
+        );
+        const isLocal = identity === myIdentity;
+        const participant = getParticipant(identity);
+        const cameraPub = participant?.getTrackPublication(Track.Source.Camera);
+        const micPub = participant?.getTrackPublication(Track.Source.Microphone);
+        const media = deriveParticipantMediaState(participant);
+        const isInactive = reconnectingIdentities.has(identity);
+        const renderBranch = isLocal
+          ? media.hasVideo || media.hasAudio
+            ? "own-seat-live (neutral text, see corner slot)"
+            : isInactive
+              ? "inactive"
+              : "placeholder"
+          : media.hasVideo
+            ? "video"
+            : isInactive
+              ? "inactive"
+              : media.hasAudio
+                ? "visualizer"
+                : "placeholder";
+        return (
+          <ul key={seatNumber} className="mb-2 grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+            <li className="sm:col-span-2 font-medium">
+              Seat {seatNumber} — {isLocal ? "LOCAL" : "remote"} — identity: {identity}
+            </li>
+            <li>Participant sid: {participant?.sid ?? "none"}</li>
+            <li>Camera publication exists: {String(Boolean(cameraPub))}</li>
+            <li>Camera subscribed: {String(Boolean(cameraPub?.isSubscribed))}</li>
+            <li>Camera muted: {String(cameraPub?.isMuted ?? "n/a")}</li>
+            <li>Camera track sid: {cameraPub?.trackSid ?? "none"}</li>
+            <li>Audio publication exists: {String(Boolean(micPub))}</li>
+            <li>Audio subscribed: {String(Boolean(micPub?.isSubscribed))}</li>
+            <li>Audio muted: {String(micPub?.isMuted ?? "n/a")}</li>
+            <li>Audio track sid: {micPub?.trackSid ?? "none"}</li>
+            <li>hasVideo: {String(media.hasVideo)}</li>
+            <li>hasAudio: {String(media.hasAudio)}</li>
+            <li>inactive: {String(isInactive)}</li>
+            <li className="sm:col-span-2">Render branch: {renderBranch}</li>
+          </ul>
+        );
+      })}
     </div>
   );
 }

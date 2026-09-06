@@ -1,6 +1,7 @@
 import { ChatPanel } from "@/components/lobby/chat-panel";
 import { cn } from "@/lib/utils";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 
 /**
  * Wraps the same chat the lobby uses (`event_chat_messages` is
@@ -32,7 +33,7 @@ export function RoomChatPanel({
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
   /** Issue #22: acquires camera+mic from the mic-request submit gesture — see ChatPanel. */
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   featuredSlot?: React.ReactNode;
   className?: string;
 }) {

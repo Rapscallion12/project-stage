@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { useActiveSpeakers } from "@/hooks/use-active-speakers";
+import { useActiveSpeakerRequests } from "@/hooks/use-active-speaker-requests";
 import { useAutomaticPromotion } from "@/hooks/use-automatic-promotion";
 import { useIsDesktopViewport } from "@/hooks/use-desktop-viewport";
-import { useLiveRoomConnection } from "@/hooks/use-live-room-connection";
+import { useLiveRoomConnection, describeMediaReadinessFailure } from "@/hooks/use-live-room-connection";
 import { useLobbyRealtime, type LobbyMessage, type ReactionState } from "@/hooks/use-lobby-realtime";
 import { useNow } from "@/hooks/use-now";
 import { useOrientation } from "@/hooks/use-orientation";
@@ -13,6 +14,13 @@ import { useSpeakerReconnectGrace } from "@/hooks/use-speaker-reconnect-grace";
 import { useSpeakerMediaPresenceReporting } from "@/hooks/use-speaker-media-presence";
 import { useOwnSeatExpirationConfirmation } from "@/hooks/use-own-seat-expiration-confirmation";
 import { useSeatReconciliation } from "@/hooks/use-seat-reconciliation";
+import { useReleaseStuckLocalMedia } from "@/hooks/use-release-stuck-local-media";
+import { useStageRound } from "@/hooks/use-stage-round";
+import { useStageRoundResolution } from "@/hooks/use-stage-round-resolution";
+import { useStageRoundReconciliation } from "@/hooks/use-stage-round-reconciliation";
+import { useSpeakerSelectionReconciliation } from "@/hooks/use-speaker-selection-reconciliation";
+import { useProfileDirectory } from "@/hooks/use-profile-directory";
+import { useSpeakerInvariantRecovery } from "@/hooks/use-speaker-invariant-recovery";
 import { useHasMountedOnClient } from "@/hooks/use-has-mounted-on-client";
 import { deriveParticipantRole, findMySeatNumber } from "@/lib/participant-role";
 import { inactiveSince } from "@/lib/speaker-presence";
@@ -20,14 +28,18 @@ import { PortraitRoom } from "@/components/room/portrait-room";
 import { MobileLandscapeRoom } from "@/components/room/mobile-landscape-room";
 import { DesktopRoom } from "@/components/room/desktop-room";
 import { RoomDiagnostics } from "@/components/room/room-diagnostics";
+import { RoomInfoOverlay } from "@/components/room/room-info-overlay";
+import { SessionSimulatorPanel } from "@/components/room/session-simulator-panel";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { formatCountdown, getEventPhase, type EventPhase } from "@/lib/events";
 import { isDevToolsAvailable } from "@/lib/dev-demo";
 import { joinOpenSeat } from "@/app/events/[id]/room/actions";
+import { useReactionsController } from "@/hooks/use-stage-reactions";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { SpeakerRequest } from "@/lib/repositories/speaker-requests";
 
 const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
 
@@ -88,15 +100,21 @@ const LIVEKIT_URL = process.env.NEXT_PUBLIC_LIVEKIT_URL || null;
 export function EventRoom({
   event,
   identity,
+  identityAvatarUrl = null,
   initialPhase,
   initialToken,
   initialSpeakers,
   initialMessages,
   initialReactions,
   initialHasPendingRequest,
+  initialPendingRequests,
+  isPreviewBuild,
+  isSimulatorUiEnabled,
 }: {
   event: Event;
   identity: Identity;
+  /** Visual identity pass, Room Info redesign: the signed-in account's own avatar, for `RoomInfoOverlay`'s identity block — `null` for a guest or an account without one yet. Optional/defaulted so every existing test call site stays valid unchanged. */
+  identityAvatarUrl?: string | null;
   /** Computed server-side at request time — used until the client clock (useNow) ticks past hydration, so first paint is never wrong (e.g. someone opening an already-live link lands live immediately, not on a placeholder). */
   initialPhase: EventPhase;
   initialToken: string | null;
@@ -105,9 +123,44 @@ export function EventRoom({
   initialReactions: Record<string, ReactionState>;
   /** Issue #14: whether the caller already has a pending speaker request, fetched server-side. */
   initialHasPendingRequest: boolean;
+  /** Issue #21: every currently-pending speaker request, for "Top Speaker Requests" — see useActiveSpeakerRequests' own doc comment. */
+  initialPendingRequests: SpeakerRequest[];
+  /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`) — never re-derived here, since `VERCEL_ENV` isn't reliably readable in a client component. Governs only the full-time round-timer test presentation now — see `isSimulatorUiEnabled` for the Session Simulator panel's own, separate gate (pre-launch interaction pass). */
+  isPreviewBuild: boolean;
+  /** Pre-launch interaction pass: computed server-side (`isSimulatorUiEnabled()`, lib/preview-mode.ts) — whether the Session Simulator's own UI (panel + collapsed "SIM" pill) should render at all. Deliberately narrower than, and required *in addition to*, `isPreviewBuild` — see that function's own doc comment for why a Vercel preview alone must no longer be enough. */
+  isSimulatorUiEnabled: boolean;
 }) {
   const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
-  const { speakers, roomStatus, refetch: refetchSpeakers } = useActiveSpeakers(event.id, initialSpeakers);
+  // Moved up from its original spot below (still the "one canonical
+  // myIdentity" computation, unchanged) — needed here, before
+  // useReactionsController, so the reactions controller can tag the
+  // sender's own optimistic reactions and self-filter its own eventual
+  // broadcast (real-device follow-up: see that hook's own doc comment).
+  const myIdentity = getParticipantIdentity(
+    identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
+  );
+  // Pre-launch interaction pass: one shared instance, above every
+  // composition/role branch — same discipline as useLiveRoomConnection/
+  // useActiveSpeakers above. Named `stageReactions` to avoid colliding
+  // with `reactions` above (the unrelated lobby comment-reaction counts).
+  const stageReactions = useReactionsController(event.id, myIdentity);
+  const { speakers, roomStatus, refetch: refetchSpeakers, getSyncDiagnostics: getSpeakerSyncDiagnostics } = useActiveSpeakers(
+    event.id,
+    initialSpeakers,
+  );
+  // Issue #21, sixteenth corrective pass: `refetchSpeakers` now takes an
+  // optional `reason` and returns the freshly-fetched rows (so a caller
+  // like simulator bootstrap can verify convergence directly — see
+  // SessionSimulatorPanel's own doc comment). `onClaimSucceeded`/
+  // `useSeatReconciliation`'s own `refetch` prop are typed `() => void`/
+  // `() => Promise<void>` and never need the fetched rows themselves —
+  // this is the same reconcile, just called without a reason (defaults
+  // to "manual") and with its return value discarded, never a second,
+  // parallel mechanism.
+  const refetchSpeakersAsVoid = useCallback(async () => {
+    await refetchSpeakers();
+  }, [refetchSpeakers]);
+  const { pendingRequests } = useActiveSpeakerRequests(event.id, identity, initialPendingRequests);
 
   // Issue #27: lifted above the orientation branch — like every other
   // piece of state here, this must survive a rotation, and RoomControls/
@@ -117,6 +170,30 @@ export function EventRoom({
   const [micRequestMode, setMicRequestMode] = useState(false);
   const [joinSeatMessage, setJoinSeatMessage] = useState<string | null>(null);
   const [isJoiningSeat, startJoiningSeat] = useTransition();
+
+  // Session Simulator real-device follow-up: guest ids the simulator has
+  // generated in this tab, so SpeakerTile can render an unambiguous
+  // "Simulated speaker" placeholder instead of the ordinary "Camera off"
+  // one — see RoomLayoutProps' own doc comment. Stays empty (and the
+  // registration callback below is never invoked) outside `isPreviewBuild`,
+  // since SessionSimulatorPanel — the only caller of it — isn't mounted
+  // then either.
+  const [simulatedGuestIds, setSimulatedGuestIds] = useState<ReadonlySet<string>>(new Set());
+  function registerSimulatedGuestIds(ids: string[]) {
+    setSimulatedGuestIds((prev) => new Set([...prev, ...ids]));
+  }
+
+  // Issue #21, seventh corrective pass, Sections 8-15: the collapsed
+  // room/navigation control's open/closed state — plain local UI state,
+  // deliberately not threaded through anything that decides media/seat/
+  // LiveKit state (same "presentation only" discipline `commentsOpen`
+  // already follows in PortraitRoom/MobileLandscapeRoom). Lives here,
+  // not inside any one composition, because the trigger that opens it
+  // appears in all three; RoomInfoOverlay itself renders once, below,
+  // as a sibling of the composition branch — never a wrapper around it,
+  // so opening it can't remount the stage. See RoomInfoOverlay's own
+  // doc comment.
+  const [roomInfoOpen, setRoomInfoOpen] = useState(false);
 
   function handleTapEmptySeat() {
     // Issue #18, Speaker View real-device finding: `SpeakerStage`'s own
@@ -164,8 +241,25 @@ export function EventRoom({
     // use them (retry, or the composer fallback), same as
     // prepareLocalMedia already leaves them for a composer request that
     // hasn't been promoted yet.
-    void connection.prepareLocalMedia();
+    //
+    // Media Readiness pass (issue #21): the promise itself is captured
+    // here, synchronously, in the same gesture-safe call as above — but
+    // the *readiness check* it resolves to is awaited inside
+    // startJoiningSeat's transition below, not here. This is the same
+    // seat-claim invariant this pass adds to useAutomaticPromotion's RTS
+    // path: no real claim (joinOpenSeat) fires unless both camera and
+    // microphone actually produced usable tracks. A denied/unavailable
+    // device now surfaces the same descriptive joinSeatMessage this
+    // function already uses for every other non-claim outcome, instead
+    // of claiming the seat and letting the existing post-seating grace
+    // timer discover the problem 30 seconds later.
+    const readinessPromise = connection.prepareLocalMedia();
     startJoiningSeat(async () => {
+      const readiness = await readinessPromise;
+      if (!readiness.camera.ready || !readiness.microphone.ready) {
+        setJoinSeatMessage(describeMediaReadinessFailure(readiness));
+        return;
+      }
       const result = await joinOpenSeat(event.id);
       if (result.ok) {
         // Issue #18 real-device finding (2026-08-28): previously relied
@@ -179,11 +273,20 @@ export function EventRoom({
         void refetchSpeakers();
         return;
       }
-      if (result.reason === "queue-exists") {
+      if (result.reason === "queue-exists" || result.reason === "selection-required") {
         // Issue #27's explicit queue-protection UX: a bystander tapping
         // an empty tile when a real queue exists falls back to the
         // normal request flow instead of being told "no" and left
-        // stranded — this is that fallback, not an error.
+        // stranded — this is that fallback, not an error. Issue #21,
+        // third corrective pass: `selection-required` means the same
+        // fallback applies for a different reason — the stage has moved
+        // past initial formation, so this seat is never directly
+        // tappable again regardless of queue length; submitting a
+        // Request-to-Speak is the only path to it now. This branch
+        // shouldn't even be reachable in practice once SpeakerStage
+        // stops wiring `onTapEmptySeat` at all for an established-stage
+        // empty seat (see that component's own doc comment) — kept as a
+        // defensive fallback for a stale client, never trusted alone.
         setMicRequestMode(true);
         return;
       }
@@ -211,6 +314,16 @@ export function EventRoom({
         // useActiveSpeakers' own doc comment for why its accumulated
         // state could have drifted in the first place.
         void refetchSpeakers();
+        return;
+      }
+      if (result.reason === "fallback-excluded") {
+        // Issue #21, fifth corrective pass, Section 10: this identity was
+        // one of the speaker(s) just removed the last time both seats
+        // went empty — not eligible to instantly reclaim a fallback
+        // seat this recovery cycle. Framed as guidance, not a dead-end:
+        // Request-to-Speak is still open to them (Section 11).
+        setJoinSeatMessage("You can't immediately rejoin after being removed — try Request to Speak instead.");
+        setMicRequestMode(true);
         return;
       }
       setJoinSeatMessage(result.error);
@@ -245,9 +358,6 @@ export function EventRoom({
     };
   }, []);
 
-  const myIdentity = getParticipantIdentity(
-    identity.type === "profile" ? { type: "profile", id: identity.id } : { type: "guest", id: identity.id },
-  );
   // Issue #18 consistency fix: the *one* place "which seat, if any, does
   // this identity hold" gets computed — everything downstream (isSpeaker,
   // the role routers, SpeakerStage's own solo-tile selection) reads the
@@ -306,30 +416,13 @@ export function EventRoom({
     },
   });
 
-  // Issue #18/#21: mirrors the `room-active` class above, but tracks
-  // "the live-room mobile landscape composition is actually rendering"
-  // specifically (not just "a room is mounted") — see globals.css's own
-  // comment for what this actually does (hides the site header in short
-  // landscape viewports, reclaiming space for the full-bleed
-  // composition). Originally gated on `isSpeaker` alone; broadened to
-  // `phase !== "upcoming" && !isDesktopViewport && orientation ===
-  // "landscape"` once audience landscape moved onto the same "05" shell
-  // and needed the identical treatment — this condition is true exactly
-  // when `MobileLandscapeRoom` (either its audience or its speaker
-  // branch) is the composition `EventRoom` is about to render below, so
-  // it covers both without needing two separate classes/CSS rules. A
-  // separate effect, not folded into the `room-active` one above, since
-  // this one's dependency set is real and can change repeatedly across a
-  // single mount (rotating, getting promoted, resizing past the desktop
-  // threshold), unlike `room-active`'s mount-once/unmount-once
-  // lifecycle.
-  useEffect(() => {
-    const inMobileLandscapeLiveRoom = phase !== "upcoming" && !isDesktopViewport && orientation === "landscape";
-    document.body.classList.toggle("mobile-landscape-live-active", inMobileLandscapeLiveRoom);
-    return () => {
-      document.body.classList.remove("mobile-landscape-live-active");
-    };
-  }, [phase, isDesktopViewport, orientation]);
+  // Issue #21, seventh corrective pass: the narrower
+  // `mobile-landscape-live-active` body class (and its two
+  // short-landscape-only CSS rules) that used to hide the site header
+  // only for the mobile landscape composition is retired — `room-active`
+  // above now hides it unconditionally for every composition (see
+  // globals.css's own doc comment), so a second, narrower mechanism for
+  // the same outcome is no longer needed.
 
   // Issue #23: replaces the manual "Claim your seat" button. Called
   // unconditionally here (above the phase==="upcoming" early return
@@ -337,13 +430,38 @@ export function EventRoom({
   // component — must survive rotation, and RoomControls (which renders
   // the countdown UI) is a presentation-only descendant, not where this
   // can live.
+  // Issue #21, sixth corrective pass: real-device testing found
+  // next-speaker promotion taking several seconds longer than it should
+  // — traced to `useAutomaticPromotion`'s eligibility detection being a
+  // *pure poll* (`checkPromotionEligibility`, every
+  // `POLL_INTERVAL_MS`), entirely blind to the `pendingRequests` state
+  // this component already has live, Realtime-pushed, right here —
+  // including each request's own `is_current_candidate`/
+  // `reserved_seat_number`, set by the exact same reservation RPC the
+  // poll would eventually re-discover on its own next tick. A candidate
+  // could be reserved for a seat and have that fact sitting in this
+  // component's own state for up to a full poll interval before the
+  // hook's *separate* server round-trip happened to notice. This is the
+  // reactive fast path: derived directly from already-live data, passed
+  // in as an additional, immediate trigger — the poll remains as a
+  // bounded backstop (for a missed Realtime delta), no longer the only
+  // path. See `useAutomaticPromotion`'s own doc comment for how it's
+  // used, and DECISIONS.md for the full diagnosis.
+  const myIdentityColumn = identity.type === "profile" ? "profile_id" : "guest_id";
+  const isCurrentlyReservedCandidate = pendingRequests.some(
+    (r) => r.is_current_candidate && r.reserved_seat_number !== null && r[myIdentityColumn] === identity.id,
+  );
+
   const { countdown: promotionCountdown, cancel: cancelPromotion } = useAutomaticPromotion({
     eventId: event.id,
     hasPendingRequest,
+    isCurrentlyReservedCandidate,
     isSpeaker,
     phase,
     needsMediaActivation: connection.needsMediaActivation,
     mediaError: connection.mediaError,
+    cameraReady: connection.mediaReadiness.camera.ready,
+    microphoneReady: connection.mediaReadiness.microphone.ready,
     onHasPendingRequestChange: setHasPendingRequest,
     // Issue #18 real-device finding (2026-08-28): the same immediate,
     // direct refetch as handleTapEmptySeat's own successful join above —
@@ -356,7 +474,7 @@ export function EventRoom({
     // own useCallback), and this hook's claim effect depends on it, so an
     // unstable identity here would re-schedule its countdown timer on
     // every unrelated EventRoom re-render.
-    onClaimSucceeded: refetchSpeakers,
+    onClaimSucceeded: refetchSpeakersAsVoid,
   });
 
   // Issue #18 real-device finding (2026-08-28): the automatic,
@@ -370,7 +488,22 @@ export function EventRoom({
   useSeatReconciliation({
     isSpeaker,
     canPublish: connection.canPublish,
-    refetch: refetchSpeakers,
+    refetch: refetchSpeakersAsVoid,
+  });
+
+  // Issue #21 corrective pass, real-device finding: closes the stuck
+  // self-preview/no-Leave-Stage state a lost seat-claim race could leave
+  // behind — see this hook's own doc comment for the exact mechanism.
+  // General fix (not simulator-specific): releases local media whenever
+  // every legitimate reason to hold it is absent.
+  useReleaseStuckLocalMedia({
+    isSpeaker,
+    isJoiningSeat,
+    hasPendingRequest,
+    promotionCountdown,
+    micRequestMode,
+    localVideoTrack: connection.localVideoTrack,
+    releaseLocalMedia: connection.releaseLocalMedia,
   });
 
   // Real-device reconnect-grace-period finding, issue #18 UX finding:
@@ -384,6 +517,64 @@ export function EventRoom({
     myIdentity,
     enabled: canConnect,
   });
+
+  // Issue #21 corrective pass: the shared round clock's live state —
+  // resyncs on every Realtime SUBSCRIBED, same discipline
+  // useActiveSpeakers already established.
+  const stageRound = useStageRound(event.id);
+
+  // Issue #21, Part 1/15 (corrective pass: now one shared deadline per
+  // stage pairing, plus per-seat closing deadlines): schedules the
+  // authoritative resolution trigger — runs unconditionally (not gated
+  // on canConnect/isSpeaker), so any connected client, audience
+  // included, can be the one whose timer fires and keeps a round
+  // resolving even if neither seated speaker's own tab is around to do
+  // it. See the hook's own doc comment.
+  useStageRoundResolution(event.id, stageRound, speakers);
+
+  // Issue #21, fourth corrective pass: the reactive backstop for the
+  // same invariant — re-verifies the shared round against actual current
+  // occupancy whenever occupancy itself changes. See the hook's own doc
+  // comment for why this is needed in addition to the resolution effect
+  // above (that one resolves an *already-active* round at its deadline;
+  // this one catches the round ever being active without a genuinely
+  // established pairing in the first place).
+  useStageRoundReconciliation(event.id, speakers);
+
+  // Issue #21, sixteenth corrective pass: the inverse invariant —
+  // `useStageRoundReconciliation` above re-verifies the shared round
+  // against this tab's own *speaker* occupancy; nothing previously
+  // checked the other direction. A real-device snapshot caught exactly
+  // this combination: client round #7 active, client seats occupied:
+  // none, for 13+ seconds. See the hook's own doc comment for why this
+  // is a bounded safety net, not the primary fix (that's event-driven
+  // reconciliation at the actual mutation sites, e.g.
+  // SessionSimulatorPanel's own bootstrap-confirmation calls below).
+  useSpeakerInvariantRecovery(stageRound, speakers.length, refetchSpeakers);
+
+  // Issue #21, fifth corrective pass, Section 6: the same reactive-
+  // backstop discipline, for candidate selection/reservation this time —
+  // see the hook's own doc comment for why event-driven selection alone
+  // (triggered only by an eligible candidate's own polling) isn't always
+  // enough. Any connected client re-verifies whenever its own view of
+  // occupancy or the pending-request pool changes.
+  const { getReconcileDiagnostics: getSelectionReconcileDiagnostics } = useSpeakerSelectionReconciliation(event.id, speakers, pendingRequests);
+
+  // Issue #29: every profile_id currently visible anywhere in this
+  // room's own live state — speakers, comment authors, RTS candidates —
+  // resolved once here (not per-surface) and passed straight through.
+  // `useProfileDirectory`'s own stable, deduplicated key means this is
+  // safe to recompute on every render without re-querying on every
+  // unrelated state change. Called unconditionally here, alongside this
+  // component's other hooks — every early return below (the "upcoming"
+  // phase, the neutral pre-mount state) happens *after* this point, so
+  // calling it any later would violate rules-of-hooks.
+  const visibleProfileIds = [
+    ...speakers.map((s) => s.profile_id),
+    ...messages.map((m) => m.author_profile_id),
+    ...pendingRequests.map((r) => r.profile_id),
+  ].filter((id): id is string => id !== null);
+  const profileDirectory = useProfileDirectory(visibleProfileIds);
 
   // Issue #18 unified inactive-speaker finding: the client-observed half
   // of "inactive" (see lib/speaker-presence.ts) — reports this tab's own
@@ -451,8 +642,10 @@ export function EventRoom({
     countdownText,
     roomStatus,
     speakers,
+    profileDirectory,
     myIdentity,
     identity,
+    identityAvatarUrl,
     isSpeaker,
     mySeatNumber,
     participantRole,
@@ -473,15 +666,23 @@ export function EventRoom({
     needsMediaActivation: connection.needsMediaActivation,
     activateMedia: connection.activateMedia,
     mediaError: connection.mediaError,
+    mediaReadiness: connection.mediaReadiness,
+    acquiringMedia: connection.acquiringMedia,
     localVideoTrack: connection.localVideoTrack,
     onPrepareMedia: connection.prepareLocalMedia,
     reconnectingIdentities,
     messages,
     reactions,
+    pendingRequests,
     microphoneMuted: connection.microphoneMuted,
     cameraMuted: connection.cameraMuted,
     toggleMicrophone: connection.toggleMicrophone,
     toggleCamera: connection.toggleCamera,
+    isPreviewBuild,
+    simulatedGuestIds,
+    stageRound,
+    onOpenRoomInfo: () => setRoomInfoOpen(true),
+    stageReactions,
   };
 
   return (
@@ -518,6 +719,21 @@ export function EventRoom({
        * use — a real phone testing the deployed app never sees this; a
        * local dev server still can for real-device debugging.
        */}
+      {/*
+       * Issue #21, seventh corrective pass, Sections 8-15: rendered once,
+       * here — a sibling of the composition branch above, never a
+       * wrapper around it. See RoomInfoOverlay's own doc comment for why
+       * this placement is what guarantees opening/closing it can never
+       * remount the stage or reset any live room state.
+       */}
+      <RoomInfoOverlay
+        open={roomInfoOpen}
+        onClose={() => setRoomInfoOpen(false)}
+        event={event}
+        roomStatus={roomStatus}
+        identity={identity}
+        identityAvatarUrl={identityAvatarUrl}
+      />
       {isDevToolsAvailable() && (
         <RoomDiagnostics
           identityType={identity.type}
@@ -529,6 +745,62 @@ export function EventRoom({
           needsMediaActivation={connection.needsMediaActivation}
           mediaError={connection.mediaError}
           participantCount={connection.participantCount}
+          speakers={speakers}
+          getParticipant={connection.getParticipant}
+          myIdentity={myIdentity}
+          reconnectingIdentities={reconnectingIdentities}
+        />
+      )}
+      {/*
+       * Issue #21, Part 5, narrowed by the pre-launch interaction pass:
+       * the actual security boundary is every simulator Server Action
+       * independently re-checking `isPreviewOrDevBuild()` itself
+       * (`VERCEL_ENV !== "production"` — see lib/preview-mode.ts) — this
+       * conditional render is defense in depth, not the enforcement.
+       * `isSimulatorUiEnabled` is a second, deliberately narrower
+       * condition required in addition — an ordinary Vercel preview
+       * (now also used to test the real launch-facing experience) no
+       * longer shows this UI on its own; see that function's own doc
+       * comment. Deliberately outside the main room div, same reasoning
+       * as RoomDiagnostics above: tooling, not part of the consumer room
+       * UI.
+       */}
+      {isPreviewBuild && isSimulatorUiEnabled && (
+        <SessionSimulatorPanel
+          eventId={event.id}
+          speakers={speakers}
+          pendingRequests={pendingRequests}
+          messages={messages}
+          stageRound={stageRound}
+          realJoinInProgress={isJoiningSeat || promotionCountdown !== null}
+          onSimulatedIdentitiesCreated={registerSimulatedGuestIds}
+          // Issue #21, sixteenth corrective pass: the same canonical
+          // reconcile function every other trigger in this component
+          // uses (SUBSCRIBED, visibility, focus, the invariant check
+          // above, the already-speaking contradiction below) — bootstrap
+          // calls this directly after its own authoritative seat
+          // confirmation, tagged "bootstrap", instead of only trusting
+          // Realtime to eventually deliver the same INSERT this tab's
+          // own mutation just caused. One canonical stage speaker state,
+          // never a simulator-specific duplicate.
+          refetchSpeakers={refetchSpeakers}
+          getSpeakerSyncDiagnostics={getSpeakerSyncDiagnostics}
+          getSelectionReconcileDiagnostics={getSelectionReconcileDiagnostics}
+          stageReactions={stageReactions}
+          // Issue #21, seventh corrective pass, Section 19: defense in
+          // depth alongside SessionSimulatorPanel's own database cleanup
+          // — an explicit fresh read of speaker occupancy, the same
+          // "don't just trust an incremental Realtime delta arrived"
+          // discipline useActiveSpeakers' own SUBSCRIBED-triggers-
+          // refetch already uses elsewhere. messages/pendingRequests/
+          // stageRound each already correctly clear a deleted row via
+          // their own Realtime DELETE handlers (see useStageRound's own
+          // doc comment for the real bug fixed there) — this covers the
+          // one remaining case a missed delta could leave stale.
+          onSimulatorReset={() => {
+            setSimulatedGuestIds(new Set());
+            void refetchSpeakers();
+          }}
         />
       )}
     </div>

@@ -4,6 +4,9 @@ import { MobileLandscapeRoom } from "./mobile-landscape-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction } = vi.hoisted(
   () => ({
@@ -29,7 +32,23 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
 
 Element.prototype.scrollTo = vi.fn();
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+  myIdentity: "profile:p1",
+};
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
@@ -67,13 +86,22 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: false,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  pendingRequests: [],
+  profileDirectory: {},
+  isPreviewBuild: false,
+  simulatedGuestIds: new Set(),
+  stageRound: null,
+  onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -179,11 +207,10 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(submitSpeakerRequest).not.toHaveBeenCalled();
     });
 
-    it("React/Vote/Gift stay inert, unchanged — no reactions/voting/gifting behavior added", () => {
+    it("React is a real, enabled control (opens the reaction panel, pre-launch interaction pass); Vote stays inert, unchanged — no voting behavior added", () => {
       render(<MobileLandscapeRoom {...baseProps} />);
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-emoji-emblem")).not.toBeDisabled();
       expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
     it("opening the composer never resizes, remounts, or reconnects SpeakerStage — same DOM node, same class list", () => {
@@ -355,5 +382,29 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
         rerender(<MobileLandscapeRoom {...baseProps} isSpeaker={false} mySeatNumber={null} participantRole="audience" />),
       ).not.toThrow();
     });
+  });
+
+  describe("Discussion Expanded (issue #21) — landscape audience compatibility", () => {
+    it("tapping an ambient comment bubble opens the sheet", () => {
+      const message: LobbyMessage = {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      };
+      render(<MobileLandscapeRoom {...baseProps} messages={[message]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
+  });
+
+  it("desktop navigation pass regression check: never shows the desktop persistent nav header — compact room-identity/menu trigger stays the only entry point on mobile landscape", () => {
+    render(<MobileLandscapeRoom {...baseProps} />);
+    expect(screen.queryByTestId("desktop-room-header")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Virtual Stage home" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-account-menu")).not.toBeInTheDocument();
   });
 });

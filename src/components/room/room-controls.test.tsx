@@ -1,7 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RoomControls } from "./room-controls";
-import type { MediaError } from "@/hooks/use-live-room-connection";
+import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 const { leaveSpeakerSeat } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
@@ -15,9 +17,11 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
 const readyMediaProps = {
   canPublish: true,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
-  onPrepareMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null as MediaError,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   connectionStatus: "connected" as const,
   // Issue #17: most tests exercise the room once genuinely live — the
   // phase-gating-specific tests below override these.
@@ -113,7 +117,7 @@ describe("RoomControls", () => {
 
   describe("candidate media readiness (issue #22)", () => {
     it("surfaces a mediaError with a retry action while just waiting, not just once seated", () => {
-      const onPrepareMedia = vi.fn(async () => {});
+      const onPrepareMedia = vi.fn(async () => MEDIA_READY);
       render(
         <RoomControls
           eventId="e1"
@@ -131,7 +135,7 @@ describe("RoomControls", () => {
     });
 
     it("surfaces a mediaError with a retry action during the countdown too", () => {
-      const onPrepareMedia = vi.fn(async () => {});
+      const onPrepareMedia = vi.fn(async () => MEDIA_READY);
       render(
         <RoomControls
           eventId="e1"
@@ -159,7 +163,7 @@ describe("RoomControls", () => {
 
   describe("camera/mic activation and error states (issue #15)", () => {
     it("shows an explicit 'Enable camera & mic' button when media hasn't been activated yet, and calls activateMedia directly from the click handler", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(
         <RoomControls
           eventId="e1"
@@ -332,7 +336,7 @@ describe("RoomControls", () => {
     });
 
     it("still surfaces a media error with its retry action in compact mode — nothing necessary is dropped", () => {
-      const onPrepareMedia = vi.fn(async () => {});
+      const onPrepareMedia = vi.fn(async () => MEDIA_READY);
       render(
         <RoomControls
           eventId="e1"

@@ -2,6 +2,9 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeakerMediaActivationPrompt } from "./speaker-media-activation-prompt";
 import { SPEAKER_DISCONNECT_GRACE_MS, SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)", () => {
   afterEach(() => {
@@ -13,7 +16,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       <SpeakerMediaActivationPrompt
         needsMediaActivation={false}
         bothMediaMuted={false}
-        activateMedia={vi.fn(async () => {})}
+        activateMedia={vi.fn(async () => MEDIA_READY)}
         mediaError={null}
         inactiveSince={null}
       />,
@@ -27,7 +30,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       <SpeakerMediaActivationPrompt
         needsMediaActivation={true}
         bothMediaMuted={false}
-        activateMedia={vi.fn(async () => {})}
+        activateMedia={vi.fn(async () => MEDIA_READY)}
         mediaError={null}
         inactiveSince={null}
       />,
@@ -40,7 +43,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       <SpeakerMediaActivationPrompt
         needsMediaActivation={true}
         bothMediaMuted={false}
-        activateMedia={vi.fn(async () => {})}
+        activateMedia={vi.fn(async () => MEDIA_READY)}
         mediaError={null}
         inactiveSince={null}
       />,
@@ -49,7 +52,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
   });
 
   it("calls activateMedia synchronously from the tap, the same gesture-safe path used everywhere else", () => {
-    const activateMedia = vi.fn(async () => {});
+    const activateMedia = vi.fn(async () => MEDIA_READY);
     render(
       <SpeakerMediaActivationPrompt
         needsMediaActivation={true}
@@ -68,7 +71,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       <SpeakerMediaActivationPrompt
         needsMediaActivation={true}
         bothMediaMuted={false}
-        activateMedia={vi.fn(async () => {})}
+        activateMedia={vi.fn(async () => MEDIA_READY)}
         mediaError={{ source: "camera", reason: "permission-denied" }}
         inactiveSince={null}
       />,
@@ -81,7 +84,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
       <SpeakerMediaActivationPrompt
         needsMediaActivation={true}
         bothMediaMuted={false}
-        activateMedia={vi.fn(async () => {})}
+        activateMedia={vi.fn(async () => MEDIA_READY)}
         mediaError={null}
         inactiveSince={null}
       />,
@@ -95,7 +98,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={false}
           bothMediaMuted={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={null}
         />,
@@ -109,7 +112,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={false}
           bothMediaMuted={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={null}
         />,
@@ -122,7 +125,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={null}
         />,
@@ -137,7 +140,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={false}
           bothMediaMuted={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,
@@ -154,7 +157,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={null}
         />,
@@ -169,7 +172,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,
@@ -184,7 +187,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,
@@ -199,7 +202,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,
@@ -220,7 +223,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,
@@ -235,7 +238,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={new Date().toISOString()}
         />,
@@ -246,7 +249,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={null}
         />,
@@ -262,7 +265,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={false}
           bothMediaMuted={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,
@@ -277,7 +280,7 @@ describe("SpeakerMediaActivationPrompt (issue #18, Speaker View lifecycle fix)",
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
           mediaError={null}
           inactiveSince={inactiveSince}
         />,

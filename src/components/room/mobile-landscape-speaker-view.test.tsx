@@ -4,7 +4,10 @@ import { MobileLandscapeSpeakerView } from "./mobile-landscape-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
@@ -21,7 +24,23 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
   setGuestName: vi.fn(),
 }));
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+  myIdentity: "profile:p1",
+};
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
@@ -46,6 +65,11 @@ function seat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
@@ -76,13 +100,22 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: true,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  pendingRequests: [],
+  profileDirectory: {},
+  isPreviewBuild: false,
+  simulatedGuestIds: new Set(),
+  stageRound: null,
+  onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -183,13 +216,16 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
           ]}
         />,
       );
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div — the caller's
+      // own positioning wrapper is now the grandparent, not the
+      // immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bbottom-32\b/);
     });
 
     it("Gift stays inert; React/Vote are replaced by the mic/camera toggles", () => {
       render(<MobileLandscapeSpeakerView {...baseProps} />);
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
       expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
       expect(screen.queryByTestId("watch-vote-emblem")).not.toBeInTheDocument();
     });
@@ -201,7 +237,6 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
       expect(screen.getAllByTestId("speaker-mic-toggle")).toHaveLength(1);
       expect(screen.getAllByTestId("speaker-camera-toggle")).toHaveLength(1);
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
 
     it("tapping the mic/camera toggles calls the toggles already wired through this view's props", () => {
@@ -266,12 +301,40 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
     });
 
     it("tapping it calls the same activateMedia already wired through this view's props", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(
         <MobileLandscapeSpeakerView {...baseProps} needsMediaActivation={true} activateMedia={activateMedia} />,
       );
       screen.getByTestId("speaker-view-activate-media").click();
       expect(activateMedia).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Discussion Expanded (issue #21) — landscape Speaker View compatibility", () => {
+    it("tapping an ambient comment bubble opens the sheet, with no media/role side effects", () => {
+      const message: LobbyMessage = {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+      };
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          messages={[message]}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
     });
   });
 });

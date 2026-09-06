@@ -132,7 +132,16 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
     ).rejects.toThrow(/does not exist/);
   });
 
-  it("replacing the occupant ends their row as 'replaced' (preserved, not deleted) and leaves exactly one active row for the seat", async () => {
+  it("claiming an already-occupied seat is rejected — issue #21 corrective pass, the occupant must be ended first (claim_speaker_seat no longer silently replaces)", async () => {
+    await expect(claimSpeakerSeat(eventId, { type: "profile", id: profiles.b.id }, 1)).rejects.toThrow(/already occupied/);
+    const active = await activeSeats(eventId);
+    expect(active.find((s) => s.seat_number === 1)?.profile_id).toBe(profiles.a.id); // untouched
+  });
+
+  it("after the occupant is explicitly ended, the seat can be claimed fresh — the old row is preserved as history, not deleted", async () => {
+    const ended = await endSpeakerSeat(eventId, { type: "profile", id: profiles.a.id }, "moderator_removed");
+    expect(ended?.left_reason).toBe("moderator_removed");
+
     const newRow = await claimSpeakerSeat(eventId, { type: "profile", id: profiles.b.id }, 1);
     expect(newRow.profile_id).toBe(profiles.b.id);
     expect(newRow.left_at).toBeNull();
@@ -145,7 +154,7 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
       .eq("profile_id", profiles.a.id)
       .single();
     expect(previous?.left_at).not.toBeNull();
-    expect(previous?.left_reason).toBe("replaced");
+    expect(previous?.left_reason).toBe("moderator_removed"); // preserved exactly as ended, untouched by the later claim
 
     const active = await activeSeats(eventId);
     expect(active.filter((s) => s.seat_number === 1)).toHaveLength(1);
@@ -160,25 +169,21 @@ describe.skipIf(!hasServiceCredentials)("event_speakers write path (issue #13)",
   });
 
   it("race safety: two concurrent claims for the same open seat — the seat is never double-booked", async () => {
-    // Two outcomes are both correct here, and which one happens is a
-    // timing artifact, not something this test can control: if the two
-    // calls' transactions genuinely overlap at the DB layer, the loser's
-    // INSERT hits the partial unique index and its promise rejects. If
-    // they land closely enough together that the first fully commits
-    // before the second's UPDATE step runs, claim_speaker_seat's own
-    // "replace whoever's there" semantics mean the second call
-    // legitimately ends the first's brand-new row and both promises
-    // fulfill. Either way, the property that actually matters — and the
-    // only one this test asserts on — is that seat 2 never ends up with
-    // more than one *active* row, and every row that was ended along the
-    // way is preserved as history, not lost.
+    // Issue #21 corrective pass: claim_speaker_seat no longer has "replace
+    // whoever's there" semantics (migration 00000000000024) — exactly one
+    // of two truly-concurrent claims for the same seat can ever succeed
+    // now. Either this function's own EXISTS check catches the loser
+    // deterministically, or in the narrow window where both transactions'
+    // snapshots miss each other's yet-uncommitted INSERT, the seat's
+    // partial unique index (event_speakers_active_seat_uniq) catches it
+    // instead — either way, never both, and never neither.
     const results = await Promise.allSettled([
       claimSpeakerSeat(eventId, { type: "profile", id: profiles.c.id }, 2),
       claimSpeakerSeat(eventId, { type: "profile", id: profiles.d.id }, 2),
     ]);
 
     const fulfilled = results.filter((r) => r.status === "fulfilled");
-    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    expect(fulfilled.length).toBe(1);
 
     const active = await activeSeats(eventId);
     const seat2 = active.filter((s) => s.seat_number === 2);

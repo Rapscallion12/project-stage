@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.17"
+    PostgrestVersion: "14.5"
   }
   graphql_public: {
     Tables: {
@@ -79,6 +79,13 @@ export type Database = {
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "event_chat_message_reactions_reactor_profile_id_fkey"
+            columns: ["reactor_profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
         ]
       }
       event_chat_messages: {
@@ -121,6 +128,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "event_chat_messages_author_profile_id_fkey"
+            columns: ["author_profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "event_chat_messages_event_id_fkey"
             columns: ["event_id"]
             isOneToOne: false
@@ -131,6 +145,7 @@ export type Database = {
       }
       event_speakers: {
         Row: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -141,9 +156,14 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         Insert: {
+          closing_ends_at?: string | null
           disconnected_at?: string | null
           display_name: string
           event_id: string
@@ -154,9 +174,14 @@ export type Database = {
           left_reason?: string | null
           media_inactive_since?: string | null
           profile_id?: string | null
+          round_ends_at?: string
+          round_number?: number
+          round_phase?: string
+          round_started_at?: string
           seat_number: number
         }
         Update: {
+          closing_ends_at?: string | null
           disconnected_at?: string | null
           display_name?: string
           event_id?: string
@@ -167,6 +192,10 @@ export type Database = {
           left_reason?: string | null
           media_inactive_since?: string | null
           profile_id?: string | null
+          round_ends_at?: string
+          round_number?: number
+          round_phase?: string
+          round_started_at?: string
           seat_number?: number
         }
         Relationships: [
@@ -182,6 +211,13 @@ export type Database = {
             columns: ["profile_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "event_speakers_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -219,59 +255,192 @@ export type Database = {
         }
         Relationships: []
       }
+      follows: {
+        Row: {
+          created_at: string
+          follower_id: string
+          following_id: string
+        }
+        Insert: {
+          created_at?: string
+          follower_id: string
+          following_id: string
+        }
+        Update: {
+          created_at?: string
+          follower_id?: string
+          following_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "follows_follower_id_fkey"
+            columns: ["follower_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "follows_follower_id_fkey"
+            columns: ["follower_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "follows_following_id_fkey"
+            columns: ["following_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "follows_following_id_fkey"
+            columns: ["following_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
+          avatar_url: string | null
+          bio: string | null
           created_at: string
           display_name: string
           id: string
           reliability_score: number
           reputation_score: number
+          social_links: Json
+          username: string | null
         }
         Insert: {
+          avatar_url?: string | null
+          bio?: string | null
           created_at?: string
           display_name: string
           id: string
           reliability_score?: number
           reputation_score?: number
+          social_links?: Json
+          username?: string | null
         }
         Update: {
+          avatar_url?: string | null
+          bio?: string | null
           created_at?: string
           display_name?: string
           id?: string
           reliability_score?: number
           reputation_score?: number
+          social_links?: Json
+          username?: string | null
         }
         Relationships: []
+      }
+      speaker_request_votes: {
+        Row: {
+          created_at: string
+          event_id: string
+          id: string
+          request_id: string
+          voter_guest_id: string | null
+          voter_profile_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_id: string
+          id?: string
+          request_id: string
+          voter_guest_id?: string | null
+          voter_profile_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_id?: string
+          id?: string
+          request_id?: string
+          voter_guest_id?: string | null
+          voter_profile_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "speaker_request_votes_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_request_votes_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "speaker_requests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_request_votes_voter_profile_id_fkey"
+            columns: ["voter_profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_request_votes_voter_profile_id_fkey"
+            columns: ["voter_profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       speaker_requests: {
         Row: {
           created_at: string
           event_id: string
+          frozen_rank: number | null
+          frozen_vote_count: number | null
           guest_id: string | null
           id: string
+          is_current_candidate: boolean
           message_id: string
           profile_id: string | null
+          reserved_seat_number: number | null
           resolved_at: string | null
+          selection_failed: boolean
+          selection_round_id: string | null
           status: string
         }
         Insert: {
           created_at?: string
           event_id: string
+          frozen_rank?: number | null
+          frozen_vote_count?: number | null
           guest_id?: string | null
           id?: string
+          is_current_candidate?: boolean
           message_id: string
           profile_id?: string | null
+          reserved_seat_number?: number | null
           resolved_at?: string | null
+          selection_failed?: boolean
+          selection_round_id?: string | null
           status?: string
         }
         Update: {
           created_at?: string
           event_id?: string
+          frozen_rank?: number | null
+          frozen_vote_count?: number | null
           guest_id?: string | null
           id?: string
+          is_current_candidate?: boolean
           message_id?: string
           profile_id?: string | null
+          reserved_seat_number?: number | null
           resolved_at?: string | null
+          selection_failed?: boolean
+          selection_round_id?: string | null
           status?: string
         }
         Relationships: [
@@ -296,12 +465,211 @@ export type Database = {
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "speaker_requests_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_requests_selection_round_id_fkey"
+            columns: ["selection_round_id"]
+            isOneToOne: false
+            referencedRelation: "speaker_selection_rounds"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      speaker_round_votes: {
+        Row: {
+          choice: string
+          created_at: string
+          event_speakers_id: string
+          id: string
+          voter_guest_id: string | null
+          voter_profile_id: string | null
+        }
+        Insert: {
+          choice: string
+          created_at?: string
+          event_speakers_id: string
+          id?: string
+          voter_guest_id?: string | null
+          voter_profile_id?: string | null
+        }
+        Update: {
+          choice?: string
+          created_at?: string
+          event_speakers_id?: string
+          id?: string
+          voter_guest_id?: string | null
+          voter_profile_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "speaker_round_votes_event_speakers_id_fkey"
+            columns: ["event_speakers_id"]
+            isOneToOne: false
+            referencedRelation: "event_speakers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_round_votes_event_speakers_id_fkey"
+            columns: ["event_speakers_id"]
+            isOneToOne: false
+            referencedRelation: "event_speakers_active"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_round_votes_voter_profile_id_fkey"
+            columns: ["voter_profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "speaker_round_votes_voter_profile_id_fkey"
+            columns: ["voter_profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      speaker_selection_rounds: {
+        Row: {
+          event_id: string
+          frozen_at: string
+          id: string
+          resolved_at: string | null
+          status: string
+        }
+        Insert: {
+          event_id: string
+          frozen_at?: string
+          id?: string
+          resolved_at?: string | null
+          status?: string
+        }
+        Update: {
+          event_id?: string
+          frozen_at?: string
+          id?: string
+          resolved_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "speaker_selection_rounds_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stage_reaction_heat: {
+        Row: {
+          event_id: string
+          guest_id: string | null
+          heat: number
+          in_cooldown: boolean
+          profile_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          event_id: string
+          guest_id?: string | null
+          heat?: number
+          in_cooldown?: boolean
+          profile_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          event_id?: string
+          guest_id?: string | null
+          heat?: number
+          in_cooldown?: boolean
+          profile_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stage_reaction_heat_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stage_reaction_heat_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stage_reaction_heat_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stage_rounds: {
+        Row: {
+          ends_at: string
+          event_id: string
+          fallback_excluded_guest_ids: string[]
+          fallback_excluded_profile_ids: string[]
+          id: string
+          last_transition_reason: string | null
+          phase: string
+          round_number: number
+          started_at: string
+          updated_at: string
+        }
+        Insert: {
+          ends_at?: string
+          event_id: string
+          fallback_excluded_guest_ids?: string[]
+          fallback_excluded_profile_ids?: string[]
+          id?: string
+          last_transition_reason?: string | null
+          phase?: string
+          round_number?: number
+          started_at?: string
+          updated_at?: string
+        }
+        Update: {
+          ends_at?: string
+          event_id?: string
+          fallback_excluded_guest_ids?: string[]
+          fallback_excluded_profile_ids?: string[]
+          id?: string
+          last_transition_reason?: string | null
+          phase?: string
+          round_number?: number
+          started_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stage_rounds_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
     Views: {
       event_speakers_active: {
         Row: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string | null
           event_id: string | null
@@ -312,9 +680,14 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string | null
+          round_number: number | null
+          round_phase: string | null
+          round_started_at: string | null
           seat_number: number | null
         }
         Insert: {
+          closing_ends_at?: string | null
           disconnected_at?: string | null
           display_name?: string | null
           event_id?: string | null
@@ -325,9 +698,14 @@ export type Database = {
           left_reason?: string | null
           media_inactive_since?: string | null
           profile_id?: string | null
+          round_ends_at?: string | null
+          round_number?: number | null
+          round_phase?: string | null
+          round_started_at?: string | null
           seat_number?: number | null
         }
         Update: {
+          closing_ends_at?: string | null
           disconnected_at?: string | null
           display_name?: string | null
           event_id?: string | null
@@ -338,6 +716,10 @@ export type Database = {
           left_reason?: string | null
           media_inactive_since?: string | null
           profile_id?: string | null
+          round_ends_at?: string | null
+          round_number?: number | null
+          round_phase?: string | null
+          round_started_at?: string | null
           seat_number?: number | null
         }
         Relationships: [
@@ -355,12 +737,74 @@ export type Database = {
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "event_speakers_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
         ]
+      }
+      public_profiles: {
+        Row: {
+          avatar_url: string | null
+          bio: string | null
+          created_at: string | null
+          display_name: string | null
+          id: string | null
+          social_links: Json | null
+          username: string | null
+        }
+        Insert: {
+          avatar_url?: string | null
+          bio?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          id?: string | null
+          social_links?: Json | null
+          username?: string | null
+        }
+        Update: {
+          avatar_url?: string | null
+          bio?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          id?: string | null
+          social_links?: Json | null
+          username?: string | null
+        }
+        Relationships: []
       }
     }
     Functions: {
+      cast_speaker_request_vote: {
+        Args: { p_event_id: string; p_message_id: string }
+        Returns: {
+          voted_request_id: string
+        }[]
+      }
+      cast_speaker_request_vote_as_guest: {
+        Args: { p_event_id: string; p_guest_id: string; p_message_id: string }
+        Returns: {
+          voted_request_id: string
+        }[]
+      }
+      cast_speaker_round_vote: {
+        Args: { p_choice: string; p_event_speakers_id: string }
+        Returns: undefined
+      }
+      cast_speaker_round_vote_as_guest: {
+        Args: {
+          p_choice: string
+          p_event_speakers_id: string
+          p_guest_id: string
+        }
+        Returns: undefined
+      }
       claim_speaker_seat: {
         Args: {
+          p_bypass_selection_authorization?: boolean
           p_event_id: string
           p_guest_display_name?: string
           p_guest_id?: string
@@ -368,6 +812,7 @@ export type Database = {
           p_seat_number: number
         }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -378,6 +823,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -395,6 +844,7 @@ export type Database = {
           p_reason: string
         }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -405,6 +855,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -413,6 +867,41 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      ensure_stage_round: {
+        Args: { p_event_id: string; p_source?: string }
+        Returns: {
+          ends_at: string
+          event_id: string
+          fallback_excluded_guest_ids: string[]
+          fallback_excluded_profile_ids: string[]
+          id: string
+          last_transition_reason: string | null
+          phase: string
+          round_number: number
+          started_at: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "stage_rounds"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      freeze_speaker_candidates: {
+        Args: { p_event_id: string }
+        Returns: {
+          guest_id: string
+          is_current: boolean
+          message_id: string
+          profile_id: string
+          rank: number
+          request_id: string
+          reserved_seat_number: number
+          round_id: string
+          vote_count: number
+        }[]
       }
       is_speaker_seat_active: {
         Args: {
@@ -426,6 +915,7 @@ export type Database = {
       leave_speaker_seat: {
         Args: { p_event_id: string }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -436,6 +926,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -448,6 +942,7 @@ export type Database = {
       leave_speaker_seat_as_guest: {
         Args: { p_event_id: string; p_guest_id: string }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -458,6 +953,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -470,6 +969,7 @@ export type Database = {
       mark_speaker_disconnected: {
         Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -480,6 +980,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -492,6 +996,7 @@ export type Database = {
       mark_speaker_media_active: {
         Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -502,6 +1007,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -514,6 +1023,7 @@ export type Database = {
       mark_speaker_media_inactive: {
         Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -524,6 +1034,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -536,6 +1050,7 @@ export type Database = {
       mark_speaker_reconnected: {
         Args: { p_event_id: string; p_guest_id?: string; p_profile_id?: string }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -546,6 +1061,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -565,6 +1084,22 @@ export type Database = {
           request_id: string
         }[]
       }
+      record_stage_reaction_attempt: {
+        Args: {
+          p_cooldown_exit_heat?: number
+          p_drain_per_second?: number
+          p_event_id: string
+          p_guest_id: string
+          p_heat_increment?: number
+          p_max_heat?: number
+          p_profile_id: string
+        }
+        Returns: {
+          accepted: boolean
+          heat_after: number
+          in_cooldown_after: boolean
+        }[]
+      }
       release_expired_disconnected_speaker: {
         Args: {
           p_event_id: string
@@ -573,6 +1108,7 @@ export type Database = {
           p_profile_id?: string
         }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -583,6 +1119,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -600,6 +1140,7 @@ export type Database = {
           p_profile_id?: string
         }
         Returns: {
+          closing_ends_at: string | null
           disconnected_at: string | null
           display_name: string
           event_id: string
@@ -610,6 +1151,10 @@ export type Database = {
           left_reason: string | null
           media_inactive_since: string | null
           profile_id: string | null
+          round_ends_at: string
+          round_number: number
+          round_phase: string
+          round_started_at: string
           seat_number: number
         }
         SetofOptions: {
@@ -618,6 +1163,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      release_failed_speaker_claim: {
+        Args: { p_request_id: string }
+        Returns: undefined
       }
       release_if_expired: {
         Args: { p_event_id: string; p_guest_id: string; p_profile_id: string }
@@ -655,16 +1204,65 @@ export type Database = {
           request_id: string
         }[]
       }
+      reserve_speaker_candidates_for_seats: {
+        Args: { p_event_id: string; p_seat_numbers: number[] }
+        Returns: {
+          guest_id: string
+          message_id: string
+          profile_id: string
+          rank: number
+          request_id: string
+          reserved_seat_number: number
+          round_id: string
+          vote_count: number
+        }[]
+      }
+      reset_speaker_candidate_pool: {
+        Args: { p_event_id: string; p_winning_request_id: string }
+        Returns: undefined
+      }
+      resolve_seat_closing: {
+        Args: { p_event_speakers_id: string }
+        Returns: {
+          out_event_id: string
+          out_guest_id: string
+          out_outcome: string
+          out_profile_id: string
+        }[]
+      }
+      resolve_stage_round: {
+        Args: { p_event_id: string }
+        Returns: {
+          out_event_speakers_id: string
+          out_guest_id: string
+          out_outcome: string
+          out_profile_id: string
+        }[]
+      }
+      set_current_speaker_candidate: {
+        Args: {
+          p_request_id: string
+          p_round_id: string
+          p_seat_number: number
+        }
+        Returns: undefined
+      }
       withdraw_speaker_request: {
         Args: { p_event_id: string }
         Returns: {
           created_at: string
           event_id: string
+          frozen_rank: number | null
+          frozen_vote_count: number | null
           guest_id: string | null
           id: string
+          is_current_candidate: boolean
           message_id: string
           profile_id: string | null
+          reserved_seat_number: number | null
           resolved_at: string | null
+          selection_failed: boolean
+          selection_round_id: string | null
           status: string
         }
         SetofOptions: {
@@ -679,11 +1277,17 @@ export type Database = {
         Returns: {
           created_at: string
           event_id: string
+          frozen_rank: number | null
+          frozen_vote_count: number | null
           guest_id: string | null
           id: string
+          is_current_candidate: boolean
           message_id: string
           profile_id: string | null
+          reserved_seat_number: number | null
           resolved_at: string | null
+          selection_failed: boolean
+          selection_round_id: string | null
           status: string
         }
         SetofOptions: {
@@ -711,12 +1315,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -740,11 +1344,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -765,11 +1369,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -790,11 +1394,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -807,11 +1411,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

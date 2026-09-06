@@ -70,6 +70,11 @@ describe.skipIf(!hasServiceCredentials)("guest speaker participation (issue #16)
     expect(row.profile_id).toBeNull();
     expect(row.display_name).toBe("Curious Fox");
     expect(row.left_at).toBeNull();
+
+    // Issue #21 corrective pass: claim_speaker_seat no longer silently
+    // replaces an occupant, so this test must free seat 1 itself rather
+    // than relying on a later test's claim to evict it.
+    await endSpeakerSeat(eventId, { type: "guest", id: guestId }, "moderator_removed");
   });
 
   it("rejects claiming a seat for a guest with no display name supplied", async () => {

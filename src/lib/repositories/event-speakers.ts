@@ -73,6 +73,24 @@ export type EventSpeaker = {
    * collapse into the single `speakerPresence` concept the UI uses.
    */
   media_inactive_since: string | null;
+  /** Issue #21, Part 1: which protected 60-second block this is for the current occupant — 1 at claim time, incremented each time a round resolves to "continue". */
+  round_number: number;
+  round_started_at: string;
+  /** Authoritative round deadline — see `resolve_speaker_round` (migration 00000000000021) and `useSpeakerRoundResolution`. Client countdowns display this; they never own it. */
+  round_ends_at: string;
+  /** 'active': normal round, voting open. 'closing': a narrow Replace loss already decided the outcome — this is the 30s grace period to finish speaking, not another survival vote. */
+  round_phase: "active" | "closing";
+  /** Set only while round_phase is 'closing' — the guaranteed-replacement deadline. */
+  closing_ends_at: string | null;
+};
+
+export type SpeakerRoundVote = {
+  id: string;
+  event_speakers_id: string;
+  voter_profile_id: string | null;
+  voter_guest_id: string | null;
+  choice: "continue" | "replace";
+  created_at: string;
 };
 
 /**
@@ -92,6 +110,32 @@ export type EventSpeaker = {
  */
 export async function listActiveSpeakers(eventId: string): Promise<EventSpeaker[]> {
   const supabase = await createClient();
+  const { data } = await supabase
+    .from("event_speakers_active")
+    .select("*")
+    .eq("event_id", eventId)
+    .order("seat_number", { ascending: true });
+  return (data ?? []) as EventSpeaker[];
+}
+
+/**
+ * Issue #21, ninth corrective pass: the service-client equivalent of
+ * `listActiveSpeakers` above, for a caller that has no real user session
+ * to read cookies from at all — `resolveStageRoundAction`/
+ * `resolveSeatClosingAction` (room/actions.ts) call this immediately
+ * after authoritatively resolving the round/closing-period boundary, so
+ * "any connected client, always safe to call early/late/repeatedly" (the
+ * same trust model `resolveStageRound`/`resolveSeatClosing` themselves
+ * already use, both service-client-based) extends to the selection
+ * trigger that follows in the same call — never gated on *that specific
+ * caller's* own session, and callable directly from a bare test script
+ * (no Next.js request context) the same way those two functions already
+ * are. Reads the identical `event_speakers_active` view as
+ * `listActiveSpeakers`, so "which seats are open" is never a second,
+ * differently-derived answer — only the client used to ask differs.
+ */
+export async function listActiveSpeakersAuthoritative(eventId: string): Promise<EventSpeaker[]> {
+  const supabase = createServiceClient();
   const { data } = await supabase
     .from("event_speakers_active")
     .select("*")
@@ -206,11 +250,26 @@ export async function leaveSpeakerSeatAsGuest(eventId: string, guestId: string):
  * could invoke directly. See DECISIONS.md's authorization-model entries
  * for issues #13 and #16.
  */
+/**
+ * `bypassSelectionAuthorization` (issue #21, third corrective pass —
+ * migration 00000000000029): once a stage has ever been established
+ * (both seats occupied simultaneously at least once), the RPC itself
+ * rejects a direct claim unless the claiming identity is the event's
+ * currently authorized Request-to-Speak candidate — re-checked at the
+ * source of truth, not merely trusted from the caller. Defaults to
+ * `false` for every ordinary caller (`joinOpenSeat`, `claimOpenSeat`,
+ * `simulateAdvanceSelection`); `true` is reserved for the Session
+ * Simulator's own `simulateSeedSpeaker` bootstrapping adapter, which
+ * still cannot steal an already-occupied seat (migration
+ * 00000000000024's guard applies unconditionally regardless of this
+ * flag) — see that migration's own doc comment for the full reasoning.
+ */
 export async function claimSpeakerSeat(
   eventId: string,
   identity: SeatIdentity,
   seatNumber: 1 | 2,
   guestDisplayName?: string,
+  bypassSelectionAuthorization = false,
 ): Promise<EventSpeaker> {
   const supabase = createServiceClient();
   const { data, error } = await supabase.rpc("claim_speaker_seat", {
@@ -219,6 +278,7 @@ export async function claimSpeakerSeat(
     p_profile_id: identity.type === "profile" ? identity.id : undefined,
     p_guest_id: identity.type === "guest" ? identity.id : undefined,
     p_guest_display_name: identity.type === "guest" ? guestDisplayName : undefined,
+    p_bypass_selection_authorization: bypassSelectionAuthorization,
   });
   if (error || !data) {
     throw new Error(error?.message ?? "claim_speaker_seat returned no row");
@@ -427,4 +487,61 @@ export async function releaseExpiredInactiveSpeaker(
   }
   const row = data as EventSpeaker | null;
   return row?.id ? row : null;
+}
+
+/**
+ * Issue #21, Part 2: casts/transfers/changes the caller's one active
+ * Continue/Replace vote for a specific speaker's current round. Rejected
+ * server-side (not just hidden in the UI) once the round has moved to
+ * `'closing'` — see migration 00000000000021's `cast_speaker_round_vote`
+ * for why: a narrow-loss outcome is already decided, and accepting more
+ * votes at that point would be meaningless.
+ */
+export async function castSpeakerRoundVote(eventSpeakersId: string, choice: "continue" | "replace"): Promise<void> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("cast_speaker_round_vote", {
+    p_event_speakers_id: eventSpeakersId,
+    p_choice: choice,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/** A guest's own round vote — service-role-only, same tier as `castSpeakerRequestVoteAsGuest`. */
+export async function castSpeakerRoundVoteAsGuest(
+  eventSpeakersId: string,
+  choice: "continue" | "replace",
+  guestId: string,
+): Promise<void> {
+  const supabase = createServiceClient();
+  const { error } = await supabase.rpc("cast_speaker_round_vote_as_guest", {
+    p_event_speakers_id: eventSpeakersId,
+    p_choice: choice,
+    p_guest_id: guestId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/**
+ * Issue #21 corrective pass: the per-seat round resolver (and its
+ * `no-active-occupancy`/`active-not-yet-expired`/`closing-not-yet-expired`/
+ * `continue`/`narrow-loss`/`decisive-replace`/`replaced-after-closing`
+ * outcome type) is superseded by the shared-round model —
+ * `lib/repositories/stage-rounds.ts`'s `resolveStageRound` (the shared
+ * 60s deadline, resolving both occupied seats independently) and
+ * `resolveSeatClosing` (an individual narrow-loss speaker's own 30s
+ * window) — see migration 00000000000024's own doc comment.
+ */
+
+/** Live vote tally for a speaker's current round — publicly readable, same tier as `listActiveSpeakers`. */
+export async function listSpeakerRoundVotes(eventSpeakersId: string): Promise<SpeakerRoundVote[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("speaker_round_votes")
+    .select("*")
+    .eq("event_speakers_id", eventSpeakersId);
+  return (data as SpeakerRoundVote[] | null) ?? [];
 }

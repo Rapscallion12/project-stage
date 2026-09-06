@@ -4,6 +4,9 @@ import { PortraitRoom } from "./portrait-room";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
 const { leaveSpeakerSeat, withdrawSpeakerRequest, submitSpeakerRequest, sendMessage, addReaction, setGuestName } =
   vi.hoisted(() => ({
@@ -27,7 +30,23 @@ vi.mock("@/app/events/[id]/lobby/actions", () => ({
   setGuestName,
 }));
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+  myIdentity: "profile:p1",
+};
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
@@ -65,13 +84,22 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: false,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  pendingRequests: [],
+  profileDirectory: {},
+  isPreviewBuild: false,
+  simulatedGuestIds: new Set(),
+  stageRound: null,
+  onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -143,6 +171,18 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       expect(screen.getByTestId("watch-status-pill")).toHaveTextContent("Reconnecting…");
     });
 
+    // Issue #21, seventh corrective pass, Section 9: the status pill
+    // doubles as the room/navigation entry point now that the site-wide
+    // header is hidden for the whole time a room is mounted.
+    it("the status pill is itself the room/navigation trigger", () => {
+      const onOpenRoomInfo = vi.fn();
+      render(<PortraitRoom {...baseProps} onOpenRoomInfo={onOpenRoomInfo} />);
+      const pill = screen.getByTestId("watch-status-pill");
+      expect(pill.tagName).toBe("BUTTON");
+      fireEvent.click(pill);
+      expect(onOpenRoomInfo).toHaveBeenCalledTimes(1);
+    });
+
     it("shows the guest identity chip for a guest, not for an account holder", () => {
       const { rerender } = render(
         <PortraitRoom {...baseProps} identity={{ type: "guest", id: "g1", displayName: "Cheerful Raven" }} />,
@@ -154,12 +194,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
     });
   });
 
-  describe("persistent Watch Mode controls — composer real as of Phase 2, React/Vote/Gift still inert", () => {
-    it("React, Vote, and Gift stay disabled — only the composer is functional in this phase", () => {
+  describe("persistent Watch Mode controls — composer real as of Phase 2, React real as of the pre-launch interaction pass, Vote still inert", () => {
+    it("React is a real, enabled control (opens the reaction panel); Vote stays disabled", () => {
       render(<PortraitRoom {...baseProps} />);
-      expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
+      expect(screen.getByTestId("watch-emoji-emblem")).not.toBeDisabled();
       expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
     it("there is no Discussion Expanded entry point yet — no comments-toggle", () => {
@@ -343,9 +382,17 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       );
       const bubble = screen.getByTestId("ambient-comment");
       expect(bubble).toHaveTextContent("great show");
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div — the caller's
+      // own positioning wrapper is now the grandparent, not the
+      // immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bpointer-events-none\b/);
-      expect(bubble.className).toMatch(/\bpointer-events-auto\b/);
+      // The scrollable feed area itself opts back into pointer events (not
+      // just each bubble individually) — issue #21's live-stream-feed
+      // rebuild needs the whole area touch-scrollable, not just tappable
+      // per-bubble.
+      expect(screen.getByTestId("ambient-comments").className).toMatch(/\bpointer-events-auto\b/);
     });
 
     it("positions the ambient overlay clear of the persistent bottom composer row", () => {
@@ -365,7 +412,11 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
           ]}
         />,
       );
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div — the caller's
+      // own positioning wrapper is now the grandparent, not the
+      // immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\babsolute\b/);
       expect(wrapper.className).toMatch(/\bbottom-16\b/);
       expect(wrapper.className).toMatch(/\bleft-3\b/);
@@ -433,5 +484,62 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(onCancelPromotion).toHaveBeenCalledTimes(1);
     });
+  });
+
+  describe("Discussion Expanded (issue #21) — audience compatibility", () => {
+    function message(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
+      return {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+        ...overrides,
+      };
+    }
+
+    it("is closed by default", () => {
+      render(<PortraitRoom {...baseProps} messages={[message()]} />);
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+    });
+
+    it("tapping an ambient comment bubble opens the sheet", () => {
+      render(<PortraitRoom {...baseProps} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
+
+    it("closing the sheet returns to the ordinary Watch Mode view, with no role/media/seat side effects", () => {
+      const onTapEmptySeat = vi.fn();
+      const activateMedia = vi.fn(async () => MEDIA_READY);
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitRoom
+          {...baseProps}
+          messages={[message()]}
+          onTapEmptySeat={onTapEmptySeat}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+      expect(onTapEmptySeat).not.toHaveBeenCalled();
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+  });
+
+  it("desktop navigation pass regression check: never shows the desktop persistent nav header — compact room-identity/menu trigger stays the only entry point on mobile", () => {
+    render(<PortraitRoom {...baseProps} />);
+    expect(screen.queryByTestId("desktop-room-header")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Virtual Stage home" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-account-menu")).not.toBeInTheDocument();
   });
 });

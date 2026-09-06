@@ -3,19 +3,19 @@ import { describe, expect, it } from "vitest";
 import { WatchModeControls } from "./watch-mode-controls";
 
 describe("WatchModeControls (issue #21, 05 interaction model)", () => {
-  it("renders all four controls: composer, react, vote, gift", () => {
+  it("renders composer, react, vote — no gift emblem (pre-launch interaction pass: gifting isn't implemented, the dead affordance was removed)", () => {
     render(<WatchModeControls />);
     expect(screen.getByTestId("watch-composer")).toBeInTheDocument();
     expect(screen.getByTestId("watch-emoji-emblem")).toBeInTheDocument();
     expect(screen.getByTestId("watch-vote-emblem")).toBeInTheDocument();
-    expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
+    expect(screen.queryByTestId("watch-gift-emblem")).not.toBeInTheDocument();
+    expect(screen.queryByText("🎁")).not.toBeInTheDocument();
   });
 
-  it("React/Vote/Gift are disabled — inert until their own later phase", () => {
+  it("React/Vote are disabled placeholders when the caller supplies no real slot", () => {
     render(<WatchModeControls />);
     expect(screen.getByTestId("watch-emoji-emblem")).toBeDisabled();
     expect(screen.getByTestId("watch-vote-emblem")).toBeDisabled();
-    expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
   });
 
   it("without a composer prop, falls back to the original Phase 1 disabled placeholder", () => {
@@ -30,7 +30,6 @@ describe("WatchModeControls (issue #21, 05 interaction model)", () => {
     render(<WatchModeControls />);
     expect(screen.getByTestId("watch-emoji-emblem")).toHaveAccessibleName("React");
     expect(screen.getByTestId("watch-vote-emblem")).toHaveAccessibleName("Vote");
-    expect(screen.getByTestId("watch-gift-emblem")).toHaveAccessibleName("Gift");
   });
 
   describe("composer slot (issue #21, '05 — Social Stage' Phase 2)", () => {
@@ -40,27 +39,72 @@ describe("WatchModeControls (issue #21, 05 interaction model)", () => {
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
     });
 
-    it("still renders React/Vote/Gift alongside a supplied composer", () => {
+    it("still renders React/Vote alongside a supplied composer", () => {
       render(<WatchModeControls composer={<input placeholder="Add a comment…" />} />);
       expect(screen.getByTestId("watch-emoji-emblem")).toBeInTheDocument();
       expect(screen.getByTestId("watch-vote-emblem")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
   });
 
-  describe("micCameraSlot (issue #18, Speaker View UI cleanup — replaces React/Vote, Gift stays)", () => {
-    it("replaces React/Vote with the supplied slot, Gift unaffected", () => {
+  describe("micCameraSlot (issue #18, Speaker View UI cleanup — replaces React/Vote)", () => {
+    it("replaces React/Vote with the supplied slot", () => {
       render(<WatchModeControls micCameraSlot={<button data-testid="fake-mic-toggle">mic</button>} />);
       expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
       expect(screen.queryByTestId("watch-vote-emblem")).not.toBeInTheDocument();
       expect(screen.getByTestId("fake-mic-toggle")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
 
     it("without micCameraSlot, ordinary Watch Mode keeps React/Vote exactly as before — purely additive", () => {
       render(<WatchModeControls />);
       expect(screen.getByTestId("watch-emoji-emblem")).toBeInTheDocument();
       expect(screen.getByTestId("watch-vote-emblem")).toBeInTheDocument();
+    });
+  });
+
+  describe("reactionSlot (pre-launch interaction pass): activates the React position with a real control", () => {
+    it("renders the supplied reaction slot in place of the inert React placeholder", () => {
+      render(<WatchModeControls reactionSlot={<button data-testid="fake-reaction-control">react</button>} />);
+      expect(screen.queryByTestId("watch-emoji-emblem")).not.toBeInTheDocument();
+      expect(screen.getByTestId("fake-reaction-control")).toBeInTheDocument();
+      // Vote stays the ordinary inert placeholder unless voteSlot is also supplied.
+      expect(screen.getByTestId("watch-vote-emblem")).toBeInTheDocument();
+    });
+
+    it("micCameraSlot still takes precedence over reactionSlot — Speaker View's mic/camera pair, not a reaction control", () => {
+      render(
+        <WatchModeControls
+          micCameraSlot={<button data-testid="fake-mic-toggle">mic</button>}
+          reactionSlot={<button data-testid="fake-reaction-control">react</button>}
+        />,
+      );
+      expect(screen.getByTestId("fake-mic-toggle")).toBeInTheDocument();
+      expect(screen.queryByTestId("fake-reaction-control")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("idle adaptive transparency (pre-launch interaction pass, Section 8)", () => {
+    it("defaults to the full-opacity glass background on the inert placeholders", () => {
+      render(<WatchModeControls />);
+      expect(screen.getByTestId("watch-composer").className).toMatch(/bg-white\/\[0\.14\]/);
+      expect(screen.getByTestId("watch-vote-emblem").className).toMatch(/bg-white\/\[0\.14\]/);
+    });
+
+    it("fades the inert placeholders' own backgrounds to fully transparent when idle — never removes them or affects the emoji/text foreground", () => {
+      // Real-device follow-up: the first pass's 14%->6% fade was too
+      // subtle to notice against real video. Now a decisive drop to no
+      // fill at all — the border and foreground content are what keep
+      // the control legible/discoverable while idle, not a faint tint.
+      render(<WatchModeControls idle />);
+      const composer = screen.getByTestId("watch-composer");
+      const vote = screen.getByTestId("watch-vote-emblem");
+      expect(composer.className).toMatch(/bg-transparent/);
+      expect(vote.className).toMatch(/bg-transparent/);
+      expect(composer.className).not.toMatch(/bg-white\/\[0\.14\]/);
+      expect(vote.className).not.toMatch(/bg-white\/\[0\.14\]/);
+      expect(composer.className).toMatch(/border-white\/30/);
+      expect(vote.className).toMatch(/border-white\/30/);
+      expect(screen.getByText("Add a comment…")).toBeInTheDocument();
+      expect(screen.getByText("🗳")).toBeInTheDocument();
     });
   });
 });

@@ -1,10 +1,18 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SelfPreview } from "./self-preview";
 import type { LocalVideoTrack } from "livekit-client";
 
 function fakeVideoTrack(): LocalVideoTrack {
-  return { attach: vi.fn(), detach: vi.fn() } as unknown as LocalVideoTrack;
+  return {
+    attach: vi.fn((element: HTMLVideoElement) => {
+      // Real attach() sets srcObject — the repaint-nudge fix (media
+      // rendering bugfix pass) reads it back, so the fake must too.
+      element.srcObject = {} as MediaStream;
+      return element;
+    }),
+    detach: vi.fn(),
+  } as unknown as LocalVideoTrack;
 }
 
 describe("SelfPreview", () => {
@@ -41,5 +49,54 @@ describe("SelfPreview", () => {
     const video = document.querySelector("video");
     expect((video as HTMLVideoElement).muted).toBe(true);
     expect(document.querySelector("audio")).not.toBeInTheDocument();
+  });
+
+  describe("repaint nudge (media rendering bugfix pass, real-device report: a fresh mount reattaching an already-flowing track can paint black until forced to redecode)", () => {
+    const originalPlay = HTMLMediaElement.prototype.play;
+
+    beforeEach(() => {
+      vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+      vi.stubGlobal("cancelAnimationFrame", () => {});
+      HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      HTMLMediaElement.prototype.play = originalPlay;
+    });
+
+    it("resets srcObject a beat after attach, forcing a fresh decode, without ever detaching/reattaching the track itself", () => {
+      const track = fakeVideoTrack();
+      render(<SelfPreview track={track} />);
+      const video = document.querySelector("video") as HTMLVideoElement;
+
+      expect(track.attach).toHaveBeenCalledTimes(1);
+      // The nudge resets srcObject in place — same stream object, not a
+      // second attach()/detach() cycle on the track itself.
+      expect(video.srcObject).toBeTruthy();
+      expect(track.detach).not.toHaveBeenCalled();
+      expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+    });
+
+    it("does nothing if the element was never actually attached (no srcObject to reset)", () => {
+      const track = {
+        attach: vi.fn((element: HTMLVideoElement) => element),
+        detach: vi.fn(),
+      } as unknown as LocalVideoTrack;
+      expect(() => render(<SelfPreview track={track} />)).not.toThrow();
+    });
+
+    it("cancels the pending repaint nudge on unmount — never touches a detached element", () => {
+      vi.stubGlobal("requestAnimationFrame", () => 42);
+      const cancelSpy = vi.fn();
+      vi.stubGlobal("cancelAnimationFrame", cancelSpy);
+      const track = fakeVideoTrack();
+      const { unmount } = render(<SelfPreview track={track} />);
+      unmount();
+      expect(cancelSpy).toHaveBeenCalledWith(42);
+    });
   });
 });

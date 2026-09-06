@@ -16,6 +16,11 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
@@ -36,9 +41,13 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
 function makeFakeSupabase(activeRows: EventSpeaker[]) {
   let subscribeCallback: ((status: string) => void) | null = null;
   const fromCalls: string[] = [];
+  const handlers: Record<string, (payload: unknown) => void> = {};
 
   const channel = {
-    on: vi.fn().mockReturnThis(),
+    on: vi.fn((_type: string, config: { event: string; table: string }, callback: (payload: unknown) => void) => {
+      handlers[`${config.event}:${config.table}`] = callback;
+      return channel;
+    }),
     subscribe: vi.fn((callback: (status: string) => void) => {
       subscribeCallback = callback;
       return channel;
@@ -64,6 +73,9 @@ function makeFakeSupabase(activeRows: EventSpeaker[]) {
     triggerSubscribed: () => {
       subscribeCallback?.("SUBSCRIBED");
     },
+    // Session Simulator Reset Session follow-up — fires the registered
+    // DELETE handler directly, without a live websocket.
+    fireSpeakerDelete: (deleted: EventSpeaker) => handlers["DELETE:event_speakers"]?.({ old: deleted }),
   };
 }
 
@@ -134,5 +146,22 @@ describe("useActiveSpeakers — resync on (re)subscribe (issue #18 real-device f
     // Give any accidental async resync a chance to land, then assert it didn't.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.speakers).toHaveLength(0);
+  });
+
+  it("Session Simulator Reset Session follow-up: a hard-deleted simulated seat empties without a page reload, leaving a real occupied seat untouched", async () => {
+    const simSeat = speaker({ id: "sim-seat", seat_number: 1, profile_id: null, display_name: "Fake Fox" });
+    const realSeat = speaker({ id: "real-seat", seat_number: 2, profile_id: "p-real", display_name: "Real Person" });
+    const fake = makeFakeSupabase([]);
+    createClient.mockReturnValue(fake.client);
+
+    const { result } = renderHook(() => useActiveSpeakers("e1", [simSeat, realSeat]));
+    expect(result.current.speakers).toHaveLength(2);
+
+    fake.fireSpeakerDelete(simSeat);
+
+    await waitFor(() => {
+      expect(result.current.speakers).toHaveLength(1);
+    });
+    expect(result.current.speakers[0]?.display_name).toBe("Real Person");
   });
 });

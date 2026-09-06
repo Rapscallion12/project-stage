@@ -1,9 +1,15 @@
+import { useState } from "react";
+import { useIdleActivity } from "@/hooks/use-idle-activity";
 import { SpeakerStage } from "@/components/room/speaker-stage";
 import { RoomControls } from "@/components/room/room-controls";
 import { StageOverlayShell } from "@/components/room/stage-overlay-shell";
 import { WatchModeControls } from "@/components/room/watch-mode-controls";
+import { ReactionControl } from "@/components/room/reaction-control";
 import { AmbientComments } from "@/components/room/ambient-comments";
+import { ExpandedComments } from "@/components/room/expanded-comments";
+import { SpeakerVotePanel } from "@/components/room/speaker-vote-panel";
 import { CountdownOverlay } from "@/components/room/countdown-overlay";
+import { StageReadinessPrompt } from "@/components/room/stage-readiness-prompt";
 import { PortraitSpeakerView } from "@/components/room/portrait-speaker-view";
 import { GuestNameEditor } from "@/components/lobby/guest-name-editor";
 import { ChatPanel } from "@/components/lobby/chat-panel";
@@ -41,14 +47,21 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * `useAutomaticPromotion`/`withdrawSpeakerRequest`/
  * `useRoleTransitionReset`, not here — see DECISIONS.md.
  *
+ * **Discussion Expanded** (issue #21, "05d"): tapping an ambient comment
+ * bubble opens `ExpandedComments`, a tap-open bottom sheet for
+ * intentionally browsing the live comment stream. Deliberately *not*
+ * wired to the composer's own focus/tap — an earlier version of this
+ * feature tried that and it broke the already-approved "tap the
+ * composer, type, send" flow (every composer tap opened the full sheet
+ * first). `commentsOpen` is plain local state here, never lifted to
+ * `EventRoom`, so it has no causal path to role/seat/media state at all.
+ * See `ExpandedComments`' own doc comment.
+ *
  * **What still doesn't exist yet** (later phases, each gated on the
  * user's own real-device approval of the previous one):
- * - There is no way to *read* comments or open a discussion surface
- *   yet (Discussion Expanded is Phase 4) — only sending is live.
- * - No ambient comment/reaction layers yet (Phases 3, 5, 6).
+ * - No ambient comment/reaction layers yet (Phases 5, 6).
  * - React/Vote/Gift emblems are still inert (Phases 5/6, 7).
- * - Desktop and mobile landscape are untouched — this file only
- *   affects `PortraitRoom`.
+ * - Desktop is untouched (it already has a persistent chat sidebar).
  *
  * **Minimal top chrome**: a small translucent status pill (live dot +
  * room title, appending a connection-status word only when it's not
@@ -94,6 +107,19 @@ import type { RoomLayoutProps } from "@/components/room/types";
  * and doesn't include yet.
  */
 export function PortraitRoom(props: RoomLayoutProps) {
+  // Issue #21: must be called before the role-router's early return below
+  // — React's rules of hooks require every hook to run unconditionally on
+  // every render, regardless of which composition ultimately renders.
+  // Unused if participantRole is "speaker" (PortraitSpeakerView owns its
+  // own instance instead), but still has to be called here.
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  // Pre-launch interaction pass, Section 8: one shared idle-activity
+  // tracker for the whole composition — see useIdleActivity's own doc
+  // comment for the ambient-activity vs. explicit-hold distinction.
+  // Called before the role-router's early return below for the same
+  // rules-of-hooks reason as commentsOpen above.
+  const idleActivity = useIdleActivity();
+
   // Issue #18, Speaker View Phase 1 — see this component's own doc
   // comment above. Checked before any of this component's own
   // destructuring/JSX, so a seated speaker never sees so much as a
@@ -129,15 +155,38 @@ export function PortraitRoom(props: RoomLayoutProps) {
     needsMediaActivation,
     activateMedia,
     mediaError,
+    mediaReadiness,
+    acquiringMedia,
     localVideoTrack,
     onPrepareMedia,
     reconnectingIdentities,
+    isPreviewBuild,
+    simulatedGuestIds,
+    stageRound,
     messages,
     reactions,
+    pendingRequests,
+    profileDirectory,
+    onOpenRoomInfo,
+    stageReactions,
   } = props;
 
   return (
-    <div className="relative h-full min-h-0 w-full overflow-hidden">
+    <div
+      className="relative h-full min-h-0 w-full overflow-hidden"
+      // Pre-launch interaction pass, Section 8: ambient "the viewer is
+      // doing something" signal for the whole composition — a real tap/
+      // keypress/focus anywhere (the composer, the reaction button, a
+      // vote control) resets the idle timer; see useIdleActivity's own
+      // doc comment for why focus specifically uses hold/release instead
+      // of a plain reset (a focused composer must stay solid the whole
+      // time it's focused, not just re-trigger a fresh 2.5s countdown on
+      // each keystroke).
+      onPointerDownCapture={idleActivity.registerActivity}
+      onKeyDownCapture={idleActivity.registerActivity}
+      onFocusCapture={idleActivity.holdActive}
+      onBlurCapture={idleActivity.releaseActive}
+    >
       <SpeakerStage
         speakers={speakers}
         getParticipant={getParticipant}
@@ -152,18 +201,31 @@ export function PortraitRoom(props: RoomLayoutProps) {
         isJoiningSeat={isJoiningSeat}
         localVideoTrack={localVideoTrack}
         reconnectingIdentities={reconnectingIdentities}
+        isPreviewBuild={isPreviewBuild}
+        simulatedGuestIds={simulatedGuestIds}
+        stageRound={stageRound}
+        viewerIdentity={identity}
+        pendingRequests={pendingRequests}
+        profileDirectory={profileDirectory}
+        stageReactions={stageReactions}
         // Issue #18 UX finding: dims the stage behind the center-stage
         // "Going live" countdown — SpeakerStage's own existing scrim
         // mechanism (issue #21), reused rather than a second dimming
         // layer. 0 the rest of the time, same as every other caller.
         scrimOpacity={promotionCountdown !== null ? 0.6 : 0}
+        // Media Readiness pass (issue #21): treated the same as any other
+        // promotionCountdown-active state below — this reuses the exact
+        // same scrimOpacity signal, not a second one.
       />
 
       {/* Minimal top chrome — status pill (left) + guest identity chip (right), both floating over the video, neither reserving space from it. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 p-3">
-        <div
+        <button
+          type="button"
           data-testid="watch-status-pill"
-          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90"
+          onClick={onOpenRoomInfo}
+          aria-label={`Room info and navigation for ${event.title}`}
+          className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
           <span className="max-w-[10rem] truncate font-medium">{event.title}</span>
@@ -175,7 +237,10 @@ export function PortraitRoom(props: RoomLayoutProps) {
               {connectionStatus === "unavailable" && "· Video unavailable"}
             </span>
           )}
-        </div>
+          <span aria-hidden="true" className="text-white/60">
+            ▾
+          </span>
+        </button>
         {identity.type === "guest" && (
           <div className="pointer-events-auto">
             <GuestNameEditor initialName={identity.displayName} variant="chip" />
@@ -214,14 +279,37 @@ export function PortraitRoom(props: RoomLayoutProps) {
         // the one rendering anymore (the role router above swaps to
         // PortraitSpeakerView), so there's no frame where this and
         // Speaker View can coexist.
-        <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+        promotionCountdown === 0 && !(mediaReadiness.camera.ready && mediaReadiness.microphone.ready) ? (
+          // Media Readiness pass (issue #21): the seat-claim gate itself
+          // — useAutomaticPromotion is deliberately withholding the real
+          // claim at countdown 0 until both devices are verified (see its
+          // own doc comment). Takes over the same center-stage overlay
+          // slot CountdownOverlay used for every other countdown tick,
+          // never both at once.
+          <div className="pointer-events-auto absolute inset-0 z-10 flex items-center justify-center gap-2 px-6 text-center">
+            <StageReadinessPrompt
+              mediaReadiness={mediaReadiness}
+              acquiringMedia={acquiringMedia}
+              onPrepareMedia={onPrepareMedia}
+              onCancel={onCancelPromotion}
+            />
+          </div>
+        ) : (
+          <CountdownOverlay countdown={promotionCountdown} onCancel={onCancelPromotion} />
+        )
       ) : (
         <>
           <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[70%]">
-            <AmbientComments messages={messages} />
+            <AmbientComments
+              messages={messages}
+              onExpand={() => {
+                setCommentsOpen(true);
+                idleActivity.holdActive();
+              }}
+            />
           </div>
 
-          <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2">
+          <StageOverlayShell gradient={false} topClassName="pt-0" className="gap-2" idle={idleActivity.idle}>
             {joinSeatMessage && (
               <p
                 className="rounded-lg bg-black/35 px-3 py-2 text-xs text-red-400"
@@ -243,6 +331,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
                   activateMedia={activateMedia}
                   onPrepareMedia={onPrepareMedia}
                   mediaError={mediaError}
+                  mediaReadiness={mediaReadiness}
+                  acquiringMedia={acquiringMedia}
                   connectionStatus={connectionStatus}
                   phase={phase}
                   countdownText={countdownText}
@@ -250,6 +340,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
               </div>
             )}
             <WatchModeControls
+              idle={idleActivity.idle}
               composer={
                 <ChatPanel
                   eventId={event.id}
@@ -262,10 +353,38 @@ export function PortraitRoom(props: RoomLayoutProps) {
                   hasPendingRequest={!isSpeaker && hasPendingRequest}
                   onCancelPendingRequest={onCancelPromotion}
                   compact
+                  idle={idleActivity.idle}
+                />
+              }
+              voteSlot={<SpeakerVotePanel speakers={speakers} isPreviewBuild={isPreviewBuild} />}
+              reactionSlot={
+                <ReactionControl
+                  reactions={stageReactions}
+                  idle={idleActivity.idle}
+                  onOpenChange={(open) => (open ? idleActivity.holdActive() : idleActivity.releaseActive())}
                 />
               }
             />
           </StageOverlayShell>
+
+          <ExpandedComments
+            open={commentsOpen}
+            onClose={() => {
+              setCommentsOpen(false);
+              idleActivity.releaseActive();
+            }}
+            eventId={event.id}
+            messages={messages}
+            reactions={reactions}
+            pendingRequests={pendingRequests}
+            profileDirectory={profileDirectory}
+            micRequestMode={micRequestMode}
+            onMicRequestModeChange={onMicRequestModeChange}
+            onHasPendingRequestChange={onHasPendingRequestChange}
+            onPrepareMedia={onPrepareMedia}
+            hasPendingRequest={!isSpeaker && hasPendingRequest}
+            onCancelPendingRequest={onCancelPromotion}
+          />
         </>
       )}
     </div>

@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { getGuestDisplayName, getGuestId } from "@/lib/guest";
-import { getProfileDisplayName } from "@/lib/repositories/profiles";
+import { getProfileDisplayName, getProfileUsername } from "@/lib/repositories/profiles";
 
 export type Identity =
-  | { type: "profile"; id: string; displayName: string }
+  | { type: "profile"; id: string; displayName: string; username: string | null }
   | { type: "guest"; id: string; displayName: string };
 
 /**
@@ -23,11 +23,12 @@ export async function resolveIdentity(): Promise<Identity> {
   } = await supabase.auth.getUser();
 
   if (user) {
-    const displayName = await getProfileDisplayName(user.id);
+    const [displayName, username] = await Promise.all([getProfileDisplayName(user.id), getProfileUsername(user.id)]);
     return {
       type: "profile",
       id: user.id,
       displayName: displayName ?? "Account holder",
+      username,
     };
   }
 

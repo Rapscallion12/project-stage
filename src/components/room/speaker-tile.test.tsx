@@ -4,6 +4,29 @@ import type { Participant, Track, TrackPublication } from "livekit-client";
 import { SpeakerTile } from "./speaker-tile";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import { SPEAKER_DISCONNECT_GRACE_SECONDS } from "@/lib/speaker-reconnect";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+// Media Readiness pass (issue #21): jsdom has no real Web Audio API
+// (AudioContext/AnalyserNode), so createAudioAnalyser — the one function
+// AudioOnlyVisualizer calls — is mocked here to a harmless stand-in. This
+// file exercises SpeakerTile's own state selection (which placeholder
+// renders when), not the analyser's real frame-by-frame math, which has
+// no meaningful jsdom-testable behavior of its own (no real audio
+// hardware, no real rAF-driven canvas) — see AudioOnlyVisualizer's own
+// doc comment.
+vi.mock("livekit-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("livekit-client")>();
+  return {
+    ...actual,
+    createAudioAnalyser: vi.fn(() => ({
+      calculateVolume: () => 0,
+      analyser: { context: { state: "running", resume: vi.fn(async () => {}) } } as unknown as AnalyserNode,
+      cleanup: vi.fn(async () => {}),
+    })),
+  };
+});
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
   return {
@@ -18,11 +41,20 @@ function speaker(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
 
 function fakeVideoTrack(): Track {
+  return { attach: vi.fn(), detach: vi.fn() } as unknown as Track;
+}
+
+function fakeAudioTrack(): Track {
   return { attach: vi.fn(), detach: vi.fn() } as unknown as Track;
 }
 
@@ -75,6 +107,59 @@ describe("SpeakerTile", () => {
     });
   });
 
+  describe("established-stage empty seat states (issue #21, third/fifth/sixth corrective passes — no bypassing Request-to-Speak)", () => {
+    it("shows 'Joining…' — not 'Selecting next speaker…' — once a candidate is reserved for this seat (issue #21, sixth corrective pass, Section 14)", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="joining" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("DIV");
+      expect(tile).toHaveTextContent("Joining…");
+      expect(tile).not.toHaveTextContent("Selecting next speaker…");
+    });
+
+    it("shows 'Selecting next speaker…' instead of the tappable CTA when an eligible candidate exists", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="selecting" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("DIV"); // never interactive
+      expect(tile).toHaveTextContent("Selecting next speaker…");
+      expect(tile).not.toHaveTextContent("Seat open");
+      expect(tile).not.toHaveTextContent("Tap to join");
+    });
+
+    it("shows 'Waiting for speaker requests…' — never 'Selecting…' — when nobody is currently eligible (issue #21, fifth corrective pass, Section 2)", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} emptySeatState="waiting" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("DIV");
+      expect(tile).toHaveTextContent("Waiting for speaker requests…");
+      expect(tile).not.toHaveTextContent("Selecting next speaker…");
+    });
+
+    it("shows a tappable 'Stage open' CTA for the small-room fallback (issue #21, fifth corrective pass, Section 15)", () => {
+      const onTapEmptySeat = vi.fn();
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} emptySeatState="fallback-open" />);
+      const tile = screen.getByTestId("empty-seat");
+      expect(tile.tagName).toBe("BUTTON");
+      expect(tile).toHaveTextContent("Stage open");
+      expect(tile).toHaveTextContent("Tap to join");
+      fireEvent.click(tile);
+      expect(onTapEmptySeat).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays a plain 'Seat open' placeholder during initial stage formation (emptySeatState omitted)", () => {
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} />);
+      expect(screen.getByTestId("empty-seat")).toHaveTextContent("Seat open");
+    });
+
+    it("never renders as tappable even if a caller mistakenly passes both onTapEmptySeat and a non-interactive emptySeatState — the caller (SpeakerStage) is responsible for omitting the handler, but this stays a defensive belt", () => {
+      // This documents the actual contract: emptySeatState only changes
+      // wording, the *real* gate is whether onTapEmptySeat is provided at
+      // all (SpeakerStage never provides both together for "selecting"/
+      // "waiting") — see that component's own onTapEmptySeat gating.
+      const onTapEmptySeat = vi.fn();
+      render(<SpeakerTile speaker={null} participant={undefined} isLocal={false} onTapEmptySeat={onTapEmptySeat} emptySeatState="selecting" />);
+      expect(screen.getByTestId("empty-seat").tagName).toBe("BUTTON");
+    });
+  });
+
   it("shows the speaker's name (from the DB) even with no LiveKit participant connected yet", () => {
     render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
     expect(screen.getByTestId("speaker-tile")).toHaveTextContent("Jamie Rivera");
@@ -93,6 +178,57 @@ describe("SpeakerTile", () => {
     const participant = fakeParticipant({ camera: { track: fakeTrack, isMuted: true } });
     render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
     expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+  });
+
+  describe("audio-only visualizer (Media Readiness pass, issue #21, Section 12): camera off, mic actually publishing", () => {
+    it("shows the audio-only visualizer, not the generic 'Camera off' placeholder, when camera is off but the microphone track is live and unmuted", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(screen.getByTestId("audio-only-visualizer")).toBeInTheDocument();
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("still shows the ordinary 'Camera off' placeholder when the microphone is also off/muted — both-off is unaffected by this pass", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: true } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+    });
+
+    it("shows real video instead once the camera comes back on — the visualizer never coexists with, or blocks, the video branch", () => {
+      const micTrack = fakeAudioTrack();
+      const cameraTrack = fakeVideoTrack();
+      const participant = fakeParticipant({
+        microphone: { track: micTrack, isMuted: false },
+        camera: { track: cameraTrack, isMuted: false },
+      });
+      const { container } = render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+      expect(container.querySelector("video")).toBeInTheDocument();
+    });
+
+    it("never shows the big-tile visualizer for the local speaker's own seat — the canonical local self-view is SpeakerStage's corner slot (media rendering bugfix pass), not a second copy here", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} />);
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+      // Same neutral "You're live" treatment camera-on already used —
+      // widened to also cover camera-off-mic-on, not a new local state.
+      expect(screen.getByTestId("own-seat-live")).toBeInTheDocument();
+    });
+
+    it("inactivity still takes precedence over the visualizer if both are somehow true at once — the existing safety net is never shadowed", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ microphone: { track: micTrack, isMuted: false } });
+      render(
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={false} isInactive={true} />,
+      );
+      expect(screen.getByTestId("speaker-inactive")).toBeInTheDocument();
+      expect(screen.queryByTestId("audio-only-visualizer")).not.toBeInTheDocument();
+    });
   });
 
   it("still shows the speaker's name and seat even if they have media issues (DB stays authoritative)", () => {
@@ -120,7 +256,7 @@ describe("SpeakerTile", () => {
           participant={undefined}
           isLocal={true}
           needsMediaActivation={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
         />,
       );
       expect(screen.getByTestId("tile-activate-media")).toHaveTextContent("Tap to enable camera & mic");
@@ -128,7 +264,7 @@ describe("SpeakerTile", () => {
     });
 
     it("calls activateMedia directly from the tile's own click handler — the real user gesture Safari requires", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(
         <SpeakerTile
           speaker={speaker()}
@@ -149,7 +285,7 @@ describe("SpeakerTile", () => {
           participant={undefined}
           isLocal={false}
           needsMediaActivation={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
         />,
       );
       expect(screen.queryByTestId("tile-activate-media")).not.toBeInTheDocument();
@@ -203,7 +339,7 @@ describe("SpeakerTile", () => {
           participant={undefined}
           isLocal={true}
           needsMediaActivation={true}
-          activateMedia={vi.fn(async () => {})}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
         />,
       );
       expect(screen.getByTestId("tile-activate-media")).toBeInTheDocument();
@@ -423,6 +559,134 @@ describe("SpeakerTile", () => {
         />,
       );
       expect(screen.getByTestId("audience-inactive-countdown")).toHaveTextContent("Speaker inactive…");
+    });
+  });
+
+  describe("round-timer badge (issue #21 corrective pass — closing-phase only; the ordinary shared round countdown moved to StageRoundBadge on SpeakerStage)", () => {
+    it("shows nothing while the seat is in its ordinary active phase, in preview or production alike — the shared badge covers that now", () => {
+      const { rerender } = render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 45_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={true}
+        />,
+      );
+      expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
+
+      rerender(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "active", round_ends_at: new Date(Date.now() + 45_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={false}
+        />,
+      );
+      expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
+    });
+
+    it("labels the closing period distinctly ('final Ns') in preview, even far from the deadline", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({
+            round_phase: "closing",
+            closing_ends_at: new Date(Date.now() + 20_000).toISOString(),
+          })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={true}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toHaveTextContent("Final 20s");
+    });
+
+    it("hides the closing countdown by default (production), far from the deadline", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "closing", closing_ends_at: new Date(Date.now() + 25_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={false}
+        />,
+      );
+      expect(screen.queryByTestId("speaker-round-timer")).not.toBeInTheDocument();
+    });
+
+    it("reveals the closing countdown within the final ~10s even in production", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker({ round_phase: "closing", closing_ends_at: new Date(Date.now() + 8_000).toISOString() })}
+          participant={undefined}
+          isLocal={false}
+          isPreviewBuild={false}
+        />,
+      );
+      expect(screen.getByTestId("speaker-round-timer")).toBeInTheDocument();
+    });
+  });
+
+  describe("simulated speaker placeholder (Session Simulator real-device follow-up)", () => {
+    it("renders an unambiguous 'Simulated speaker' placeholder, not the generic 'Camera off' one, when isSimulated is true", () => {
+      render(
+        <SpeakerTile speaker={speaker({ display_name: "Curious Fox" })} participant={undefined} isLocal={false} isSimulated={true} />,
+      );
+      expect(screen.getByTestId("simulated-speaker-placeholder")).toBeInTheDocument();
+      expect(screen.getByTestId("simulated-speaker-label")).toHaveTextContent("Simulated speaker");
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+      // The name/avatar is still shown via the ordinary identity bar, same as any other occupied seat.
+      expect(screen.getAllByText("Curious Fox").length).toBeGreaterThan(0);
+    });
+
+    it("falls back to the ordinary 'Camera off' placeholder when isSimulated is false (default)", () => {
+      render(<SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} />);
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+      expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("never shows the simulated placeholder for the local participant's own live seat, even if isSimulated is somehow true", () => {
+      // Defensive: a real signed-in/guest local speaker is never also a
+      // simulated identity in practice, but isSimulated shouldn't override
+      // the isLocal/hasVideo branches that take priority above it.
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} isSimulated={true} />);
+      expect(screen.getByTestId("own-seat-live")).toBeInTheDocument();
+      expect(screen.queryByTestId("simulated-speaker-placeholder")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("profile navigation (issue #29, Section 15 — a registered speaker's avatar becomes tappable into their public profile)", () => {
+    it("wraps the inactive-speaker avatar in a link to the profile when profileEntry has a username", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={false}
+          isInactive={true}
+          profileEntry={{ username: "jaceb", avatarUrl: null }}
+        />,
+      );
+      const link = screen.getByRole("link");
+      expect(link).toHaveAttribute("href", "/profile/jaceb");
+    });
+
+    it("renders no link at all when profileEntry is absent (guest speaker, or no username chosen yet)", () => {
+      render(
+        <SpeakerTile speaker={speaker()} participant={undefined} isLocal={false} isInactive={true} />,
+      );
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("wraps the no-video-placeholder avatar in a profile link too", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={false}
+          profileEntry={{ username: "jaceb", avatarUrl: null }}
+        />,
+      );
+      expect(screen.getByTestId("no-video-placeholder")).toBeInTheDocument();
+      expect(screen.getByRole("link")).toHaveAttribute("href", "/profile/jaceb");
     });
   });
 });

@@ -1,17 +1,22 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Track, type Participant } from "livekit-client";
+import { Track, type LocalAudioTrack, type Participant, type RemoteAudioTrack } from "livekit-client";
 import { cn } from "@/lib/utils";
 import { useReconnectCountdown } from "@/hooks/use-reconnect-countdown";
+import { useSpeakerRoundCountdown } from "@/hooks/use-speaker-round-countdown";
 import { inactiveSince } from "@/lib/speaker-presence";
-import type { MediaError } from "@/hooks/use-live-room-connection";
+import { ParticipantAvatar } from "@/components/room/participant-avatar";
+import { ProfileLink } from "@/components/room/profile-link";
+import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
+import { OnSpeakerReactionBursts } from "@/components/room/stage-reactions-overlay";
+import { deriveParticipantMediaState } from "@/lib/participant-media-state";
+import { useDoubleTap } from "@/hooks/use-double-tap";
+import type { IncomingStageReaction } from "@/hooks/use-stage-reactions";
+import type { MediaError, MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
-
-function initials(name: string): string {
-  return name.trim().slice(0, 2).toUpperCase() || "?";
-}
+import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
 
 /** Compact label for the tile's own placeholder — RoomControls still shows the full sentence below; this is just enough to explain the icon at a glance. */
 function mediaErrorShortLabel(error: NonNullable<MediaError>): string {
@@ -64,6 +69,13 @@ export function SpeakerTile({
   isInactive: isInactiveProp = false,
   orientation = "landscape",
   clearTopChrome = false,
+  isPreviewBuild = false,
+  isSimulated = false,
+  emptySeatState,
+  profileEntry,
+  onDoubleTapReact,
+  onSpeakerReactions = [],
+  showOnSpeakerReactions = false,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -71,7 +83,7 @@ export function SpeakerTile({
   /** Issue #15 real-device follow-up: true once the local participant has canPublish but hasn't tapped to activate media yet. Only ever meaningful when isLocal is true — a remote tile never shows this. */
   needsMediaActivation?: boolean;
   /** Must be invoked directly from this tile's own onClick — see useLiveRoomConnection's activateMedia doc comment for why. */
-  activateMedia?: () => Promise<void>;
+  activateMedia?: () => Promise<MediaReadinessState>;
   mediaError?: MediaError;
   /** Issue #27: only meaningful when `speaker` is null. Undefined (not just a no-op) when the viewer already holds a seat — see SpeakerStage. */
   onTapEmptySeat?: () => void;
@@ -126,9 +138,74 @@ export function SpeakerTile({
   orientation?: Orientation;
   /** Only meaningful in portrait: true for whichever tile renders visually first (seat 1, or the promoted-open-seat's sibling when reordered) — offsets the identity label below the room's own top-chrome status pill/guest chip so they don't overlap. The second tile has nothing above it and needs no offset. */
   clearTopChrome?: boolean;
+  /** Issue #21, Part 1: computed server-side (`isPreviewOrDevBuild()`) and threaded down unchanged — see lib/preview-mode.ts. Governs only whether the round timer badge below reveals early (full-round, for testing) or waits for the real product's final-~10s window; never changes the deadline itself. */
+  isPreviewBuild?: boolean;
+  /**
+   * Session Simulator real-device follow-up: true when this occupied
+   * seat's `guest_id` is one the simulator generated in this browser tab
+   * (see RoomLayoutProps' own doc comment). Purely cosmetic — swaps the
+   * ordinary "Camera off" no-video placeholder for an unambiguous
+   * "Simulated speaker" one, so it's never mistaken for a real technical
+   * problem while testing. No fake LiveKit video, no change to `hasVideo`/
+   * `participant` handling — a simulated identity never actually connects
+   * to LiveKit, so it always falls through to the same no-video branch a
+   * real speaker who hasn't turned their camera on would; this only
+   * changes what that branch says.
+   */
+  isSimulated?: boolean;
+  /**
+   * Issue #21, fifth/sixth corrective passes: which of four established-
+   * stage empty-seat states this tile is in — only meaningful when
+   * `speaker` is null and the stage has ever achieved its initial
+   * pairing (see `SpeakerStage`'s own `established` doc comment).
+   * Undefined for a never-established stage's ordinary "Seat open"/
+   * tap-to-join tile.
+   * - `"joining"`: a candidate has already been reserved for *this*
+   *   seat (selection is done — only their own Going Live countdown/
+   *   seat claim remains) — issue #21, sixth corrective pass, Section
+   *   14: real-device testing found "Selecting next speaker…" staying
+   *   on screen through the entire intentional countdown even after
+   *   selection had already succeeded, reading as stuck. Non-
+   *   interactive.
+   * - `"selecting"`: at least one eligible Request-to-Speak candidate
+   *   exists, but none is reserved for *this* seat yet — an active,
+   *   short-lived transition, not a passive wait. Non-interactive;
+   *   `onTapEmptySeat` is never wired for this case.
+   * - `"waiting"`: established, empty, but nobody is currently eligible
+   *   to select (and the small-room fallback below doesn't apply to
+   *   *this* viewer right now) — accurately communicates there's
+   *   genuinely nobody to select, per explicit instruction not to show
+   *   "Selecting next speaker…" when there's nobody to select.
+   *   Non-interactive.
+   * - `"fallback-open"`: both seats are empty, there are zero eligible
+   *   requests, and this viewer isn't excluded (Section 8-15's
+   *   small-room recovery mode) — tappable, same `onTapEmptySeat` prop
+   *   the never-established case already uses (the server-side handler
+   *   itself now covers both cases — see `joinOpenSeat`).
+   */
+  emptySeatState?: "joining" | "selecting" | "waiting" | "fallback-open";
+  /** Issue #29: this seat's occupant's own public profile, if `speaker.profile_id` has one — see `useProfileDirectory`'s own doc comment. Undefined for a guest, a simulated identity, or an account that hasn't chosen a username yet; every one of those keeps today's exact non-navigable, initials-only avatar. */
+  profileEntry?: ProfileDirectoryEntry;
+  /**
+   * Pre-launch interaction pass, Section 2: double-tapping this tile's
+   * own background surface (never a nested interactive control — see
+   * `useDoubleTap`'s own doc comment) sends the viewer's currently
+   * selected reaction to *this seat's* authoritative identity. Provided
+   * by `SpeakerStage.renderTile` from the same `identity` it already
+   * computes from `speaker.profile_id`/`guest_id` — never derived from
+   * this tile's visual position, so a local top/bottom swap can never
+   * misattribute a reaction. `undefined` for an empty seat (there's
+   * nobody to react to) or when reactions are unavailable.
+   */
+  onDoubleTapReact?: (x: number, y: number) => void;
+  /** Pre-launch interaction pass, Section 3: this seat's own incoming reactions, already filtered by the caller — see `OnSpeakerReactionBursts`. */
+  onSpeakerReactions?: IncomingStageReaction[];
+  /** Pre-launch interaction pass, Section 4: true only when the viewer's own display preference is "On speaker" *and* they haven't hidden reactions — "Side"/hidden modes render nothing here at all (see `ReactionSideLane`/`SpeakerStage` instead). */
+  showOnSpeakerReactions?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const doubleTap = useDoubleTap(onDoubleTapReact ?? (() => {}));
 
   // Issue #18 audience-countdown finding, broadened by the unified
   // inactive-speaker finding: the *same* authoritative deadline this
@@ -150,9 +227,22 @@ export function SpeakerTile({
   // suppresses a true the caller already passed.
   const isInactive = isInactiveProp || mySeatInactiveSince !== null;
 
+  // Issue #21, Part 1: the same "read the row's own authoritative
+  // deadline, never invent a fresh one" discipline as
+  // reconnectSecondsRemaining above — null whenever there's nothing to
+  // show (no speaker, or the real product's reveal window hasn't been
+  // reached yet).
+  const roundDisplay = useSpeakerRoundCountdown(speaker, isPreviewBuild);
+
+  // Media rendering bugfix pass (real-device report, issue #21): shared
+  // with SpeakerStage's own local self-view corner slot — see this
+  // helper's own doc comment for why this must be the *one* place
+  // hasVideo/hasAudio get derived, not a second inline computation here.
+  const { hasVideo, hasAudio } = deriveParticipantMediaState(participant);
+  // Still read directly for the attach effects below, which need the
+  // actual track/mute objects, not just the derived booleans.
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
-  const hasVideo = Boolean(cameraPublication?.track && !cameraPublication.isMuted);
   // Issue #22: this tile's own big video is never shown for the local
   // speaker's own seat — see this component's doc comment. Only affects
   // rendering; the underlying publication is untouched.
@@ -186,29 +276,64 @@ export function SpeakerTile({
     // the server decides that (see joinOpenSeat), never this component —
     // a queue existing falls back to the composer's request mode instead
     // of anything shown here.
-    return onTapEmptySeat ? (
-      <button
-        type="button"
-        data-testid="empty-seat"
-        onClick={onTapEmptySeat}
-        disabled={isJoiningSeat}
-        className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted transition-colors hover:bg-accent/5 hover:text-accent disabled:opacity-60"
-      >
-        <p className="text-sm font-medium">{isJoiningSeat ? "Joining…" : "Seat open"}</p>
-        {!isJoiningSeat && <p className="text-xs">Tap to join</p>}
-      </button>
-    ) : (
+    //
+    // Issue #21, fifth corrective pass: `onTapEmptySeat` being wired at
+    // all now means one of *two* legitimate direct-join cases — a
+    // never-established stage's ordinary first-come opening, or the
+    // small-room fallback (`emptySeatState === "fallback-open"`) — both
+    // say the same thing to the viewer and both go through the same
+    // server-side handler, so one tappable button covers both.
+    if (onTapEmptySeat) {
+      return (
+        <button
+          type="button"
+          data-testid="empty-seat"
+          onClick={onTapEmptySeat}
+          disabled={isJoiningSeat}
+          className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted transition-colors hover:bg-accent/5 hover:text-accent disabled:opacity-60"
+        >
+          <p className="text-sm font-medium">
+            {isJoiningSeat ? "Joining…" : emptySeatState === "fallback-open" ? "Stage open" : "Seat open"}
+          </p>
+          {!isJoiningSeat && <p className="text-xs">Tap to join</p>}
+        </button>
+      );
+    }
+    // Issue #21, third/fifth corrective passes: past initial stage
+    // formation, an empty seat is tappable again only in the narrow
+    // fallback case above — every other established-stage empty seat is
+    // a plain, non-interactive status, never a disabled-looking CTA, so
+    // it never reads as "you could tap this if only X." Section 2's
+    // explicit distinction: "Selecting next speaker…" only when there's
+    // actually somebody eligible to select — otherwise "Waiting for
+    // speaker requests…", never the other way around.
+    return (
       <div
         data-testid="empty-seat"
         className="flex h-full w-full flex-col items-center justify-center gap-1 border border-dashed border-border bg-foreground/[0.02] text-muted"
       >
-        <p className="text-sm font-medium">Seat open</p>
+        <p className="text-sm font-medium">
+          {emptySeatState === "joining"
+            ? "Joining…"
+            : emptySeatState === "selecting"
+              ? "Selecting next speaker…"
+              : emptySeatState === "waiting"
+                ? "Waiting for speaker requests…"
+                : "Seat open"}
+        </p>
       </div>
     );
   }
 
   return (
-    <div data-testid="speaker-tile" className="relative h-full w-full overflow-hidden bg-foreground/10">
+    <div
+      data-testid="speaker-tile"
+      className="relative h-full w-full overflow-hidden bg-foreground/10"
+      onPointerUp={onDoubleTapReact ? doubleTap.onPointerUp : undefined}
+    >
+      {showOnSpeakerReactions && onSpeakerReactions.length > 0 && (
+        <OnSpeakerReactionBursts reactions={onSpeakerReactions} />
+      )}
       {showBigVideo ? (
         // Only ever a remote participant's video now — the local
         // speaker's own feed lives in SelfPreview instead (see this
@@ -233,23 +358,28 @@ export function SpeakerTile({
           }}
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/10 text-accent transition-colors hover:bg-accent/15 active:bg-accent/20"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/20 text-lg font-semibold">
-            {initials(speaker.display_name)}
-          </div>
+          <ParticipantAvatar name={speaker.display_name} size="md" className="bg-accent/20" />
           <p className="px-4 text-center text-xs font-medium">Tap to enable camera &amp; mic</p>
         </button>
-      ) : isLocal && hasVideo ? (
-        // I'm live (hasVideo is true — a real, unmuted published track),
-        // just not shown here — see this component's doc comment. Framed
-        // neutrally/positively, not as "Camera off" (untrue: it's on,
-        // it's just deliberately not duplicated in this tile).
+      ) : isLocal && (hasVideo || hasAudio) ? (
+        // I'm live (hasVideo or hasAudio is true — a real, unmuted
+        // published track), just not shown here — see this component's
+        // doc comment. Framed neutrally/positively, not as "Camera off"
+        // (untrue: something's on, it's just deliberately not duplicated
+        // in this tile). Media rendering bugfix pass (issue #21): widened
+        // from hasVideo-only — the local speaker's own audio-only
+        // visualizer is likewise canonically shown in the self-preview
+        // corner slot (see SpeakerStage), never duplicated here; this
+        // tile stays the same neutral message for camera-on and
+        // camera-off-mic-on alike, matching how it already treated
+        // camera-on before this pass.
         <div
           data-testid="own-seat-live"
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/5 text-foreground"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
-            {initials(speaker.display_name)}
-          </div>
+          <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${speaker.display_name}'s profile`}>
+            <ParticipantAvatar name={speaker.display_name} imageUrl={profileEntry?.avatarUrl} size="md" />
+          </ProfileLink>
           <p className="px-4 text-center text-xs">You&apos;re live — see your preview in the corner</p>
         </div>
       ) : isInactive ? (
@@ -257,9 +387,9 @@ export function SpeakerTile({
           data-testid="speaker-inactive"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
-            {initials(speaker.display_name)}
-          </div>
+          <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${speaker.display_name}'s profile`}>
+            <ParticipantAvatar name={speaker.display_name} imageUrl={profileEntry?.avatarUrl} size="md" />
+          </ProfileLink>
           <p className="text-xs" data-testid="audience-inactive-countdown">
             {reconnectSecondsRemaining === 0
               ? // Issue #18 expiration-enforcement finding: never a stuck
@@ -271,14 +401,41 @@ export function SpeakerTile({
               : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
           </p>
         </div>
+      ) : !isLocal && hasAudio ? (
+        // Media Readiness pass (issue #21), Section 12: camera off, mic
+        // on — a fully valid post-join state (Section 11), never treated
+        // as a "camera off" dead end. `!isLocal` here is already
+        // guaranteed by the branch above (isLocal-and-hasAudio is caught
+        // there instead — see its own doc comment, media rendering
+        // bugfix pass) but stated explicitly since this is the
+        // remote-viewer/co-speaker path specifically:
+        // `microphonePublication.track` is whichever real, subscribed
+        // LiveKit audio track this viewer's own client holds for this
+        // seat.
+        <AudioOnlyVisualizer
+          track={microphonePublication!.track as LocalAudioTrack | RemoteAudioTrack}
+          displayName={speaker.display_name}
+          imageUrl={profileEntry?.avatarUrl}
+          username={profileEntry?.username ?? null}
+        />
+      ) : isSimulated ? (
+        <div
+          data-testid="simulated-speaker-placeholder"
+          className="flex h-full w-full flex-col items-center justify-center gap-2 border-2 border-dashed border-accent/40 bg-accent/5 text-accent"
+        >
+          <ParticipantAvatar name={speaker.display_name} size="md" className="bg-accent/20" />
+          <p className="text-xs font-medium" data-testid="simulated-speaker-label">
+            Simulated speaker
+          </p>
+        </div>
       ) : (
         <div
           data-testid="no-video-placeholder"
           className="flex h-full w-full flex-col items-center justify-center gap-2 text-muted"
         >
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 text-lg font-semibold text-accent">
-            {initials(speaker.display_name)}
-          </div>
+          <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${speaker.display_name}'s profile`}>
+            <ParticipantAvatar name={speaker.display_name} imageUrl={profileEntry?.avatarUrl} size="md" />
+          </ProfileLink>
           <p className="text-xs">{isLocal && mediaError ? mediaErrorShortLabel(mediaError) : "Camera off"}</p>
         </div>
       )}
@@ -296,15 +453,38 @@ export function SpeakerTile({
             {speaker.display_name}
             {isLocal ? " (you)" : ""}
           </p>
+          {roundDisplay && <SpeakerRoundBadge display={roundDisplay} />}
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
+        <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-3 py-2">
           <p className="truncate text-sm font-medium text-white">
             {speaker.display_name}
             {isLocal ? " (you)" : ""}
           </p>
+          {roundDisplay && <SpeakerRoundBadge display={roundDisplay} />}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Issue #21 corrective pass: an *individual* seat's own round badge —
+ * narrowed to the narrow-loss closing window only, since the ordinary
+ * shared countdown now renders exactly once, at the stage level
+ * (`SpeakerStage`'s `StageRoundBadge`), never per-tile. Deliberately
+ * tiny and neutral (no color-shift/pulse here; that emphasis
+ * intensification is the Vote *control*'s job per Part 2/H, not this
+ * identity-area badge). "Final Ns" since this is a guaranteed-outcome
+ * grace window, not another survival round.
+ */
+function SpeakerRoundBadge({ display }: { display: { remainingSeconds: number; phase: "closing" } }) {
+  return (
+    <span
+      data-testid="speaker-round-timer"
+      className="shrink-0 rounded-full bg-black/40 px-1.5 py-0.5 text-[10px] font-medium text-white/80 [text-shadow:none]"
+    >
+      Final {display.remainingSeconds}s
+    </span>
   );
 }

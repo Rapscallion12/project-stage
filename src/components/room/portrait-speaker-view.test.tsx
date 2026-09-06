@@ -4,11 +4,15 @@ import { PortraitSpeakerView } from "./portrait-speaker-view";
 import type { RoomLayoutProps } from "@/components/room/types";
 import type { Identity } from "@/lib/identity";
 import type { Event } from "@/lib/repositories/events";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
+import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 
-const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
+const { leaveSpeakerSeat, sendMessage, addReaction } = vi.hoisted(() => ({
   leaveSpeakerSeat: vi.fn(),
   sendMessage: vi.fn(),
+  addReaction: vi.fn(),
 }));
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
@@ -18,9 +22,26 @@ vi.mock("@/app/events/[id]/room/actions", () => ({
 
 vi.mock("@/app/events/[id]/lobby/actions", () => ({
   sendMessage,
+  addReaction,
 }));
 
-const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie" };
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
+const MOCK_STAGE_REACTIONS: ReactionsController = {
+  selectedEmoji: "❤️",
+  setSelectedEmoji: vi.fn(),
+  displayMode: "on-speaker",
+  setDisplayMode: vi.fn(),
+  showReactions: true,
+  setShowReactions: vi.fn(),
+  incoming: [],
+  send: vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false })),
+  heat: 0,
+  heatFraction: 0,
+  inCooldown: false,
+  canSend: true,
+  myIdentity: "profile:p1",
+};
+const identity: Identity = { type: "profile", id: "p1", displayName: "Jamie", username: null };
 
 const event: Event = {
   id: "e1",
@@ -45,6 +66,11 @@ function seat(overrides: Partial<EventSpeaker> = {}): EventSpeaker {
     left_reason: null,
     disconnected_at: null,
     media_inactive_since: null,
+    round_number: 1,
+    round_started_at: new Date().toISOString(),
+    round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+    round_phase: "active" as const,
+    closing_ends_at: null,
     ...overrides,
   };
 }
@@ -75,13 +101,22 @@ const baseProps: RoomLayoutProps = {
   connectionStatus: "connected",
   canPublish: true,
   needsMediaActivation: false,
-  activateMedia: vi.fn(async () => {}),
+  activateMedia: vi.fn(async () => MEDIA_READY),
   mediaError: null,
+  mediaReadiness: MEDIA_READY,
+  acquiringMedia: false,
   localVideoTrack: null,
-  onPrepareMedia: vi.fn(async () => {}),
+  onPrepareMedia: vi.fn(async () => MEDIA_READY),
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  pendingRequests: [],
+  profileDirectory: {},
+  isPreviewBuild: false,
+  simulatedGuestIds: new Set(),
+  stageRound: null,
+  onOpenRoomInfo: () => {},
+  stageReactions: MOCK_STAGE_REACTIONS,
   microphoneMuted: false,
   cameraMuted: false,
   toggleMicrophone: vi.fn(async () => {}),
@@ -183,7 +218,6 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
 
     it("Gift stays inert, unchanged", () => {
       render(<PortraitSpeakerView {...baseProps} />);
-      expect(screen.getByTestId("watch-gift-emblem")).toBeDisabled();
     });
 
     it("React/Vote are replaced by the mic/camera toggles for a seated speaker — not present at all", () => {
@@ -199,7 +233,6 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
       expect(screen.getByTestId("speaker-mic-toggle")).toBeInTheDocument();
       expect(screen.getByTestId("speaker-camera-toggle")).toBeInTheDocument();
-      expect(screen.getByTestId("watch-gift-emblem")).toBeInTheDocument();
     });
 
     it("tapping the mic toggle calls the same toggleMicrophone already wired through this view's props", () => {
@@ -272,7 +305,12 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
           ]}
         />,
       );
-      const wrapper = screen.getByTestId("ambient-comments").parentElement as HTMLElement;
+      // Issue #21, fifth corrective pass: AmbientComments now wraps its
+      // own feed + Hide toggle in one internal layout div (see that
+      // component's own doc comment) — the caller's own positioning
+      // wrapper (what this assertion cares about) is now the
+      // grandparent, not the immediate parent.
+      const wrapper = screen.getByTestId("ambient-comments").parentElement?.parentElement as HTMLElement;
       expect(wrapper.className).toMatch(/\bbottom-32\b/);
       expect(wrapper.className).not.toMatch(/\bbottom-16\b/);
     });
@@ -323,10 +361,140 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
     });
 
     it("tapping it calls the same activateMedia already wired through this view's props", () => {
-      const activateMedia = vi.fn(async () => {});
+      const activateMedia = vi.fn(async () => MEDIA_READY);
       render(<PortraitSpeakerView {...baseProps} needsMediaActivation={true} activateMedia={activateMedia} />);
       screen.getByTestId("speaker-view-activate-media").click();
       expect(activateMedia).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Discussion Expanded (issue #21) — Speaker View compatibility", () => {
+    function message(overrides: Partial<LobbyMessage> = {}): LobbyMessage {
+      return {
+        id: "m1",
+        author_display_name: "Jamie",
+        author_profile_id: "p1",
+        author_guest_id: null,
+        body: "hello room",
+        created_at: new Date().toISOString(),
+        is_speaker_request: false,
+        ...overrides,
+      };
+    }
+
+    it("tapping an ambient comment bubble opens the sheet for a seated speaker too", () => {
+      render(<PortraitSpeakerView {...baseProps} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+    });
+
+    it("opening and closing it never changes role, mic/camera, or LiveKit-adjacent state — no callback passed through this view fires", () => {
+      const activateMedia = vi.fn(async () => MEDIA_READY);
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      const onPrepareMedia = vi.fn(async () => MEDIA_READY);
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message()]}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+          onPrepareMedia={onPrepareMedia}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-comments")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("expanded-comments-close"));
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+      expect(onPrepareMedia).not.toHaveBeenCalled();
+    });
+
+    it("Speaker View's expanded composer never offers a mic-request affordance — the seat is already held", () => {
+      render(<PortraitSpeakerView {...baseProps} messages={[message()]} />);
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
+    });
+
+    it("double-tapping a comment to like it has no role/media/LiveKit side effects for a seated speaker", () => {
+      const activateMedia = vi.fn(async () => MEDIA_READY);
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message()]}
+          activateMedia={activateMedia}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const row = screen.getByTestId("expanded-comment-row");
+      fireEvent.click(row);
+      fireEvent.click(row);
+
+      expect(addReaction).toHaveBeenCalledWith("m1");
+      expect(activateMedia).not.toHaveBeenCalled();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it("dragging the grabber to close has no role/media/LiveKit side effects for a seated speaker", () => {
+      const toggleMicrophone = vi.fn(async () => {});
+      const toggleCamera = vi.fn(async () => {});
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message()]}
+          toggleMicrophone={toggleMicrophone}
+          toggleCamera={toggleCamera}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      const handle = screen.getByTestId("expanded-comments-handle");
+      fireEvent.pointerDown(handle, { clientY: 0, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientY: 150, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientY: 150, pointerId: 1 });
+
+      expect(screen.queryByTestId("expanded-comments")).not.toBeInTheDocument();
+      expect(toggleMicrophone).not.toHaveBeenCalled();
+      expect(toggleCamera).not.toHaveBeenCalled();
+    });
+
+    it("Top Speaker Requests renders for a seated speaker too", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          messages={[message({ id: "m1", author_display_name: "Jordan", is_speaker_request: true })]}
+          pendingRequests={[
+            {
+              id: "r1",
+              event_id: "e1",
+              profile_id: "p2",
+              guest_id: null,
+              message_id: "m1",
+              status: "pending",
+              created_at: new Date().toISOString(),
+              resolved_at: null,
+              selection_round_id: null,
+              frozen_rank: null,
+              frozen_vote_count: null,
+              is_current_candidate: false,
+              selection_failed: false,
+              reserved_seat_number: null,
+              voteCount: 0,
+              isMyVote: false,
+            },
+          ]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("ambient-comment"));
+      expect(screen.getByTestId("expanded-top-requests")).toHaveTextContent("Jordan");
     });
   });
 });

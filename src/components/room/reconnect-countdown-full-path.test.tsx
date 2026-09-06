@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SpeakerTile } from "./speaker-tile";
 import { SpeakerMediaActivationPrompt } from "./speaker-media-activation-prompt";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -13,6 +13,9 @@ import {
   type EventSpeaker,
 } from "@/lib/repositories/event-speakers";
 import { inactiveSince } from "@/lib/speaker-presence";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
+
+const MEDIA_READY: MediaReadinessState = { camera: { ready: true, error: null }, microphone: { ready: true, error: null } };
 
 const hasServiceCredentials = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
@@ -100,6 +103,19 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
     if (eventId) await service.from("events").delete().eq("id", eventId);
   }, 30_000);
 
+  // Issue #21 corrective pass: claim_speaker_seat no longer silently
+  // replaces an occupant, so every test in this file (each claims seat 1
+  // or 2 for its own fresh guestId) must not leak an active seat into the
+  // next one — a blanket vacate after each test, rather than threading
+  // cleanup through every individual scenario below.
+  afterEach(async () => {
+    await service
+      .from("event_speakers")
+      .update({ left_at: new Date().toISOString(), left_reason: "moderator_removed" })
+      .eq("event_id", eventId)
+      .is("left_at", null);
+  });
+
   describe("cause A: a genuine LiveKit disconnect", () => {
     it("a disconnected row's disconnected_at, fetched fresh from the DB, drives matching 'Tap to reconnect · Ns' and 'Speaker inactive · Ns' text — the same fetched value, two components", async () => {
       const guestId = crypto.randomUUID();
@@ -117,7 +133,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(row)}
         />,
@@ -143,7 +159,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(row)}
         />,
@@ -175,7 +191,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={true}
           bothMediaMuted={false}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(reconnectedRow)}
         />,
@@ -250,7 +266,7 @@ describe.skipIf(!hasServiceCredentials)("inactive-speaker countdown — full dat
         <SpeakerMediaActivationPrompt
           needsMediaActivation={false}
           bothMediaMuted={true}
-          activateMedia={async () => {}}
+          activateMedia={async () => MEDIA_READY}
           mediaError={null}
           inactiveSince={inactiveSince(row)}
         />,

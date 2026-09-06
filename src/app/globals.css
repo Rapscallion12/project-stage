@@ -1,30 +1,150 @@
 @import "tailwindcss";
 
+/*
+ * Visual identity pass (issue #29-adjacent product/brand work, driven by
+ * real-user feedback that the previous near-black + saturated-orange
+ * combination read as an unwanted, specific adult-site association — not
+ * a subjective nitpick, a real reason to move off that exact hue/value
+ * combination rather than just nudging one hex). Full reasoning for every
+ * value below (contrast math, why this hue, why NOT Discord
+ * blurple/Twitch purple/Twitter blue) is in DECISIONS.md.
+ *
+ * Semantic roles, not brand-color aliases — this is the actual point of
+ * this token layer. `--accent` is the ONE token that carries "Virtual
+ * Stage brand identity" (primary CTA, links, selected nav, focus rings,
+ * profile/action emphasis) — everything else here is either a neutral
+ * (background/surface/text/border tiers) or a *functional* semantic color
+ * (success/warning/danger, and the vote-specific continue/replace pair)
+ * that must stay meaningful on its own terms and must NOT be re-themed to
+ * the brand accent just because it's also a color. Continue is green
+ * because "continue" reads as positive in every context, not because it
+ * happens to almost match the brand hue.
+ *
+ * Two elevation tiers beyond the page background (`surface`,
+ * `surface-elevated`) plus a `surface-hover` interaction state — added
+ * because nothing like this existed before (every card/panel/popover
+ * previously reused `--background` directly, e.g. the Room Info sheet
+ * floating over dark video with a flat, undifferentiated background) and
+ * the Room Info redesign this pass ships needs a real "raised card" feel
+ * to read as a deliberate product surface rather than a raw page
+ * background pasted into an overlay.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --accent: #f97316;
-  --muted: #6b7280;
-  --border: #e5e7eb;
+  --background: #f8f9fc;
+  --surface: #f1f2f7;
+  --surface-elevated: #ffffff;
+  --surface-hover: #eceef4;
+
+  --foreground: #14141c;
+  --secondary: #4b4b5a;
+  --muted: #6b6b7d;
+
+  --border: #e2e2ea;
+  --border-strong: #c9c9d6;
+
+  /* Primary brand accent — cool blue-violet ("electric indigo"), tuned
+     darker/richer for light backgrounds (see DECISIONS.md's contrast
+     table for why light and dark mode need genuinely different accent
+     values, not the same hex at two opacities). */
+  --accent: #3b4cd1;
+  --accent-hover: #2e3eb0;
+  --accent-soft: #e7e9fb;
+  /* Responsive/accessibility polish pass: a filled CTA's white text on
+     `--accent` already passes AA in light mode (6.69:1) — no separate
+     value needed here, `accent-filled` is just `accent` itself. Dark
+     mode is where these genuinely diverge; see the dark block below and
+     DECISIONS.md for the full math. */
+  --accent-filled: var(--accent);
+  --accent-filled-hover: var(--accent-hover);
+
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+
+  /* Vote semantics are deliberately NOT brand-colored, and deliberately
+     identical across every theme/context (light, dark, stage-overlay) —
+     these are the exact values `SpeakerVotePanel` already hardcoded
+     before this pass; naming them here is a pure refactor (components
+     now reference the token, not a literal Tailwind color), not a visual
+     change. See DECISIONS.md Section "orange audit" / vote colors. */
+  --vote-continue: #10b981;
+  --vote-replace: #ef4444;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+
   --color-foreground: var(--foreground);
-  --color-accent: var(--accent);
+  --color-secondary: var(--secondary);
   --color-muted: var(--muted);
+
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-filled: var(--accent-filled);
+  --color-accent-filled-hover: var(--accent-filled-hover);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+
+  --color-vote-continue: var(--vote-continue);
+  --color-vote-replace: var(--vote-replace);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --accent: #fb923c;
-    --muted: #9ca3af;
-    --border: #27272a;
+    --background: #0a0a0f;
+    --surface: #15151d;
+    --surface-elevated: #1c1c26;
+    --surface-hover: #23232f;
+
+    --foreground: #f2f2f6;
+    --secondary: #c4c4d0;
+    --muted: #8b8b99;
+
+    --border: #2a2a36;
+    --border-strong: #3c3c4a;
+
+    /* Lighter/brighter than the light-mode accent on purpose — the same
+       relationship the previous orange tokens already had
+       (light: #f97316 vs dark: #fb923c), just recolored: a value tuned
+       for text/icons/focus-rings/links sitting directly on a near-black
+       background needs more luminance than one sitting on off-white. */
+    --accent: #5468ff;
+    --accent-hover: #6c7bff;
+    --accent-soft: rgb(84 104 255 / 16%);
+    /* Responsive/accessibility polish pass: `--accent` itself is tuned
+       for TEXT sitting on the background (4.52:1) — white text ON TOP of
+       it (a filled button) only reaches 4.37:1, just under WCAG AA's
+       4.5:1 for normal-size text. No single color can pass 4.5:1 against
+       both a near-black background AND white overlaid text at once (the
+       two required luminance bands don't overlap — see DECISIONS.md) —
+       so a filled CTA needs a genuinely different, slightly darker/more
+       saturated shade of the same hue, not the same `--accent` value.
+       `#4f63f0`: white text on it = 4.80:1 (passes AA). Hover/pressed
+       darkens further (`#3f50d9`, white-on-it = 6.25:1) rather than
+       brightening like `--accent-hover` does — brightening a filled
+       button's already-marginal white-text contrast would make it
+       *worse*, not better, so this hover direction is deliberately
+       reversed from `--accent-hover`'s. Still unmistakably the same
+       brand hue — a richer, deeper version of it, not a different
+       color. */
+    --accent-filled: #4f63f0;
+    --accent-filled-hover: #3f50d9;
+
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #f87171;
   }
 }
 
@@ -46,11 +166,15 @@ body {
  * `var(--foreground)`/`var(--muted)`/etc. directly, so redefining them on
  * this wrapper cascades to every descendant using them, the same way
  * `prefers-color-scheme: dark` already redefines them at `:root`.
+ *
+ * Accent recolored to match the new dark-mode brand blue (was orange);
+ * every other token here is unchanged by this pass — none of them were
+ * ever orange-derived, so there's nothing to migrate.
  */
 .stage-overlay {
   --background: transparent;
   --foreground: #ffffff;
-  --accent: #fb923c;
+  --accent: #5468ff;
   --muted: #d4d4d8;
   --border: rgb(255 255 255 / 30%);
   color: var(--foreground);
@@ -58,90 +182,111 @@ body {
 }
 
 /*
- * Real-device finding (2026-08-22): on a phone in landscape, the
- * site-wide header (SiteHeader, root layout) was consuming a fixed,
- * generous share of an already-short viewport, on top of the room's own
- * chrome. `body.room-active` is toggled by EventRoom for exactly as
- * long as a live room is mounted (see its own doc comment) — combined
- * with a height-based media query (not `orientation` alone, and
- * deliberately not a width check either — see use-desktop-viewport.ts's
- * own comment on why width>height is the wrong signal for "desktop")
- * this targets short landscape viewports specifically. Real phones in
- * landscape sit well under 500px of CSS height even accounting for
- * browser chrome; real desktop windows are reliably taller than that
- * even when narrow, so this doesn't accidentally shrink the header on a
- * merely-narrow desktop browser. Padding only — the header's own
- * content/links are untouched, so nothing here removes navigation, it
- * just reserves less permanent space for it.
+ * Issue #21, seventh corrective pass, Sections 8-15 ("stage-first"):
+ * the site-wide header (SiteHeader, root layout — "VIRTUAL STAGE /
+ * Events / Log in / Sign up") is hidden outright for the *whole* time a
+ * room is mounted, in every viewport/orientation — not just the short-
+ * landscape case two earlier, narrower rules used to target. A
+ * real-device pass found mobile *portrait* had never gotten any
+ * header-shrinking treatment at all (both prior rules were
+ * `orientation: landscape`-gated), so the full-height site header sat
+ * permanently above the room's own already-minimal video-first chrome —
+ * exactly the wasted vertical space this pass was asked to recover.
+ * `body.room-active` is toggled by `EventRoom` for exactly as long as a
+ * live room is mounted (see its own doc comment) — that's the complete
+ * condition now; no media query needed, since every room composition
+ * (desktop included) provides its own equivalent navigation via the new
+ * `RoomInfoOverlay` (`RoomHeader`'s own "☰" trigger on desktop, the
+ * status-pill trigger everywhere else — see those components' own doc
+ * comments), so nothing is actually lost by hiding this unconditionally.
+ * `{ children }` is a flex sibling of this `header` in a `flex-col`
+ * body (see layout.tsx), so hiding it lets the room's own flex-1 area
+ * fill the recovered space automatically — no separate resize logic
+ * needed. Supersedes the two narrower, landscape-only rules this
+ * replaced (both fully subsumed by this one, unconditional rule — see
+ * git history for their own original reasoning if needed).
  */
-@media (orientation: landscape) and (max-height: 500px) {
-  body.room-active > header {
-    padding-top: 0.375rem;
-    padding-bottom: 0.375rem;
-  }
+body.room-active > header {
+  display: none;
 }
 
 /*
- * Real-device finding (issue #18, Speaker View corrective pass; issue
- * #21, broadened): the padding-only compaction above still left the
- * site-wide header consuming real height once the live room's mobile
- * landscape composition needs every pixel it can get — neither the
- * Speaker View nor the "05"-shell audience composition has a permanent
- * chat/controls sidebar competing for space, so the header is
- * proportionally the biggest remaining non-video element on screen
- * either way. `body.mobile-landscape-live-active` is toggled by
- * `EventRoom` for exactly as long as `MobileLandscapeRoom` (audience or
- * speaker branch) is the actual composition rendering (see its own doc
- * comment) — same height-gated media query as the rule above, so this
- * only ever applies to a real phone in landscape, never a narrow desktop
- * window. Removes the header outright rather than further shrinking it.
+ * Issue #21, seventh corrective pass, Sections 1-5: the two speaker
+ * tiles' own side-by-side/stacked arrangement responds to the STAGE's
+ * own actual available geometry (a container query on its real
+ * aspect-ratio), not a fixed viewport-width breakpoint or which room
+ * composition happens to be mounted. `DesktopRoom`'s fixed sidebar and
+ * `MobileLandscapeRoom`'s own chrome both already shrink the stage's own
+ * box *before* this container ever sees a size, so this naturally
+ * reflects "usable geometry" (Section 3's explicit requirement) without
+ * `SpeakerStage` needing to know anything about either caller's layout —
+ * one responsive model, not a second competing breakpoint system.
  *
- * **Originally speaker-only** (`speaker-view-active`), **broadened to
- * cover audience/candidate landscape too**: once audience landscape
- * moved onto the same "05" shell (issue #21), real-device testing found
- * it needed the identical header-hiding treatment for the identical
- * reason — leaving it padding-only-compacted for audience but
- * fully-hidden for speaker would have made rotating *while already
- * seated* feel like the header reappearing, when nothing about the
- * available space actually changed. One class, one rule, covering both;
- * still scoped precisely to the live room's landscape composition —
- * landscape *outside* the room (browsing `/events`, etc.) and portrait
- * (either role) are both untouched, since this class is only ever
- * toggled true while that specific composition is what's rendering.
- * Pure CSS: the header returns immediately on leaving the room, rotating
- * to portrait, or resizing past the desktop threshold — no component
- * state involved.
+ * **Threshold derivation** (Section 3: "not an arbitrary breakpoint,"
+ * measured against real geometry, not guessed): two side-by-side tiles
+ * each get roughly half the container's own width, at its own full
+ * height — `tileAspect = containerAspect / 2`. A fixed-width sidebar
+ * (DesktopRoom's own chat column) means the stage's own aspect ratio
+ * stays roughly constant across most real desktop window sizes at a
+ * given monitor aspect ratio (widening the window grows the stage's
+ * width and height together, since the sidebar's own width is a small,
+ * *constant* deduction) — an *unconditional* `aspect-ratio < 2` was
+ * measured, in a real browser at common sizes (1400×900, 1920×1080,
+ * 1600×900), to switch to stacking almost everywhere, even on an
+ * ordinary wide 16:9 monitor the user's own "wide desktop = side-by-side
+ * still works" expectation clearly means to cover. Recalibrated against
+ * the actual failure being fixed — not "tiles must stay landscape-ish,"
+ * but "never the *extremely* tall, narrow column" — targeting a
+ * side-by-side tile aspect ratio around 0.75 (a common, still-legible
+ * portrait-leaning camera crop, not the ~0.5-or-worse the original
+ * real-device report actually showed) as the switch point:
+ * `containerAspect < 1.5` triggers stacking. Verified in a real browser
+ * (not just this comment's arithmetic) across the sizes above — see
+ * DECISIONS.md for the actual measured aspect ratios at each. Only ever
+ * applies to the "landscape" tile-orientation case
+ * (`DesktopRoom`/`MobileLandscapeRoom`) — mobile `orientation="portrait"`
+ * already always stacks, by deliberate product decision, and is
+ * untouched by this container query.
+ *
+ * `container-type: size` (not the more common `inline-size`) is
+ * required for an `aspect-ratio` container query at all — it needs both
+ * axes, not width alone. `SpeakerStage`'s own root already has a
+ * definite height (it fills a `min-h-0 flex-1` ancestor chain bounded by
+ * the viewport, the same chain every other full-bleed piece of this
+ * room already depends on), so this doesn't introduce a new sizing
+ * requirement, just names the existing one as a query container.
  */
-@media (orientation: landscape) and (max-height: 500px) {
-  body.mobile-landscape-live-active > header {
-    display: none;
+.stage-container {
+  container-type: size;
+  container-name: stage;
+}
+
+@container stage (aspect-ratio < 1.5) {
+  .stage-tiles-landscape {
+    flex-direction: column;
+  }
+  .stage-divider-landscape {
+    width: 100%;
+    height: 0.5rem;
   }
 }
 
 /*
- * Issue #21, "05 — Social Stage" Phase 3: one bubble's whole lifecycle
- * (enter, hold, expire) as a single CSS animation, applied per-bubble by
- * `AmbientComments` — see its own doc comment for why the fade timing
- * lives in CSS while mount/unmount timing lives in JS (the `setTimeout`
- * there is tuned to this animation's own duration, not a coincidence).
- * A small upward drift on entry (not just an opacity fade) reads as
- * "arriving," matching a live feed rather than a static list item
- * quietly appearing.
+ * Issue #21, "Regular comments as a live-stream feed": a bubble's entry
+ * only — no expiry, since `AmbientComments` is now a small persistent
+ * scrollable feed (older comments stay reachable by scrolling) rather
+ * than a self-expiring stack. A small upward drift on entry (not just an
+ * opacity fade) reads as "arriving," matching a live feed rather than a
+ * static list item quietly appearing.
  */
-@keyframes ambient-comment-fade {
+@keyframes ambient-comment-enter {
   0% {
     opacity: 0;
     transform: translateY(6px);
   }
-  8% {
+  100% {
     opacity: 1;
     transform: translateY(0);
-  }
-  78% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
   }
 }
 
@@ -162,5 +307,75 @@ body {
   100% {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+/*
+ * Pre-launch interaction pass — the reaction button's own cooldown
+ * signal (Section 5/11): a slow, subtle pulse, never a hard flash — the
+ * heat fill itself (already visibly full) is the primary signal; this
+ * is a secondary nudge, skipped entirely under `prefers-reduced-motion`
+ * (see ReactionButton's own doc comment).
+ */
+@keyframes reaction-cooldown-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/*
+ * Pre-launch interaction pass — one directed reaction burst (Section 3):
+ * a brief rise-and-fade, not a bounce or spin — appears near the tap
+ * location, drifts slightly, scales down a touch, and fades out. Each
+ * burst randomizes its own horizontal drift/rotation via inline custom
+ * properties (see StageReactionsOverlay) so repeated reactions from the
+ * same spot don't perfectly stack.
+ */
+@keyframes reaction-burst-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate(0, 0) scale(0.6) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate(calc(var(--drift-x, 0px) * 0.2), -10px) scale(1.05)
+      rotate(calc(var(--rotate, 0deg) * 0.2));
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate(var(--drift-x, 0px), -72px) scale(0.85) rotate(var(--rotate, 0deg));
+  }
+}
+
+/* Section 11: reduced motion still fades the burst, just without drift/rotation/scale. */
+@keyframes reaction-burst-rise-reduced {
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Side-lane reaction bubbles (Section 4B) — float up a short, fixed lane and fade, independent of any tap location. */
+@keyframes reaction-lane-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.7);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-120px) scale(0.9);
   }
 }

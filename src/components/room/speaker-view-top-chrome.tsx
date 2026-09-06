@@ -46,16 +46,22 @@ export function SpeakerViewTopChrome({
   event,
   identity,
   connectionStatus,
+  onOpenRoomInfo,
 }: {
   event: Event;
   identity: Identity;
   connectionStatus: ConnectionStatus;
+  /** Issue #21, seventh corrective pass, Section 9: the status pill doubles as the room/navigation entry point — the "simplest coherent solution" per explicit instruction, rather than a second floating control competing for the same corner. See RoomInfoOverlay's own doc comment. */
+  onOpenRoomInfo: () => void;
 }) {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start gap-2 p-3 pr-20 sm:pr-24">
-      <div
+      <button
+        type="button"
         data-testid="watch-status-pill"
-        className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90"
+        onClick={onOpenRoomInfo}
+        aria-label={`Room info and navigation for ${event.title}`}
+        className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-white/30 bg-black/35 py-1.5 pr-3 pl-2.5 text-xs text-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
         <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
         <span className="min-w-0 truncate font-medium">{event.title}</span>
@@ -67,7 +73,10 @@ export function SpeakerViewTopChrome({
             {connectionStatus === "unavailable" && "· Video unavailable"}
           </span>
         )}
-      </div>
+        <span aria-hidden="true" className="shrink-0 text-white/60">
+          ▾
+        </span>
+      </button>
       {identity.type === "guest" && (
         <div className="pointer-events-auto shrink-0">
           <GuestNameEditor initialName={identity.displayName} variant="chip" />

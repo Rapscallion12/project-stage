@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  createLocalTracks,
+  createLocalAudioTrack,
+  createLocalVideoTrack,
   Room,
   RoomEvent,
   Track,
@@ -87,12 +88,49 @@ export function classifyMediaError(source: "camera" | "microphone", error: unkno
   }
 }
 
+/**
+ * Media readiness pass: per-device acquisition state, distinct from the
+ * pre-existing single `mediaError` (which reflects the aggregate, most
+ * recent failure — kept as-is for the post-join activation prompts that
+ * only ever need one message). A stage-readiness gate needs to know
+ * *which* device is the problem when they can fail independently — see
+ * `prepareLocalMedia`'s own doc comment for why camera and microphone
+ * are now acquired as two separate `getUserMedia`-backed calls instead
+ * of one combined `createLocalTracks({audio, video})`.
+ */
+export type MediaReadinessState = {
+  camera: { ready: boolean; error: MediaErrorReason | null };
+  microphone: { ready: boolean; error: MediaErrorReason | null };
+};
+
+/**
+ * Media readiness pass: one-line, human copy for a readiness failure —
+ * names whichever device(s) actually failed rather than a generic
+ * message, and never a raw browser error string. Shared by every
+ * surface that needs to explain "why can't I take this seat" (the
+ * stage-readiness gate's own detail rows build their per-device copy
+ * separately — this is for the single-line summary a plain text alert
+ * needs, e.g. the direct-join fallback message).
+ */
+export function describeMediaReadinessFailure(readiness: MediaReadinessState): string {
+  const cameraFailed = !readiness.camera.ready;
+  const micFailed = !readiness.microphone.ready;
+  if (cameraFailed && micFailed) return "Camera and microphone access are required to join the stage.";
+  if (cameraFailed) return "Camera access is required to join the stage.";
+  if (micFailed) return "Microphone access is required to join the stage.";
+  return "";
+}
+
 export type LiveRoomConnection = {
   status: ConnectionStatus;
   /** Total participants in the LiveKit room (speakers + audience alike — everyone connects to subscribe). */
   participantCount: number;
   /** The most recent camera/mic activation failure, if any. */
   mediaError: MediaError;
+  /** Media readiness pass: per-device readiness, derived from the same acquisition `prepareLocalMedia`/`activateMedia` already perform — see `MediaReadinessState`'s own doc comment. `{ready: false, error: null}` for a device that hasn't been attempted yet. */
+  mediaReadiness: MediaReadinessState;
+  /** Media readiness pass: true for exactly as long as a `prepareLocalMedia()` acquisition attempt is in flight — lets the readiness gate show a "preparing…" state instead of looking stuck between tapping Enable and the browser's permission prompt resolving. */
+  acquiringMedia: boolean;
   /** Whether the server currently grants this participant canPublish (event_speakers occupancy, kept live by syncPublishPermission — issue #13) — distinct from whether media has actually been activated in this browser tab yet. */
   canPublish: boolean;
   /**
@@ -117,7 +155,7 @@ export type LiveRoomConnection = {
    * getUserMedia call, and origin-level camera/mic permission persists
    * across a reconnect within the same tab.
    */
-  activateMedia: () => Promise<void>;
+  activateMedia: () => Promise<MediaReadinessState>;
   /** Looks up a connected participant by LiveKit identity (`profile:<id>` / `guest:<id>`) for media attachment only — never for deciding who's a speaker. See DECISIONS.md. */
   getParticipant: (identity: string) => Participant | undefined;
   /**
@@ -129,18 +167,38 @@ export type LiveRoomConnection = {
    */
   localVideoTrack: LocalVideoTrack | null;
   /**
-   * Issue #22: acquires camera+mic once, ahead of any seat, so a candidate
-   * has a self-preview while waiting and so promotion can publish without
-   * a second permission prompt. MUST be called synchronously from within a
-   * real user gesture (the mic-request submit) — same Safari constraint as
-   * activateMedia's own doc comment. Idempotent: a no-op if tracks are
-   * already held or an acquisition is already in flight. Failures surface
-   * through mediaError, classified the same way activateMedia's failures
-   * are; this tab's existing recovery affordance (needsMediaActivation →
-   * activateMedia) still works normally afterward since prepareLocalMedia
-   * failing leaves no tracks held.
+   * Issue #22, extended by the media readiness pass: acquires camera+mic
+   * once, ahead of any seat, so a candidate has a self-preview while
+   * waiting, promotion can publish without a second permission prompt,
+   * and — new — the stage-readiness gate can verify *both* devices
+   * actually initialized before any real seat claim is attempted. MUST
+   * be called synchronously from within a real user gesture (the
+   * mic-request submit, the readiness gate's own Enable/Try Again tap) —
+   * same Safari constraint as activateMedia's own doc comment.
+   * Idempotent: a no-op (resolves with the current readiness state
+   * immediately) if a full acquisition already succeeded or one is
+   * already in flight — but unlike before, a *partial* prior
+   * failure (one device ready, the other not) is retried on the next
+   * call, since that's exactly the Try Again case the readiness gate
+   * needs.
+   *
+   * **Acquires camera and microphone as two independent calls**
+   * (`createLocalAudioTrack`/`createLocalVideoTrack`, both dispatched
+   * synchronously in this same gesture via `Promise.allSettled` — still
+   * within the same Safari-required call stack, so still one combined
+   * permission experience in practice on browsers that show one prompt
+   * for both), not the previous single `createLocalTracks({audio,
+   * video})`. A combined `getUserMedia({audio,video})` call rejects as a
+   * single all-or-nothing promise if *either* device fails, making
+   * "camera succeeded but mic failed" impossible to distinguish — the
+   * stage-readiness gate's whole point is showing exactly which
+   * requirement failed (Section 9's per-device status), so this had to
+   * change. Returns the resulting per-device readiness directly (not
+   * just through state) so a caller can `await` it and branch
+   * immediately in the same tick, without racing React's own state
+   * update — see `mediaReadiness`'s own doc comment.
    */
-  prepareLocalMedia: () => Promise<void>;
+  prepareLocalMedia: () => Promise<MediaReadinessState>;
   /**
    * Issue #22: stops and releases any held-but-not-yet-published tracks —
    * for withdrawing a pending request before promotion. Already-published
@@ -201,6 +259,11 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
   const [participantCount, setParticipantCount] = useState(0);
   const [participantsVersion, setParticipantsVersion] = useState(0);
   const [mediaError, setMediaError] = useState<MediaError>(null);
+  const [mediaReadiness, setMediaReadiness] = useState<MediaReadinessState>({
+    camera: { ready: false, error: null },
+    microphone: { ready: false, error: null },
+  });
+  const [acquiringMedia, setAcquiringMedia] = useState(false);
   const [canPublish, setCanPublish] = useState(false);
   const [mediaActivated, setMediaActivated] = useState(false);
   const [localVideoTrack, setLocalVideoTrack] = useState<LocalVideoTrack | null>(null);
@@ -208,6 +271,16 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
   const [cameraMuted, setCameraMuted] = useState(false);
   const roomRef = useRef<Room | null>(null);
   const mediaActivatedRef = useRef(false);
+  // Mirrors `mediaReadiness` state for `prepareLocalMedia` (a stable
+  // `useCallback` with an empty deps array — see its own doc comment on
+  // why it can't just read the state variable directly, same reasoning
+  // `mediaActivatedRef` already exists for) to read/update synchronously
+  // without becoming stale across calls or needing to be recreated every
+  // time readiness changes.
+  const mediaReadinessRef = useRef<MediaReadinessState>({
+    camera: { ready: false, error: null },
+    microphone: { ready: false, error: null },
+  });
   const applyPublishStateRef = useRef<(publish: boolean) => Promise<void>>(async () => {});
   const preparedTracksRef = useRef<LocalTrack[]>([]);
   const preparingRef = useRef(false);
@@ -216,6 +289,17 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     for (const track of preparedTracksRef.current) track.stop();
     preparedTracksRef.current = [];
     setLocalVideoTrack(null);
+    // Media readiness pass: releasing held tracks (a candidate
+    // withdrawing before promotion, or unmount) genuinely means "not
+    // ready" again — a later prepareLocalMedia() call must re-acquire
+    // both devices, not treat them as already verified from a track
+    // that no longer exists.
+    const notReady: MediaReadinessState = {
+      camera: { ready: false, error: null },
+      microphone: { ready: false, error: null },
+    };
+    mediaReadinessRef.current = notReady;
+    setMediaReadiness(notReady);
   }, []);
 
   useEffect(() => {
@@ -471,35 +555,92 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     [participantsVersion],
   );
 
-  const prepareLocalMedia = useCallback(async () => {
-    if (preparingRef.current || preparedTracksRef.current.length > 0) return;
+  const prepareLocalMedia = useCallback(async (): Promise<MediaReadinessState> => {
+    // Media readiness pass: a *full* prior success is still idempotent
+    // (no re-acquisition, no new prompt) — but unlike before, this no
+    // longer short-circuits on a *partial* prior attempt, since Try
+    // Again (the readiness gate's own retry action) must actually retry
+    // whichever device failed last time, not silently no-op.
+    if (preparedTracksRef.current.length >= 2) {
+      return {
+        camera: { ready: true, error: null },
+        microphone: { ready: true, error: null },
+      };
+    }
+    if (preparingRef.current) {
+      return mediaReadinessRef.current;
+    }
     preparingRef.current = true;
+    setAcquiringMedia(true);
     try {
-      const tracks = await createLocalTracks({ audio: true, video: true });
-      preparedTracksRef.current = tracks;
-      // A real gesture just resolved a getUserMedia call in this tab —
-      // that satisfies the same Safari constraint activateMedia's own
-      // gesture requirement exists for, so later canPublish changes
-      // (promotion) can publish these tracks with no further tap.
-      mediaActivatedRef.current = true;
-      setMediaActivated(true);
-      const videoTrack = tracks.find(
+      // Two independent acquisitions, not one combined
+      // `createLocalTracks({audio, video})` — see this function's own
+      // doc comment (on the exported type) for why: a combined
+      // `getUserMedia` call rejects as a single all-or-nothing promise,
+      // making "camera succeeded, mic failed" (or the reverse)
+      // impossible to distinguish, which the stage-readiness gate's
+      // whole point requires. Both promises are *created* synchronously
+      // here, before either is awaited — still within the same
+      // Safari-required gesture call stack as a single combined call
+      // would have been.
+      const existingKinds = new Set(preparedTracksRef.current.map((t) => t.kind));
+      const [audioResult, videoResult] = await Promise.allSettled([
+        existingKinds.has(Track.Kind.Audio) ? Promise.resolve(null) : createLocalAudioTrack(),
+        existingKinds.has(Track.Kind.Video) ? Promise.resolve(null) : createLocalVideoTrack(),
+      ]);
+
+      const next: MediaReadinessState = {
+        camera: { ...mediaReadinessRef.current.camera },
+        microphone: { ...mediaReadinessRef.current.microphone },
+      };
+
+      if (audioResult.status === "fulfilled") {
+        if (audioResult.value) preparedTracksRef.current = [...preparedTracksRef.current, audioResult.value];
+        next.microphone = { ready: true, error: null };
+      } else {
+        // classifyMediaError always returns a populated object here (its
+        // own `| null` in the MediaError type represents "no error" for
+        // *state*, not something this function itself ever produces —
+        // see mediaErrorMessage's own NonNullable<MediaError> param for
+        // the same established assumption).
+        next.microphone = { ready: false, error: classifyMediaError("microphone", audioResult.reason)!.reason };
+      }
+      if (videoResult.status === "fulfilled") {
+        if (videoResult.value) preparedTracksRef.current = [...preparedTracksRef.current, videoResult.value];
+        next.camera = { ready: true, error: null };
+      } else {
+        next.camera = { ready: false, error: classifyMediaError("camera", videoResult.reason)!.reason };
+      }
+
+      mediaReadinessRef.current = next;
+      setMediaReadiness(next);
+      // Aggregate mediaError kept in sync for the pre-existing post-join
+      // activation UI, which only ever shows one message — camera takes
+      // precedence when both fail, matching the previous single-error
+      // behavior's own bias.
+      setMediaError(!next.camera.ready ? { source: "camera", reason: next.camera.error! } : !next.microphone.ready ? { source: "microphone", reason: next.microphone.error! } : null);
+
+      const videoTrack = preparedTracksRef.current.find(
         (track): track is LocalVideoTrack => track.kind === Track.Kind.Video,
       );
       setLocalVideoTrack(videoTrack ?? null);
-      const room = roomRef.current;
-      if (room && shouldPublish(room.localParticipant.permissions)) {
-        await applyPublishStateRef.current(true);
+
+      if (next.camera.ready && next.microphone.ready) {
+        // A real gesture just resolved getUserMedia in this tab — that
+        // satisfies the same Safari constraint activateMedia's own
+        // gesture requirement exists for, so later canPublish changes
+        // (promotion) can publish these tracks with no further tap.
+        mediaActivatedRef.current = true;
+        setMediaActivated(true);
+        const room = roomRef.current;
+        if (room && shouldPublish(room.localParticipant.permissions)) {
+          await applyPublishStateRef.current(true);
+        }
       }
-    } catch (error) {
-      // createLocalTracks acquires camera+mic together (deliberately — one
-      // combined permission prompt instead of two); a rejection can't be
-      // cleanly attributed to just one device, so this is classified
-      // against "camera" as the more central failure mode for this
-      // product rather than added as a third, more precise error source.
-      setMediaError(classifyMediaError("camera", error));
+      return next;
     } finally {
       preparingRef.current = false;
+      setAcquiringMedia(false);
     }
   }, []);
 
@@ -524,7 +665,7 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
    * immediately since this tab is already a recognized speaker.
    */
   const activateMedia = useCallback(async () => {
-    await prepareLocalMedia();
+    return prepareLocalMedia();
   }, [prepareLocalMedia]);
 
   const releaseLocalMedia = useCallback(() => {
@@ -571,6 +712,8 @@ export function useLiveRoomConnection(params: { livekitUrl: string; token: strin
     status,
     participantCount,
     mediaError,
+    mediaReadiness,
+    acquiringMedia,
     canPublish,
     needsMediaActivation: canPublish && !mediaActivated,
     activateMedia,

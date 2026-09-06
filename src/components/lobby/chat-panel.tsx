@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MessageItem } from "@/components/lobby/message-item";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
+import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 
 const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
 
@@ -150,6 +151,7 @@ export function ChatPanel({
   allowMicRequest = true,
   hasPendingRequest = false,
   onCancelPendingRequest,
+  idle = false,
 }: {
   eventId: string;
   messages: LobbyMessage[];
@@ -157,13 +159,27 @@ export function ChatPanel({
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
-  onPrepareMedia: () => Promise<void>;
+  onPrepareMedia: () => Promise<MediaReadinessState>;
   compact?: boolean;
   allowMicRequest?: boolean;
   /** Issue #18 UX finding: drives the mic button's third (pending) visual state — see this component's own doc comment. */
   hasPendingRequest?: boolean;
   /** Called instead of re-opening the request-mode input when the mic button is tapped while a request is already pending. */
   onCancelPendingRequest?: () => void;
+  /**
+   * Pre-launch interaction pass, Section 8 follow-up (real-device
+   * finding: the first pass's idle fade excluded this component
+   * entirely, but the compact composer pill is the *widest* surface in
+   * Watch Mode's bottom row — leaving it out meant idle barely looked
+   * different). Fades only this pill's own background fill toward
+   * transparent, never its border, text, mic icon, or the accent
+   * mic-request-mode treatment (an active state, not idle chrome).
+   * Non-compact (lobby) rendering is untouched regardless — this only
+   * ever applies to the `compact` branch below. Defaults to `false`, so
+   * every other caller (the lobby proper, and any test that doesn't
+   * pass it) is unaffected.
+   */
+  idle?: boolean;
 }) {
   const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
   const [requestState, requestFormAction, requestPending] = useActionState(
@@ -231,14 +247,32 @@ export function ChatPanel({
       {compact ? (
         <div
           className={cn(
-            "flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors",
-            micRequestMode ? "border-accent/60 bg-accent/15" : "border-white/30 bg-white/[0.14]",
+            "flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full border px-1 pr-3 transition-colors duration-300",
+            micRequestMode ? "border-accent/60 bg-accent/15" : cn("border-white/30", idle ? "bg-transparent" : "bg-white/[0.14]"),
           )}
         >
           {allowMicRequest && (
             <button
               type="button"
               data-testid="watch-composer-mic"
+              // Issue #21, fourth corrective pass, real-device finding:
+              // toggling Request-to-Speak while typing a comment was
+              // dismissing the keyboard and losing the draft's focus.
+              // Root cause: tapping *any* focusable element (this button
+              // included) is the browser's own default behavior for
+              // shifting focus away from whatever was previously focused
+              // (the input) — on iOS Safari that focus loss is what
+              // closes the virtual keyboard, before this button's own
+              // onClick ever runs. `preventDefault()` on `mousedown` (the
+              // event that actually triggers the focus shift, ahead of
+              // `click`) stops the browser from ever moving focus off the
+              // input in the first place — the input's value, cursor
+              // position, and scroll position are all untouched because
+              // nothing ever blurred it. No compensating refocus-after-
+              // blur logic is added deliberately (that would still be
+              // visible as a flicker); this prevents the blur instead of
+              // reacting to it.
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 if (hasPendingRequest && !micRequestMode) {
                   onCancelPendingRequest?.();
@@ -290,6 +324,10 @@ export function ChatPanel({
         <>
           <button
             type="button"
+            // See the compact mic button's own comment above — same fix,
+            // same reasoning, this is the non-compact render of the
+            // identical control.
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => onMicRequestModeChange(!micRequestMode)}
             disabled={pending}
             aria-pressed={micRequestMode}
@@ -298,7 +336,7 @@ export function ChatPanel({
               "flex min-h-11 w-11 shrink-0 items-center justify-center rounded-full border text-base transition-colors disabled:opacity-50",
               micRequestMode
                 ? "border-accent bg-accent/15 text-accent"
-                : "border-border text-muted hover:bg-foreground/5",
+                : "border-border text-muted hover:bg-surface-hover",
             )}
           >
             🎤
@@ -356,7 +394,7 @@ export function ChatPanel({
               key={emoji}
               type="button"
               onClick={() => insertEmoji(emoji)}
-              className="rounded-md px-1.5 py-0.5 text-base hover:bg-foreground/5"
+              className="rounded-md px-1.5 py-0.5 text-base hover:bg-surface-hover"
               aria-label={`Insert ${emoji}`}
             >
               {emoji}

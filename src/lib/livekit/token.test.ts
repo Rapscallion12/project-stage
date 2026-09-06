@@ -28,6 +28,11 @@ const fakeActiveSeat: EventSpeaker = {
   left_reason: null,
   disconnected_at: null,
   media_inactive_since: null,
+  round_number: 1,
+  round_started_at: new Date().toISOString(),
+  round_ends_at: new Date(Date.now() + 60_000).toISOString(),
+  round_phase: "active" as const,
+  closing_ends_at: null,
 };
 
 describe("determineCanPublish", () => {

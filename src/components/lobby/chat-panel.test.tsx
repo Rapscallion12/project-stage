@@ -168,6 +168,30 @@ describe("ChatPanel", () => {
       });
     });
 
+    describe("idle adaptive transparency (pre-launch interaction pass follow-up: the compact pill is the widest surface in Watch Mode's bottom row, so leaving it out of the idle fade left the effect barely visible)", () => {
+      it("defaults to the full-opacity glass background, same as before this prop existed", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const pill = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pill.className).toMatch(/bg-white\/\[0\.14\]/);
+      });
+
+      it("fades to a fully transparent fill when idle — border, mic icon, and placeholder text untouched", () => {
+        render(<ChatPanel {...baseProps} compact idle />);
+        const pill = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pill.className).toMatch(/bg-transparent/);
+        expect(pill.className).not.toMatch(/bg-white\/\[0\.14\]/);
+        expect(pill.className).toMatch(/border-white\/30/);
+        expect(screen.getByPlaceholderText("Add a comment…")).toBeInTheDocument();
+      });
+
+      it("does not fade the mic-request-mode accent background even while idle — that's an active state, not idle chrome", () => {
+        render(<ChatPanel {...baseProps} compact idle micRequestMode={true} />);
+        const pill = screen.getByTestId("watch-composer-mic").parentElement as HTMLElement;
+        expect(pill.className).toMatch(/bg-accent\/15/);
+        expect(pill.className).not.toMatch(/bg-transparent/);
+      });
+    });
+
     describe("input font size (real-device finding, 2026-08-23: text-sm/14px triggered iOS Safari's auto-zoom-on-focus)", () => {
       // This only pins the rendered CSS class, which is what actually
       // governs the computed font-size — it does not and cannot exercise
@@ -317,6 +341,50 @@ describe("ChatPanel", () => {
         fireEvent.click(screen.getByTestId("watch-composer-mic"));
         expect(onMicRequestModeChange).toHaveBeenCalledWith(true);
         expect(onCancelPendingRequest).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("keyboard/focus preservation when toggling Request-to-Speak while typing (issue #21, fourth corrective pass, real-device finding)", () => {
+      it("the mic button prevents mousedown's default behavior — the actual browser mechanism that would otherwise blur a focused input", () => {
+        render(<ChatPanel {...baseProps} compact />);
+        const micButton = screen.getByTestId("watch-composer-mic");
+        // fireEvent's own return value is `false` exactly when the event
+        // was canceled (preventDefault() was called) — this is the one
+        // thing jsdom can actually prove here, since it doesn't reproduce
+        // a real browser's own focus-shift-on-mousedown behavior for
+        // fireEvent to visibly counteract. Real keyboard-staying-open
+        // behavior itself needs the user's own real-device confirmation.
+        const notCanceled = fireEvent.mouseDown(micButton);
+        expect(notCanceled).toBe(false);
+      });
+
+      it("toggling Request-to-Speak never touches the input's own draft value — same DOM node throughout, never remounted", () => {
+        const { rerender } = render(<ChatPanel {...baseProps} compact micRequestMode={false} />);
+        const input = screen.getByPlaceholderText("Add a comment…") as HTMLInputElement;
+        input.value = "an unfinished comment";
+
+        rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
+        const sameInput = screen.getByPlaceholderText("What's your topic?") as HTMLInputElement;
+        expect(sameInput).toBe(input); // identical node — never unmounted/remounted
+        expect(sameInput.value).toBe("an unfinished comment");
+
+        rerender(<ChatPanel {...baseProps} compact micRequestMode={false} />);
+        expect((screen.getByPlaceholderText("Add a comment…") as HTMLInputElement).value).toBe("an unfinished comment");
+      });
+
+      it("canceling a pending request (tapping the mic button again) also never touches the draft", () => {
+        const { rerender } = render(<ChatPanel {...baseProps} compact hasPendingRequest={false} />);
+        const input = screen.getByPlaceholderText("Add a comment…") as HTMLInputElement;
+        input.value = "still typing this";
+
+        rerender(<ChatPanel {...baseProps} compact hasPendingRequest={true} />);
+        expect((screen.getByPlaceholderText("Add a comment…") as HTMLInputElement).value).toBe("still typing this");
+      });
+
+      it("the non-compact mic button also prevents mousedown's default focus-shifting behavior", () => {
+        render(<ChatPanel {...baseProps} />);
+        const micButton = screen.getByLabelText("Request to speak");
+        expect(fireEvent.mouseDown(micButton)).toBe(false);
       });
     });
   });

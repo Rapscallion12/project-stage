@@ -1,35 +1,4 @@
-import type { EventSpeaker, SeatIdentity } from "@/lib/repositories/event-speakers";
-import type { RankedSpeakerRequest } from "@/lib/repositories/speaker-requests";
-
-/**
- * How many top-ranked pending requests are eligible to self-claim an open
- * seat — not strictly rank 1. This is an explicit **MVP selection
- * policy, not a permanent product rule**.
- *
- * A strict "only rank 1 may claim" rule has a real failure mode: an
- * absent top-ranked requester would block the seat forever — there's no
- * background-job infrastructure in this serverless setup to expire or
- * skip them. Widening eligibility to the top few, with
- * `claim_speaker_seat`'s own existing race-safety (issue #13) as the
- * tiebreak if more than one eligible requester claims at once, solves
- * that without adding any new infrastructure (no expiry timers, no
- * presence tracking).
- *
- * This is not meant to make "who becomes the next speaker" a
- * click-speed competition by product intent — only by current
- * implementation. The durable concepts this stands in for: audience
- * support determines which requests rise (already true — ranking is
- * reaction-count-driven, see `rank_pending_speaker_requests`), only
- * sufficiently elevated requests become eligible (already true — this
- * constant), and the final promotion mechanism among eligible requests
- * may evolve into something more deliberately audience-driven than
- * "first click wins." See DECISIONS.md.
- */
-export const TOP_ELIGIBLE_COUNT = 3;
-
-export function isEligibleToClaim(rank: number): boolean {
-  return rank <= TOP_ELIGIBLE_COUNT;
-}
+import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 
 /**
  * The lowest-numbered currently-unoccupied seat, or `null` if both are
@@ -43,41 +12,69 @@ export function findOpenSeat(activeSpeakers: Pick<EventSpeaker, "seat_number">[]
   return null;
 }
 
+/**
+ * Issue #21, fifth corrective pass: every currently-open seat, not just
+ * the lowest-numbered one — the seat-aware selection model
+ * (`ensureActiveSelectionRound`, room/actions.ts) needs to reserve a
+ * distinct candidate for *each* open seat, not just the first. Returns
+ * `[]` when both are occupied, `[1]`/`[2]` when exactly one is open,
+ * `[1, 2]` when both are.
+ */
+export function findOpenSeats(activeSpeakers: Pick<EventSpeaker, "seat_number">[]): Array<1 | 2> {
+  const occupied = new Set(activeSpeakers.map((s) => s.seat_number));
+  const open: Array<1 | 2> = [];
+  if (!occupied.has(1)) open.push(1);
+  if (!occupied.has(2)) open.push(2);
+  return open;
+}
+
 export type ClaimDecision =
   | { eligible: true; seatNumber: 1 | 2 }
   | { eligible: false; reason: "no-request" | "no-open-seat" | "not-eligible" };
 
 /**
- * The actual authorization decision behind `claimOpenSeat` (the Server
- * Action in room/actions.ts) — extracted as a pure function, over
- * already-fetched data, so it's unit-testable without a live LiveKit/DB
- * fixture or a Next.js request context (the action itself can't be
- * called directly in a test the way this can, since `resolveIdentity()`
- * needs `next/headers`' `cookies()`). Same reasoning as
+ * Issue #21, Phase 1: the actual authorization decision behind
+ * `claimOpenSeat` — extracted as a pure function, same reasoning as
  * `determineCanPublish`/`shouldPublish`/`applySpeakerChange` elsewhere in
- * this codebase: keep the decision pure, keep the I/O in a thin wrapper.
+ * this codebase (keep the decision pure, keep the I/O in a thin
+ * wrapper). Testable without a live DB fixture or Next.js request
+ * context.
+ *
+ * **Issue #21, fifth corrective pass: seat-aware, not "whichever seat
+ * `findOpenSeat` currently reports."** With two seats able to open
+ * simultaneously, each candidate is now reserved for a *specific* seat
+ * server-side (`speaker_requests.reserved_seat_number` — see migration
+ * 00000000000032) at selection time. Reading `myPendingRequest`'s own
+ * `reserved_seat_number` instead of re-deriving "the" open seat from
+ * current occupancy is what closes the exact race two simultaneously-
+ * eligible candidates used to hit: both independently calling
+ * `findOpenSeat` against the same occupancy snapshot would always agree
+ * on the *same* lowest-numbered seat, regardless of which of them was
+ * actually authorized for which — one would win, the other would fail
+ * and have to retry. Each candidate now goes straight for their own
+ * authoritatively-assigned seat, no retry needed, and `claim_speaker_seat`
+ * itself re-verifies the match (never trusted from this decision alone).
  */
 export function decideClaimEligibility(params: {
-  /** Issue #16: either identity shape — a guest's own requests are matched by guest_id, never profile_id. */
-  identity: SeatIdentity;
-  hasPendingRequest: boolean;
+  /** The caller's own pending request row, or null if they have none. */
+  myPendingRequest: { is_current_candidate: boolean; reserved_seat_number: 1 | 2 | null } | null;
   activeSpeakers: Pick<EventSpeaker, "seat_number">[];
-  rankedRequests: Pick<RankedSpeakerRequest, "profile_id" | "guest_id" | "rank">[];
 }): ClaimDecision {
-  if (!params.hasPendingRequest) {
+  if (!params.myPendingRequest) {
     return { eligible: false, reason: "no-request" };
   }
 
-  const seatNumber = findOpenSeat(params.activeSpeakers);
-  if (seatNumber === null) {
-    return { eligible: false, reason: "no-open-seat" };
+  if (!params.myPendingRequest.is_current_candidate || params.myPendingRequest.reserved_seat_number === null) {
+    return { eligible: false, reason: "not-eligible" };
   }
 
-  const myEntry = params.rankedRequests.find((r) =>
-    params.identity.type === "profile" ? r.profile_id === params.identity.id : r.guest_id === params.identity.id,
-  );
-  if (!myEntry || !isEligibleToClaim(myEntry.rank)) {
-    return { eligible: false, reason: "not-eligible" };
+  const seatNumber = params.myPendingRequest.reserved_seat_number;
+  const occupied = new Set(params.activeSpeakers.map((s) => s.seat_number));
+  if (occupied.has(seatNumber)) {
+    // The reserved seat isn't actually open anymore (stale read, or a
+    // narrow window before withdrawal/reset catches up) — never blindly
+    // hand out a seat number occupancy itself contradicts.
+    return { eligible: false, reason: "no-open-seat" };
   }
 
   return { eligible: true, seatNumber };

@@ -55,7 +55,7 @@ export function MessageItem({
           aria-label="React with thumbs up"
           className={cn(
             "flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs transition-colors",
-            reacted ? "border-accent bg-accent/10 text-accent" : "text-muted hover:bg-foreground/5",
+            reacted ? "border-accent bg-accent/10 text-accent" : "text-muted hover:bg-surface-hover",
           )}
         >
           👍 {count > 0 && count}
