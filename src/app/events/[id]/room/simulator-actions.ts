@@ -475,6 +475,120 @@ export async function resetSimulatorSession(
   };
 }
 
+export type ClearTestRoomResult = {
+  eventId: string;
+  messagesDeleted: number;
+  reactionsDeleted: number;
+  requestsDeleted: number;
+  requestVotesDeleted: number;
+  speakersDeleted: number;
+  roundVotesDeleted: number;
+  roundsDeleted: number;
+  reactionHeatDeleted: number;
+};
+
+/**
+ * Real-device report: a real user testing the internal simulator preview
+ * found stale comments/an active seat left behind in `[DEV] Always-On
+ * Test Room` (migration 00000000000015's `is_permanent_test` fixture,
+ * shared with the CLI dev harness — see `scripts/dev-harness.mts`'s own
+ * `clearSandbox`). Traced the actual cause: that CLI function only ever
+ * cleared `event_chat_messages`/`event_speakers`, never `stage_rounds`
+ * or `stage_reaction_heat` (neither is reachable via any cascade from
+ * the tables it did clear), and — separately — the *ordinary* "Reset
+ * Session" above is deliberately scoped to one run's own exact
+ * `guestIds` (see that function's own doc comment on why a room-wide
+ * wipe there would be unsafe against a room with real participants); it
+ * was never meant to be, and must not become, a comprehensive room
+ * clear. This function is that comprehensive clear, kept genuinely
+ * separate from Reset Session rather than widening it.
+ *
+ * **Deliberately its own function, not a shared import from the CLI
+ * script**: `scripts/dev-harness.mts` documents itself as intentionally
+ * outside `src/`, never imported by application code (with one narrow,
+ * already-existing exception for tagging constants) — this mirrors that
+ * script's own (now-fixed) table list and reasoning by hand rather than
+ * breaking that boundary for one more call site. Keep both in sync by
+ * hand when either changes, same discipline this codebase already
+ * applies to the reaction-heat tuning constants (SQL vs. TypeScript).
+ *
+ * **Safety boundary — this is the actual guarantee, not the UI gate
+ * alone**: re-verifies `is_permanent_test` on `eventId` itself, from the
+ * database, before touching anything — never trusts that the caller is
+ * actually looking at the sandbox room. `assertSimulatorAvailable()`
+ * (preview/dev + `ENABLE_SESSION_SIMULATOR=1`) gates *reaching* this
+ * function at all, matching every other simulator action; the
+ * `is_permanent_test` check is the second, independent guarantee that
+ * even a call reaching this function can never delete an ordinary
+ * event's real data — "if there's any ambiguity, stop rather than
+ * delete" is enforced here as a hard refusal, not a client-side
+ * assumption.
+ *
+ * Table list and cascade reasoning are identical to the fixed
+ * `clearSandbox` — see that function's own doc comment for the full
+ * per-table explanation (chat messages → reactions/requests/request
+ * votes; speakers → round votes; stage_rounds and stage_reaction_heat
+ * independently, since neither cascades from anything else).
+ */
+export async function clearTestRoomSandbox(eventId: string): Promise<ClearTestRoomResult> {
+  assertSimulatorAvailable();
+  const supabase = createServiceClient();
+
+  const { data: event, error: eventError } = await supabase
+    .from("events")
+    .select("id, is_permanent_test")
+    .eq("id", eventId)
+    .maybeSingle();
+  if (eventError) throw new Error(eventError.message);
+  if (!event || !event.is_permanent_test) {
+    throw new Error(
+      "Clear Test Room refused: this event is not the designated permanent test room. Nothing was deleted.",
+    );
+  }
+
+  const { data: requestRows } = await supabase.from("speaker_requests").select("id").eq("event_id", eventId);
+  const requestIds = (requestRows ?? []).map((r) => r.id);
+  let requestVotesDeleted = 0;
+  if (requestIds.length > 0) {
+    const { count } = await supabase.from("speaker_request_votes").delete({ count: "exact" }).in("request_id", requestIds);
+    requestVotesDeleted = count ?? 0;
+  }
+  const { count: requestsDeleted } = await supabase.from("speaker_requests").delete({ count: "exact" }).eq("event_id", eventId);
+
+  const { data: messageRows } = await supabase.from("event_chat_messages").select("id").eq("event_id", eventId);
+  const messageIds = (messageRows ?? []).map((m) => m.id);
+  let reactionsDeleted = 0;
+  if (messageIds.length > 0) {
+    const { count } = await supabase.from("event_chat_message_reactions").delete({ count: "exact" }).in("message_id", messageIds);
+    reactionsDeleted = count ?? 0;
+  }
+  const { count: messagesDeleted } = await supabase.from("event_chat_messages").delete({ count: "exact" }).eq("event_id", eventId);
+
+  const { data: speakerRows } = await supabase.from("event_speakers").select("id").eq("event_id", eventId);
+  const speakerRowIds = (speakerRows ?? []).map((s) => s.id);
+  let roundVotesDeleted = 0;
+  if (speakerRowIds.length > 0) {
+    const { count } = await supabase.from("speaker_round_votes").delete({ count: "exact" }).in("event_speakers_id", speakerRowIds);
+    roundVotesDeleted = count ?? 0;
+  }
+  const { count: speakersDeleted } = await supabase.from("event_speakers").delete({ count: "exact" }).eq("event_id", eventId);
+
+  const { count: roundsDeleted } = await supabase.from("stage_rounds").delete({ count: "exact" }).eq("event_id", eventId);
+  const { count: reactionHeatDeleted } = await supabase.from("stage_reaction_heat").delete({ count: "exact" }).eq("event_id", eventId);
+
+  return {
+    eventId,
+    messagesDeleted: messagesDeleted ?? 0,
+    reactionsDeleted,
+    requestsDeleted: requestsDeleted ?? 0,
+    requestVotesDeleted,
+    speakersDeleted: speakersDeleted ?? 0,
+    roundVotesDeleted,
+    roundsDeleted: roundsDeleted ?? 0,
+    reactionHeatDeleted: reactionHeatDeleted ?? 0,
+  };
+}
+
 export type DebugSnapshotState = {
   fetchedAt: string;
   round: {

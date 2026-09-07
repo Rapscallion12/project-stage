@@ -5,7 +5,7 @@ import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
 import type { SeatResolutionOutcome, StageRound } from "@/lib/repositories/stage-rounds";
-import type { ResetSimulatorSessionResult, DebugSnapshotState } from "@/app/events/[id]/room/simulator-actions";
+import type { ResetSimulatorSessionResult, DebugSnapshotState, ClearTestRoomResult } from "@/app/events/[id]/room/simulator-actions";
 import { PROMOTION_COUNTDOWN_SECONDS } from "@/hooks/use-automatic-promotion";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 
@@ -40,6 +40,7 @@ const {
   resetSimulatorSession,
   simulateAdvanceSelection,
   fetchDebugSnapshotState,
+  clearTestRoomSandbox,
   reconcileStageRoundAction,
   supabaseFrom,
   stageRoundRow,
@@ -164,6 +165,23 @@ const {
       seats: [],
       pendingRequests: [],
     })),
+    clearTestRoomSandbox: vi.fn<(...args: unknown[]) => Promise<ClearTestRoomResult>>(async () => {
+      // Same reconciliation the real action's room-wide clear implies —
+      // mirrors resetSimulatorSession's own mock above.
+      stageRoundRow.current = { round_number: 0, phase: "awaiting_pairing" };
+      resetSeedTracking();
+      return {
+        eventId: "e1",
+        messagesDeleted: 0,
+        reactionsDeleted: 0,
+        requestsDeleted: 0,
+        requestVotesDeleted: 0,
+        speakersDeleted: 0,
+        roundVotesDeleted: 0,
+        roundsDeleted: 0,
+        reactionHeatDeleted: 0,
+      };
+    }),
     reconcileStageRoundAction: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     supabaseFrom,
     stageRoundRow,
@@ -189,6 +207,7 @@ vi.mock("@/app/events/[id]/room/simulator-actions", () => ({
   resetSimulatorSession,
   simulateAdvanceSelection,
   fetchDebugSnapshotState,
+  clearTestRoomSandbox,
 }));
 
 vi.mock("@/app/events/[id]/room/actions", () => ({
@@ -1928,6 +1947,104 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-reset"));
       await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledWith("e1", []));
+    });
+  });
+
+  describe("Clear Test Room (real-device report: a genuinely comprehensive, room-wide sandbox clear, distinct from Reset Session)", () => {
+    it("a single tap calls clearTestRoomSandbox with this event's id — no confirmation step, same as Reset Session", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledWith("e1"));
+    });
+
+    it("is a visually and functionally distinct control from Reset Session — clicking it never calls resetSimulatorSession", async () => {
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
+      expect(resetSimulatorSession).not.toHaveBeenCalled();
+    });
+
+    it("calls onSimulatorReset so the caller reconciles its own local state, same as Reset Session does", async () => {
+      const onSimulatorReset = vi.fn();
+      render(<SessionSimulatorPanel {...baseProps} onSimulatorReset={onSimulatorReset} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      await waitFor(() => expect(onSimulatorReset).toHaveBeenCalledTimes(1));
+    });
+
+    it("logs the comprehensive per-table counts the action returned", async () => {
+      clearTestRoomSandbox.mockResolvedValueOnce({
+        eventId: "e1",
+        messagesDeleted: 3,
+        reactionsDeleted: 1,
+        requestsDeleted: 2,
+        requestVotesDeleted: 1,
+        speakersDeleted: 2,
+        roundVotesDeleted: 1,
+        roundsDeleted: 1,
+        reactionHeatDeleted: 4,
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Clear Test Room"));
+      const log = screen.getByTestId("sim-log");
+      expect(log).toHaveTextContent("3 comments");
+      expect(log).toHaveTextContent("4 reaction heat row(s)");
+    });
+
+    it("surfaces a server-side refusal (e.g. this isn't actually the permanent test room) as a log line, not a crash", async () => {
+      clearTestRoomSandbox.mockRejectedValueOnce(new Error("Clear Test Room refused: this event is not the designated permanent test room."));
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent(/Clear Test Room failed/));
+    });
+
+    it("a second tap while one is already in flight is ignored, not a duplicate concurrent clear", async () => {
+      let resolveFirst: (value: ClearTestRoomResult) => void = () => {};
+      clearTestRoomSandbox.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      );
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      expect(clearTestRoomSandbox).toHaveBeenCalledTimes(1);
+      resolveFirst({
+        eventId: "e1",
+        messagesDeleted: 0,
+        reactionsDeleted: 0,
+        requestsDeleted: 0,
+        requestVotesDeleted: 0,
+        speakersDeleted: 0,
+        roundVotesDeleted: 0,
+        roundsDeleted: 0,
+        reactionHeatDeleted: 0,
+      });
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Clear Test Room"));
+    });
+
+    it("Start Simulated Session is disabled while a Clear Test Room is in flight, same barrier as Reset Session", async () => {
+      let resolveClear: (value: ClearTestRoomResult) => void = () => {};
+      clearTestRoomSandbox.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveClear = resolve;
+        }),
+      );
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      expect(screen.getByTestId("sim-start")).toBeDisabled();
+      resolveClear({
+        eventId: "e1",
+        messagesDeleted: 0,
+        reactionsDeleted: 0,
+        requestsDeleted: 0,
+        requestVotesDeleted: 0,
+        speakersDeleted: 0,
+        roundVotesDeleted: 0,
+        roundsDeleted: 0,
+        reactionHeatDeleted: 0,
+      });
+      await waitFor(() => expect(screen.getByTestId("sim-start")).not.toBeDisabled());
     });
   });
 

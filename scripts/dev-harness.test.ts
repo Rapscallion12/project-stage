@@ -147,45 +147,137 @@ describe.skipIf(!hasServiceCredentials)("dev harness — end-to-end safety bound
     expect(sandboxAfter?.id).toBe(sandboxBefore!.id);
   });
 
-  it("clear-sandbox removes the permanent test room's transient state without deleting the room itself", async () => {
-    const { data: sandbox, error: sandboxError } = await client
-      .from("events")
-      .select("id")
-      .eq("is_permanent_test", true)
-      .single();
-    if (sandboxError || !sandbox) throw new Error(sandboxError?.message ?? "permanent test room not found");
+  describe("clear-sandbox (real-device report: stale artifacts from a previous failed run were visibly leaking into a real user's test session)", () => {
+    let sandboxId: string;
 
-    // Guest-authored fixtures — no real account needed, matching how a
-    // real anonymous visitor would leave state behind in this room.
-    const { error: messageError } = await client.from("event_chat_messages").insert({
-      event_id: sandbox.id,
-      author_guest_id: crypto.randomUUID(),
-      author_display_name: "clear-sandbox test guest",
-      body: "left behind by a test run — clear-sandbox should remove this",
+    // Self-healing precondition, not just setup: this permanent room is
+    // shared with real interactive use of the deployed preview (that's
+    // the entire reason it exists — Browse Events must never be empty),
+    // so it can and does carry leftover state between runs that has
+    // nothing to do with this test. Clearing *before* asserting anything
+    // means this test can never again be blocked by whatever state
+    // happens to already exist — the exact bug this section fixes (the
+    // previous version depended on the room already being clean enough
+    // to accept a fresh seat-2 insert, which a real interactive session
+    // having left an active seat-2 occupant behind could — and did —
+    // violate).
+    beforeAll(async () => {
+      const { data: sandbox, error } = await client.from("events").select("id").eq("is_permanent_test", true).single();
+      if (error || !sandbox) throw new Error(error?.message ?? "permanent test room not found");
+      sandboxId = sandbox.id;
+      await clearSandbox(client);
+    }, 30_000);
+
+    async function authoritativeCounts(eventId: string) {
+      const [messages, speakers, rounds, heat, requests] = await Promise.all([
+        client.from("event_chat_messages").select("id", { count: "exact", head: true }).eq("event_id", eventId),
+        client.from("event_speakers").select("id", { count: "exact", head: true }).eq("event_id", eventId),
+        client.from("stage_rounds").select("id", { count: "exact", head: true }).eq("event_id", eventId),
+        client.from("stage_reaction_heat").select("event_id", { count: "exact", head: true }).eq("event_id", eventId),
+        client.from("speaker_requests").select("id", { count: "exact", head: true }).eq("event_id", eventId),
+      ]);
+      return {
+        messages: messages.count ?? 0,
+        speakers: speakers.count ?? 0,
+        rounds: rounds.count ?? 0,
+        reactionHeat: heat.count ?? 0,
+        requests: requests.count ?? 0,
+      };
+    }
+
+    it("starts genuinely blank after the precondition clear — proves the fix, not just the happy path", async () => {
+      expect(await authoritativeCounts(sandboxId)).toEqual({ messages: 0, speakers: 0, rounds: 0, reactionHeat: 0, requests: 0 });
     });
-    if (messageError) throw new Error(messageError.message);
 
-    const { error: speakerError } = await client.from("event_speakers").insert({
-      event_id: sandbox.id,
-      guest_id: crypto.randomUUID(),
-      seat_number: 2,
-      display_name: "clear-sandbox test guest",
-    });
-    if (speakerError) throw new Error(speakerError.message);
+    it("removes every table this room's transient state actually spans — messages, reactions, requests, request votes, speakers, round votes, the shared round clock, and reaction heat — not just messages/speakers", async () => {
+      // Deterministic fixtures across every table clearSandbox is
+      // supposed to reach, wired together the same way real usage would
+      // (a request tied to its own message, a vote tied to that request,
+      // a round vote tied to the seat) — never depending on whatever
+      // random state happens to already exist.
+      const { data: message, error: messageError } = await client
+        .from("event_chat_messages")
+        .insert({
+          event_id: sandboxId,
+          author_guest_id: crypto.randomUUID(),
+          author_display_name: "clear-sandbox test guest",
+          body: "deliberately created by this test — clearSandbox must remove it",
+          is_speaker_request: true,
+        })
+        .select("id")
+        .single();
+      if (messageError || !message) throw new Error(messageError?.message ?? "failed to insert test message");
 
-    const result = await clearSandbox(client);
-    expect(result.eventId).toBe(sandbox.id);
-    expect(result.messagesDeleted).toBeGreaterThan(0);
-    expect(result.speakersDeleted).toBeGreaterThan(0);
+      const { error: reactionError } = await client
+        .from("event_chat_message_reactions")
+        .insert({ message_id: message.id, reactor_guest_id: crypto.randomUUID() });
+      if (reactionError) throw new Error(reactionError.message);
 
-    const { data: messagesAfter } = await client.from("event_chat_messages").select("id").eq("event_id", sandbox.id);
-    expect(messagesAfter).toEqual([]);
+      const { data: request, error: requestError } = await client
+        .from("speaker_requests")
+        .insert({ event_id: sandboxId, guest_id: crypto.randomUUID(), message_id: message.id })
+        .select("id")
+        .single();
+      if (requestError || !request) throw new Error(requestError?.message ?? "failed to insert test request");
 
-    const { data: speakersAfter } = await client.from("event_speakers").select("id").eq("event_id", sandbox.id);
-    expect(speakersAfter).toEqual([]);
+      const { error: requestVoteError } = await client
+        .from("speaker_request_votes")
+        .insert({ event_id: sandboxId, voter_guest_id: crypto.randomUUID(), request_id: request.id });
+      if (requestVoteError) throw new Error(requestVoteError.message);
 
-    // The room itself must still exist — that's the entire point.
-    const { data: sandboxStillThere } = await client.from("events").select("id").eq("id", sandbox.id).maybeSingle();
-    expect(sandboxStillThere?.id).toBe(sandbox.id);
+      const { data: speaker, error: speakerError } = await client
+        .from("event_speakers")
+        .insert({ event_id: sandboxId, guest_id: crypto.randomUUID(), seat_number: 2, display_name: "clear-sandbox test guest" })
+        .select("id")
+        .single();
+      if (speakerError || !speaker) throw new Error(speakerError?.message ?? "failed to insert test speaker");
+
+      const { error: roundVoteError } = await client
+        .from("speaker_round_votes")
+        .insert({ event_speakers_id: speaker.id, voter_guest_id: crypto.randomUUID(), choice: "continue" });
+      if (roundVoteError) throw new Error(roundVoteError.message);
+
+      const { error: roundError } = await client
+        .from("stage_rounds")
+        .insert({ event_id: sandboxId, round_number: 99, phase: "awaiting_pairing" });
+      if (roundError) throw new Error(roundError.message);
+
+      const { error: heatError } = await client
+        .from("stage_reaction_heat")
+        .insert({ event_id: sandboxId, guest_id: crypto.randomUUID(), heat: 80, in_cooldown: false });
+      if (heatError) throw new Error(heatError.message);
+
+      // Every table actually has a row now — otherwise this test would
+      // prove nothing (a no-op clear "succeeding" against an already-
+      // empty room is not the same claim).
+      expect(await authoritativeCounts(sandboxId)).toEqual({ messages: 1, speakers: 1, rounds: 1, reactionHeat: 1, requests: 1 });
+
+      const result = await clearSandbox(client);
+      expect(result.eventId).toBe(sandboxId);
+      expect(result.messagesDeleted).toBeGreaterThan(0);
+      expect(result.reactionsDeleted).toBeGreaterThan(0);
+      expect(result.requestsDeleted).toBeGreaterThan(0);
+      expect(result.requestVotesDeleted).toBeGreaterThan(0);
+      expect(result.speakersDeleted).toBeGreaterThan(0);
+      expect(result.roundVotesDeleted).toBeGreaterThan(0);
+      expect(result.roundsDeleted).toBeGreaterThan(0);
+      expect(result.reactionHeatDeleted).toBeGreaterThan(0);
+
+      // Authoritative re-query, not just trusting the returned counts.
+      expect(await authoritativeCounts(sandboxId)).toEqual({ messages: 0, speakers: 0, rounds: 0, reactionHeat: 0, requests: 0 });
+
+      // The room itself must still exist — that's the entire point.
+      const { data: sandboxStillThere } = await client.from("events").select("id").eq("id", sandboxId).maybeSingle();
+      expect(sandboxStillThere?.id).toBe(sandboxId);
+    }, 20_000); // ~10 sequential real round trips (seed one fixture per table, clear, re-verify) — comfortably past the 5s default under full-suite contention against the shared project, same reasoning as this file's own beforeAll/afterAll timeouts elsewhere.
+
+    it("running it again against an already-blank room is a safe no-op — never errors, never goes negative", async () => {
+      const result = await clearSandbox(client);
+      expect(result.eventId).toBe(sandboxId);
+      expect(result.messagesDeleted).toBe(0);
+      expect(result.speakersDeleted).toBe(0);
+      expect(result.roundsDeleted).toBe(0);
+      expect(result.reactionHeatDeleted).toBe(0);
+    }, 15_000);
   });
 });

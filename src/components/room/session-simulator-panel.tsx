@@ -15,6 +15,7 @@ import {
   resetSimulatorSession,
   simulateAdvanceSelection,
   fetchDebugSnapshotState,
+  clearTestRoomSandbox,
 } from "@/app/events/[id]/room/simulator-actions";
 import { reconcileStageRoundAction } from "@/app/events/[id]/room/actions";
 import { createClient } from "@/lib/supabase/client";
@@ -484,6 +485,15 @@ export function SessionSimulatorPanel({
   // event handler can be one render behind.
   const resetInFlightRef = useRef(false);
   const [resetInFlight, setResetInFlight] = useState(false);
+  // Same synchronous re-entrancy guard as `resetInFlightRef`, for the
+  // separate "Clear Test Room" control below — deliberately its own
+  // ref/state pair, not shared with Reset Session's, since the two are
+  // genuinely different operations (one run's own guest ids vs. the
+  // whole room) that a developer might reasonably want to distinguish
+  // mid-flight in the UI.
+  const clearTestRoomInFlightRef = useRef(false);
+  const [clearTestRoomInFlight, setClearTestRoomInFlight] = useState(false);
+  const clearTestRoomFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A bare counter, bumped once per `handleReset` call — distinct from
   // `startupTokenRef` (which tracks *startup* generations): this is
   // "which Reset generation are we in," surfaced in the debug snapshot's
@@ -948,6 +958,13 @@ export function SessionSimulatorPanel({
       appendLog("Reset still in progress — try Start again in a moment");
       return;
     }
+    // Same barrier, for Clear Test Room's own comprehensive delete pass —
+    // starting a fresh simulated session while a room-wide clear is still
+    // in flight could seed brand-new state right as it's being wiped.
+    if (clearTestRoomInFlightRef.current) {
+      appendLog("Clear Test Room still in progress — try Start again in a moment");
+      return;
+    }
     startupInFlightRef.current = true;
     try {
       const token = ++startupTokenRef.current;
@@ -1291,11 +1308,105 @@ export function SessionSimulatorPanel({
     }
   }
 
+  /**
+   * Real-device report: "Clear Test Room" — a genuinely comprehensive,
+   * room-wide sandbox clear, deliberately kept separate from "Reset
+   * Session" above rather than widening it (see `clearTestRoomSandbox`'s
+   * own doc comment for why: Reset Session is intentionally scoped to
+   * one run's own exact guest ids, which is the *correct*, safe behavior
+   * for its own purpose — a room-wide wipe there would be unsafe against
+   * a room with real participants).
+   *
+   * **Safety**: `clearTestRoomSandbox` re-verifies `is_permanent_test`
+   * on the server before touching anything — this button can never
+   * delete an ordinary event's real data even if this panel were
+   * somehow reachable against one (it isn't, today, but the server-side
+   * check is the actual guarantee, not this panel's own gating alone).
+   *
+   * **Determinism (Section 4's own requirement)**: resets the exact same
+   * local simulator bookkeeping `handleReset` does — a room-wide clear
+   * implies at least as much local staleness as a run-scoped reset — and
+   * calls the same `onSimulatorReset` the caller (`EventRoom`) already
+   * wires to clear its own `simulatedGuestIds` and refetch speakers, so
+   * the UI reconciles without a manual reload. A delayed ~2s follow-up
+   * sweep, same reasoning as Reset Session's own, catches a write that
+   * was still in flight at the moment of the first pass (e.g. a real
+   * comment submitted at that exact instant) — idempotent either way.
+   */
+  async function handleClearTestRoom() {
+    if (clearTestRoomInFlightRef.current) {
+      appendLog("Clear Test Room already in progress — ignoring duplicate tap");
+      return;
+    }
+    clearTestRoomInFlightRef.current = true;
+    setClearTestRoomInFlight(true);
+    if (clearTestRoomFollowUpTimerRef.current !== null) {
+      clearTimeout(clearTestRoomFollowUpTimerRef.current);
+      clearTestRoomFollowUpTimerRef.current = null;
+    }
+
+    try {
+      const result = await clearTestRoomSandbox(eventId);
+
+      allSimulatedGuestIdsRef.current = new Set();
+      guestDisplayNamesRef.current = {};
+      setGuestDisplayNames({});
+      roundMoodRef.current = new Map();
+      audienceRef.current = [];
+      seedSpeakersRef.current = null;
+      setAudience([]);
+      setStartupState(IDLE_STARTUP_STATE);
+      setRoundVoteTallies({});
+      setPoolResetCount(0);
+      prevPendingCountRef.current = 0;
+      lastSeatFailureRef.current = { 1: null, 2: null };
+      nonSimulatorBlockerRef.current = { 1: null, 2: null };
+      bootstrapResultRef.current = { seat1: null, seat2: null, result: null };
+      staleRequestsCleanedRef.current = 0;
+      staleGenerationDetectedRef.current = false;
+      runningRef.current = false;
+      setRunning(false);
+      stopAllTimers();
+      setLog([
+        `${new Date().toLocaleTimeString()} — Clear Test Room — cleared ${result.messagesDeleted} comments, ${result.reactionsDeleted} likes, ${result.requestsDeleted} requests, ${result.requestVotesDeleted} request votes, ${result.speakersDeleted} speaker seats, ${result.roundVotesDeleted} round votes, ${result.roundsDeleted} shared round row(s), ${result.reactionHeatDeleted} reaction heat row(s)`,
+      ]);
+      onSimulatorReset?.();
+
+      clearTestRoomFollowUpTimerRef.current = setTimeout(() => {
+        clearTestRoomFollowUpTimerRef.current = null;
+        void clearTestRoomSandbox(eventId).then((followUp) => {
+          const strayTotal =
+            followUp.messagesDeleted +
+            followUp.reactionsDeleted +
+            followUp.requestsDeleted +
+            followUp.requestVotesDeleted +
+            followUp.speakersDeleted +
+            followUp.roundVotesDeleted +
+            followUp.roundsDeleted +
+            followUp.reactionHeatDeleted;
+          if (strayTotal === 0 || !mountedRef.current) return;
+          setLog((prev) =>
+            [
+              `${new Date().toLocaleTimeString()} — Clear Test Room follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight`,
+              ...prev,
+            ].slice(0, 30),
+          );
+        });
+      }, 2000);
+    } catch (error) {
+      appendLog(`Clear Test Room failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      clearTestRoomInFlightRef.current = false;
+      setClearTestRoomInFlight(false);
+    }
+  }
+
   useEffect(() => {
     return () => {
       mountedRef.current = false;
       stopAllTimers();
       if (resetFollowUpTimerRef.current !== null) clearTimeout(resetFollowUpTimerRef.current);
+      if (clearTestRoomFollowUpTimerRef.current !== null) clearTimeout(clearTestRoomFollowUpTimerRef.current);
     };
   }, []);
 
@@ -2436,6 +2547,7 @@ export function SessionSimulatorPanel({
     push("Bootstrap mode: simulator-authoritative bypass");
     push(`Bootstrap generation: ${startupTokenRef.current}`);
     push(`Reset in progress: ${resetInFlightRef.current ? "yes" : "no"}`);
+    push(`Clear Test Room in progress: ${clearTestRoomInFlightRef.current ? "yes" : "no"}`);
     push(`Reset generation: ${resetGenerationRef.current}`);
     push(`Startup attempt: ${startupAttemptRef.current}`);
     push(`Existing stage established: ${established ? "yes" : "no"}`);
@@ -2531,7 +2643,7 @@ export function SessionSimulatorPanel({
           // own `resetInFlightRef` check is the actual, render-timing-
           // independent guarantee; this just keeps the button's own
           // visible state honest with it.
-          disabled={running || startingUp || resetInFlight}
+          disabled={running || startingUp || resetInFlight || clearTestRoomInFlight}
           className="rounded bg-emerald-600 px-2 py-1 font-medium"
         >
           Start Simulated Session
@@ -2561,6 +2673,23 @@ export function SessionSimulatorPanel({
         */}
         <SimButton data-testid="sim-reset" onClick={handleReset} className="rounded bg-orange-700 px-2 py-1 font-medium">
           Reset Session
+        </SimButton>
+        {/*
+          Real-device report: genuinely comprehensive, room-wide sandbox
+          clear — deliberately a *separate*, distinctly-labeled/colored
+          control from Reset Session above, not a widening of it (see
+          `handleClearTestRoom`'s own doc comment). Same one-tap, no-
+          confirmation-step reasoning as Reset Session: this is a preview-
+          only tool, and the server-side `is_permanent_test` check is the
+          actual safety guarantee regardless of how easy this button is
+          to tap.
+        */}
+        <SimButton
+          data-testid="sim-clear-test-room"
+          onClick={handleClearTestRoom}
+          className="rounded bg-red-800 px-2 py-1 font-medium"
+        >
+          Clear Test Room
         </SimButton>
         <SimButton data-testid="sim-seed-speakers" onClick={seedTwoSpeakers} className="rounded bg-white/10 px-2 py-1">
           Seed 2 Speakers

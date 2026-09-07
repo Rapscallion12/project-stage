@@ -3,6 +3,54 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-06 — Comprehensive sandbox cleanup: fixed `clear-sandbox`, added internal-only "Clear Test Room" (real-device report)
+
+**Problem — the shared permanent test room accumulated real, visible
+mess (offensive test comments, a stuck active seat) that neither
+existing cleanup mechanism removed.** Audited both: Simulator Reset is
+*correctly* scoped to one run's own in-memory guest-id list (a room-wide
+wipe there would risk deleting real participants' data in a mixed real+
+simulated room) — not a bug, a deliberate safety property, confirmed by
+re-reading its own extensive existing doc comment. The CLI's
+`clearSandbox` *is* room-wide but only ever cleared 2 of 8 relevant
+tables — an incompleteness, not a design choice, confirmed by mapping
+every migration's actual FK/cascade structure by hand rather than
+guessing from the function's own (outdated) doc comment.
+
+**Decision — keep the two mechanisms conceptually separate, fix each to
+be *correct for what it's actually for*, and add a third, explicitly
+different tool for the actual gap.** Widening Simulator Reset into a
+room-wide wipe was rejected outright — that would reintroduce the exact
+risk its current scoping exists to prevent. Instead: (1) fixed
+`clearSandbox` to be genuinely comprehensive against the one thing it's
+always safely allowed to fully wipe (the *designated* sandbox room,
+never an arbitrary event); (2) added `clearTestRoomSandbox` — a
+*separate* server action and a *separate*, distinctly-labeled "Clear
+Test Room" button — rather than trying to make one control mean two
+different things depending on context.
+
+**Safety mechanism, chosen deliberately**: rather than trusting the
+caller's `eventId` (or the fact that the button only appears inside an
+already preview/dev-gated panel) as the safety boundary, the new action
+re-verifies `is_permanent_test = true` on the target event from the
+database itself before deleting anything, and hard-refuses otherwise.
+This means even a future bug that let this panel mount against an
+ordinary event could never turn "Clear Test Room" into a real-data-
+destroying control — the refusal is server-side and unconditional, not
+a UI-layer assumption.
+
+**Root cause of the visible mess, worth stating plainly**: this
+project's own `dev-harness.test.ts` had been silently failing across
+several recent full-suite runs (a stale active seat from real
+interactive use collided with its own fixture insert), throwing *before*
+reaching its own cleanup call — meaning my own repeated test-suite runs
+this session were the direct, confirmed source of the leaked "clear-
+sandbox test guest" comments the user found on a real device. Fixed by
+making that test self-healing (clear first, as a precondition, not an
+assumption) rather than merely more lenient — the same discipline now
+prevents any future test run from ever leaving its own fixtures behind
+again, regardless of what state it happens to start from.
+
 ## 2026-09-06 — Mobile UX correction: speaker normal-stage-view toggle, Expanded Comments mini stage (live-user-test finding, issue #21)
 
 **Problem 1 — how does a seated speaker see the room "like the audience
