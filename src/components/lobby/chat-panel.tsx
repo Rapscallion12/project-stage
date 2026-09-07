@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { startTransition, useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import { sendMessage } from "@/app/events/[id]/lobby/actions";
 import { submitSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { Input } from "@/components/ui/input";
@@ -32,16 +32,16 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
  * from outside it, which only works if something above both can set it.
  *
  * Issue #22: submitting the request form is also the gesture that
- * acquires camera/mic (`onPrepareMedia`) — called directly from the
- * form's own `onSubmit`, synchronously, in the same call stack as the
- * click/tap that triggered it. This is deliberately a plain event
- * handler, not something chained off the server action's own pending
- * state or a `.then()` — same Safari gesture requirement as
- * `activateMedia` (see useLiveRoomConnection). It never calls
- * `preventDefault()`, so React's `action` still submits the request
- * normally; the two just both react to the same click. Ordinary
+ * acquires camera/mic (`onPrepareMedia`) — called directly from
+ * `handleSubmit` (the form's own `onSubmit`, see the real-device
+ * submission-reliability doc comment on `draft`/`handleSubmit` below for
+ * why this is now the *only* submit path at all), synchronously, in the
+ * same call stack as the click/tap or Enter keypress that triggered it.
+ * This is deliberately a plain, direct call — never chained off the
+ * server action's own pending state or a `.then()` — same Safari gesture
+ * requirement as `activateMedia` (see useLiveRoomConnection). Ordinary
  * comment submission never touches `onPrepareMedia` at all — only the
- * `micRequestMode` branch's `onSubmit` calls it, so a plain "just
+ * `micRequestMode` branch of `handleSubmit` calls it, so a plain "just
  * commenting" viewer is never prompted for camera/mic permission.
  *
  * `compact` (issue #21, "05 — Social Stage" Phase 2): renders only the
@@ -189,42 +189,91 @@ export function ChatPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const wasPending = useRef(false);
-  // Real-device report ("failed submission does NOT silently erase
-  // draft"): submitting via a native `<form action={...}>` — which this
-  // form is, in both modes — resets every uncontrolled field the instant
-  // the browser processes the submit, synchronously, before the action's
-  // own promise ever resolves. That happens regardless of whether the
-  // action eventually succeeds or fails, so a rejected submission was
-  // silently wiping whatever the user had just typed, with no way back.
-  // Captured in this form's own `onSubmit` (below) — which still runs
-  // *before* that native reset, in the same submit event — so a failure
-  // can restore exactly what was typed.
-  const lastSubmittedValueRef = useRef("");
+  // Real-device report ("send is unreliable, draft doesn't consistently
+  // clear"): the previous fix (capture-in-onSubmit, restore-on-error)
+  // patched a symptom of the actual problem — this form submitted via a
+  // native `<form action={...}>`, which hands React's own automatic
+  // form-reset behavior *and* this component's own manual `ref.value =`
+  // manipulation joint, uncoordinated control over the same uncontrolled
+  // DOM node, around the exact same pending->settled moment. Two
+  // separate mechanisms racing to decide what the input should show is
+  // exactly what "unreliable" looks like — sometimes React's own reset
+  // wins, sometimes the manual restore wins, depending on timing that
+  // was never actually guaranteed either way.
+  //
+  // **Fix — one clear state model, not two** (explicit instruction):
+  // `draft` below is now the *only* thing that decides what the input
+  // shows — a fully controlled input, never let out of React's hands.
+  // React's own automatic form-reset can't fight a controlled value: on
+  // every render the input is forced back to `value={draft}` regardless
+  // of anything the DOM itself tried to reset. The `<form>` no longer
+  // has an `action` prop at all — `handleSubmit` below (shared by both
+  // the visible arrow *and* keyboard Enter, since both are just ways of
+  // firing this same form's `submit` event) drives the action's own
+  // dispatch function directly, so this component owns the entire
+  // submit->settle sequence explicitly instead of leaning on the
+  // browser's native form-submission semantics for any part of it.
+  const [draft, setDraft] = useState("");
+  // Real-device report, Section 5 ("exactly-once UI submission"): a
+  // synchronous re-entrancy guard, same reasoning as this codebase's
+  // other in-flight refs (`resetInFlightRef`, `startupInFlightRef` in
+  // the Session Simulator panel, `useDoubleTap`'s own tap-pair guard) —
+  // `pending` from `useActionState` is real, but it's a state value that
+  // updates a render *after* this handler runs, so it can't by itself
+  // prevent two submissions dispatched within the same tick (a fast
+  // double-tap, or a tap immediately followed by an Enter keypress
+  // before React has re-rendered the disabled button).
+  const submittingRef = useRef(false);
+  // Real-device report: a *second* real bug, found only by actually
+  // driving this against the real backend (not assumed) — the naive
+  // "success clears the draft" effect below used to unconditionally
+  // `setDraft("")`, with no idea *what* had actually been submitted. A
+  // completely ordinary sequence — type comment 1, hit send, immediately
+  // start typing comment 2 while comment 1 is still round-tripping —
+  // meant comment 1's own *later* success would wipe out comment 2's
+  // already-in-progress draft the moment it settled, with no warning.
+  // This is exactly the kind of "sometimes my typing just vanishes"
+  // unreliability a real user reports as "the composer doesn't work,"
+  // without a repro as clean as a single failed send. Captured here at
+  // submit time; the settle effect below only clears `draft` if it still
+  // *equals* what this specific submission actually sent — if the user
+  // has since changed it, their newer, not-yet-submitted text is never
+  // touched.
+  const submittedValueRef = useRef("");
 
   const pending = micRequestMode ? requestPending : sendPending;
   const error = micRequestMode ? requestState?.error : sendState?.error;
 
-  // On settle: success clears the input and refocuses (no error from
-  // whichever mode was actually active — not both raw states, since a
-  // stale error from the *other* mode's last attempt must never block
-  // this one); failure restores the draft the native reset already wiped
-  // — never a silent loss of what the user typed. Covers both modes,
-  // since only one is ever pending at a time. A successful request also
-  // flips hasPendingRequest and drops back to normal mode, the same way
-  // a granted claim already updates RoomControls elsewhere.
+  // On settle: success clears the draft (but only if it's still exactly
+  // what was submitted — see `submittedValueRef`'s own doc comment) and
+  // refocuses (no error from whichever mode was actually active — not
+  // both raw states, since a stale error from the *other* mode's last
+  // attempt must never block this one) and releases the re-entrancy
+  // guard; failure does nothing to `draft` at all — it was never touched
+  // before this point (Section 4: "do not clear before success"), so
+  // it's still exactly what the user typed, ready to retry. Covers both
+  // modes, since only one is ever pending at a time. A successful
+  // request also flips hasPendingRequest and drops back to normal mode,
+  // the same way a granted claim already updates RoomControls elsewhere.
   useEffect(() => {
     if (wasPending.current && !pending) {
+      submittingRef.current = false;
       if (!error) {
-        if (inputRef.current) {
-          inputRef.current.value = "";
-          inputRef.current.focus();
-        }
+        const justSubmitted = submittedValueRef.current;
+        // `queueMicrotask` — this codebase's own established way of
+        // keeping a settle-triggered state update out of
+        // `react-hooks/set-state-in-effect`'s "synchronous setState
+        // inside an effect" flag (see e.g. ExpandedComments' own
+        // anchoring effect, or useAutomaticPromotion's `await
+        // Promise.resolve()` for the async-function equivalent) —
+        // clearing the draft has no synchronous-with-render timing
+        // requirement the way a pre-paint scroll adjustment would.
+        queueMicrotask(() => setDraft((current) => (current === justSubmitted ? "" : current)));
+        inputRef.current?.focus();
         if (micRequestMode) {
           onHasPendingRequestChange(true);
           onMicRequestModeChange(false);
         }
-      } else if (inputRef.current && lastSubmittedValueRef.current) {
-        inputRef.current.value = lastSubmittedValueRef.current;
       }
     }
     wasPending.current = pending;
@@ -235,8 +284,37 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, error]);
 
-  function captureDraftBeforeNativeReset() {
-    lastSubmittedValueRef.current = inputRef.current?.value ?? "";
+  /**
+   * The one authoritative submit path (Section 2's own explicit
+   * requirement) — bound to the `<form>`'s own `onSubmit`, which fires
+   * identically whether triggered by tapping the visible arrow
+   * (`<button type="submit">`) or by the keyboard's Enter/Return/Go
+   * action on this single-line input (the browser's own native
+   * single-input-form-submits-on-Enter behavior, not anything this
+   * component has to wire up itself) — one handler, one validation path,
+   * one pending/settle lifecycle, never two slightly different ones to
+   * keep in sync by hand.
+   */
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submittingRef.current) return; // exactly-once guard — see submittingRef's own doc comment
+    const trimmed = draft.trim();
+    if (!trimmed) return; // empty/whitespace draft — silently do nothing, same as the server's own validation would reject anyway
+    submittingRef.current = true;
+    submittedValueRef.current = draft; // see this ref's own doc comment above
+
+    // Issue #22: acquiring camera/mic must stay a *direct*, synchronous
+    // call from this same gesture — see this component's own doc
+    // comment on `onPrepareMedia` for the Safari user-activation
+    // requirement this preserves unchanged.
+    if (micRequestMode) void onPrepareMedia();
+
+    const formData = new FormData();
+    formData.set("body", draft);
+    const dispatch = micRequestMode ? requestFormAction : sendFormAction;
+    startTransition(() => {
+      dispatch(formData);
+    });
   }
 
   useEffect(() => {
@@ -244,19 +322,14 @@ export function ChatPanel({
   }, [messages.length]);
 
   function insertEmoji(emoji: string) {
-    if (!inputRef.current) return;
-    inputRef.current.value += emoji;
-    inputRef.current.focus();
+    setDraft((current) => current + emoji);
+    inputRef.current?.focus();
   }
 
   const form = (
     <form
       data-testid="chat-composer-form"
-      action={micRequestMode ? requestFormAction : sendFormAction}
-      onSubmit={() => {
-        captureDraftBeforeNativeReset();
-        if (micRequestMode) void onPrepareMedia();
-      }}
+      onSubmit={handleSubmit}
       className={compact ? "flex min-w-0 items-center gap-2 landscape:max-w-[40%]" : "flex gap-2"}
     >
       {compact ? (
@@ -315,10 +388,20 @@ export function ChatPanel({
           <input
             ref={inputRef}
             name="body"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
             placeholder={micRequestMode ? "What's your topic?" : "Add a comment…"}
             autoComplete="off"
             maxLength={500}
-            required
+            // Real-device report: Enter/Return on this single-line input
+            // already submits the form natively (the browser's own
+            // single-text-input behavior) — that submit event runs
+            // `handleSubmit` above, the exact same authoritative path the
+            // arrow button's own `type="submit"` triggers. No separate
+            // `onKeyDown` handler exists, deliberately: a second, hand-
+            // maintained keyboard-submit path is exactly what Section 2
+            // explicitly ruled out.
+            //
             // text-base (16px), not text-sm: iOS Safari auto-zooms the
             // page on focus for any input under 16px — see real-device
             // finding below. Same convention the shared <Input> component
@@ -330,7 +413,19 @@ export function ChatPanel({
             type="submit"
             disabled={pending}
             aria-label={micRequestMode ? "Send speaker request" : "Send comment"}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs text-white disabled:opacity-50"
+            // Real-device report, Section 10: the glyph itself is tiny —
+            // this button's own tap target now extends well past it
+            // (36px, comfortably closer to the ~44px mobile guideline
+            // than the previous 24px box) via padding, not a bigger
+            // icon. `-m-1.5`/matching padding keeps the *visual* pill
+            // size in the composer unchanged while the actual hit-tested
+            // element underneath is larger — confirmed no sibling/
+            // ancestor overlays or pointer-capture intercept taps here
+            // (see this file's own drag-handle doc comment for the one
+            // place that pattern existed, and why it's excluded from
+            // ever reaching this composer at all — it's a sibling
+            // section, never a wrapping ancestor).
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-sm text-white disabled:opacity-50"
           >
             ↑
           </button>
@@ -359,6 +454,8 @@ export function ChatPanel({
           <Input
             ref={inputRef}
             name="body"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
             placeholder={micRequestMode ? "What do you want to talk about?" : "Say something…"}
             autoComplete="off"
             maxLength={500}

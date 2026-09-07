@@ -3,6 +3,70 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-07 — Comment composer: one controlled draft state, real double-submit and mid-flight-typing bugs found live (real-device report)
+
+**Problem — the previous session's own fix (capture-in-onSubmit,
+restore-on-error, still submitting through a native `<form
+action={...}>`) was itself the actual unreliability, not a full fix.**
+Two independent mechanisms — React's own automatic form-reset behavior
+tied to an action-bearing `<form>`, and this component's own manual
+`ref.value = ...` restore called from the settle effect — both had
+uncoordinated write access to the same uncontrolled DOM node, around the
+exact same pending→settled moment. Which one "won" on a given attempt
+depended on timing that was never actually guaranteed, which is exactly
+what "sometimes sends, sometimes doesn't, draft sometimes clears" looks
+like from the outside. Alternatives considered: (a) patch the timing
+more precisely (e.g. delay the manual restore until some later tick) —
+rejected, this treats the symptom of two competing writers instead of
+removing the second writer; (b) keep the native `action` prop but
+suppress React's own auto-reset somehow — no supported API to do this
+selectively found, and even if one existed it would still leave two
+sources of truth conceptually. **Decision**: a fully controlled `draft`
+state (`useState`), the *only* thing that decides what the input shows;
+the `<form>` drops its `action` prop entirely, and one `onSubmit`
+handler drives `useActionState`'s dispatch function directly via
+`startTransition`. React's own automatic reset has nothing to fight —
+a controlled value is reasserted every render regardless of what any
+other mechanism tried to do to the DOM node. This is also what
+unifies the visible arrow and keyboard Enter onto one authoritative path
+"for free": both are just two ways of firing the same form's native
+`submit` event, which now has exactly one handler.
+
+**Problem — a second, more consequential bug, found only by actually
+driving this against the real backend, not by inspection or by
+constructing a clean single-failure test case.** An entirely ordinary
+sequence — type comment 1, hit send, immediately start typing comment 2
+while comment 1 is still round-tripping to the server — silently erased
+comment 2's own, never-yet-submitted draft the instant comment 1's
+request settled successfully, because the "success clears the draft"
+effect unconditionally cleared *whatever the input currently held*,
+with no notion of "did the thing I'm about to clear match what I
+actually just submitted." This is very plausibly the actual shape of
+the real-device "unreliable" complaint — a user naturally starts their
+next thought before waiting for send confirmation, and previous test
+coverage only ever exercised one submission in isolation, never this
+overlap. **Decision**: capture exactly what was submitted at the moment
+of submission (`submittedValueRef`); the settle effect's clear only
+fires if the current draft still equals that captured value — a draft
+the user has since changed is recognized as such and left alone. Caught
+and fixed via a new regression test specifically constructed to
+reproduce this exact overlap, added *because* live testing surfaced it
+— the test would not have been written from inspection alone.
+
+**Newly-sent comment flash — deliberately reuses existing detection,
+not a new one.** The identity-matched "newest arrival is authored by
+me" check already driving the jump-to-own-comment behavior (see the
+prior session's own live-timeline entry) is also the correct signal for
+*which exact message id* to flash — building a second, parallel
+"which row did I just send" computation was considered and rejected as
+duplicated logic with its own chance to disagree with the first; instead
+the same branch that triggers the scroll also sets `recentlySentId` to
+that branch's own already-resolved `newestId`, self-clearing via timeout.
+Verified live that a near-simultaneous stranger's comment (arriving
+before the flash naturally expires) never disturbs or steals it, since
+the "someone else's arrival" code path never touches `recentlySentId` at
+all.
+
 ## 2026-09-06 — Expanded Comments rebuilt as a live anchored timeline; commenting root-caused (real-device report)
 
 **Problem 1 — "commenting is not working."** Rather than guess, ran the

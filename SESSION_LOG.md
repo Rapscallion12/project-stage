@@ -4,6 +4,66 @@ Newest entry first.
 
 ---
 
+## 2026-09-07 — Session 75: comment-composer reliability — one controlled draft state replaces a native-form-reset/manual-ref-restore race, real double-submission and mid-flight-typing bugs found and fixed live, newly-sent comment flash added (issue #21), on `feature/mobile-speaker-view-toggle`
+
+**Root cause of "send is unreliable, draft doesn't consistently clear"**:
+the composer submitted via a native `<form action={...}>`, giving React's
+own automatic form-reset *and* this component's own manual
+`ref.value = ...` restore-on-failure logic (added last session) joint,
+uncoordinated control over the same uncontrolled DOM node around the
+exact same pending→settled moment — two mechanisms racing to decide what
+the input shows is exactly what "unreliable" looks like. Fixed per
+explicit instruction ("prefer one clear state model"): `draft` is now a
+plain controlled `useState`, the *only* thing that decides what the
+input shows; the `<form>` has no `action` prop at all anymore — one
+`onSubmit` handler (`handleSubmit`) fires identically for the visible
+arrow and keyboard Enter (the browser's own native single-input-submits-
+on-Enter behavior), driving `useActionState`'s dispatch function
+directly via `startTransition`. A synchronous `submittingRef` guard
+(matching this codebase's own established in-flight-ref pattern)
+prevents a double-submit within the same tick.
+
+**A second, more consequential real bug found only by actually driving
+this against the real backend** (not by inspection): the naive "success
+clears the draft" effect unconditionally cleared whatever the input
+currently held — an entirely ordinary sequence (type comment 1, hit
+send, immediately start typing comment 2 while comment 1 is still
+round-tripping) meant comment 1's own *later* success silently erased
+comment 2's already-in-progress, never-yet-submitted draft the instant
+it settled. This is very plausibly the actual real-device "doesn't
+work" experience, far more than a clean single-failure repro would be.
+Fixed by capturing exactly what was submitted (`submittedValueRef`) and
+only clearing if the current draft still matches it — a newer,
+not-yet-submitted draft is never touched.
+
+**Newly-sent comment flash**: reuses the existing "newest arrival is
+authored by me" identity-matched detection already driving the jump-to-
+own-comment behavior (never a separate "which row is newest" guess) —
+sets a `recentlySentId` by the message's own authoritative id, rendered
+as a brief `comment-just-sent-flash` background animation, self-clearing
+after 1.2s. Verified live: a near-simultaneous stranger's comment never
+steals or disturbs the flash meant for mine.
+
+**Verified live against the real backend** (not jsdom, which already
+missed one real bug this exact composer had): arrow tap, keyboard Enter,
+rapid double-click (exactly-once), the mid-flight-typing race, a genuine
+rate-limit failure (draft preserved, error shown, successful retry), and
+the flash — all confirmed working end to end.
+
+**Testing**: `chat-panel.test.tsx` gained exactly-once/keyboard-parity/
+mid-flight-typing-race tests (one of which reproduces the second real bug
+above). `expanded-comments.test.tsx` gained a highlight-flash describe
+block (exact-id targeting, auto-clear, older-comment/other-viewer
+exclusion, near-simultaneous-arrival safety).
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/lobby/hooks suites clean (1201 tests). Full
+project suite run separately — see this session's own handoff.
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-06 — Session 74: Small self-preview reactions, comment submission root-caused and fixed, Expanded Comments rebuilt as a live anchored timeline, own-comment "You" marker, Reset Session/Clear Test Room consolidated (issue #21), on `feature/mobile-speaker-view-toggle`
 
 **Small self-preview reactions**: audited — `SelfPreview` simply never had

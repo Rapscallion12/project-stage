@@ -145,6 +145,114 @@ describe("ChatPanel", () => {
       await waitFor(() => expect(screen.getByText("Couldn't send your message. Try again.")).toBeInTheDocument());
       expect(input.value).toBe("this will fail");
     });
+
+    // Real-device report, second pass: found only by actually driving
+    // this against the real backend, not by inspection — a completely
+    // ordinary sequence (type comment 1, hit send, immediately start
+    // typing comment 2 while comment 1 is still round-tripping) meant
+    // comment 1's own *later* success cleared whatever the input
+    // currently held, silently erasing comment 2's already-in-progress,
+    // never-yet-submitted draft the moment comment 1 settled.
+    it("typing a new draft while a previous submission is still in flight is never wiped by that submission's own later success", async () => {
+      let resolveSend!: (value: undefined) => void;
+      sendMessage.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
+
+      fireEvent.change(input, { target: { value: "first comment" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+
+      // While "first comment" is still in flight, the user starts typing
+      // the next one — never submitted yet.
+      fireEvent.change(input, { target: { value: "second comment, not yet sent" } });
+
+      // "first comment"'s own request now resolves successfully.
+      resolveSend(undefined);
+      await waitFor(() => expect(screen.getByPlaceholderText("Say something…")).toHaveFocus());
+
+      // The second draft survives — it was never submitted, so clearing
+      // the field now would silently erase real, unsent user input.
+      expect(input.value).toBe("second comment, not yet sent");
+      expect(sendMessage).toHaveBeenCalledTimes(1); // never auto-submitted on its own
+    });
+  });
+
+  describe("exactly-once submission, visible arrow and keyboard share one authoritative path (real-device report, Sections 1-2, 5, 21-22)", () => {
+    it("a single tap on the visible arrow submits exactly once", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<ChatPanel {...baseProps} />);
+      fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    });
+
+    it("an empty or whitespace-only draft never submits at all", () => {
+      render(<ChatPanel {...baseProps} />);
+      fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("a rapid second tap while the first send is still pending is ignored — never a duplicate submission", async () => {
+      let resolveSend!: (value: undefined) => void;
+      sendMessage.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
+      render(<ChatPanel {...baseProps} />);
+      fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
+      const sendButton = screen.getByRole("button", { name: "Send" });
+      fireEvent.click(sendButton);
+      fireEvent.click(sendButton); // same tick — a real disabled button wouldn't even deliver this, belt and suspenders
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      resolveSend(undefined);
+      await waitFor(() => expect(screen.getByPlaceholderText("Say something…")).toHaveValue(""));
+    });
+
+    it("keyboard submission (the form's native submit event, e.g. Enter on this single-line input) invokes the exact same sendMessage path as the visible arrow, exactly once", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…");
+      fireEvent.change(input, { target: { value: "typed then entered" } });
+      fireEvent.submit(screen.getByTestId("chat-composer-form"));
+      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      expect(sendMessage).toHaveBeenCalledWith("e1", undefined, expect.any(FormData));
+    });
+
+    it("keyboard submission clears the draft on success, same as the visible arrow", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "typed then entered" } });
+      fireEvent.submit(screen.getByTestId("chat-composer-form"));
+      await waitFor(() => expect(input.value).toBe(""));
+    });
+
+    it("keyboard submission preserves the draft on failure, same as the visible arrow", async () => {
+      sendMessage.mockResolvedValue({ error: "Couldn't send your message. Try again." });
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "typed then entered" } });
+      fireEvent.submit(screen.getByTestId("chat-composer-form"));
+      await waitFor(() => expect(screen.getByText("Couldn't send your message. Try again.")).toBeInTheDocument());
+      expect(input.value).toBe("typed then entered");
+    });
+
+    it("the compact composer (both the ambient bar and Expanded Comments render this exact mode) uses the identical submission behavior", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<ChatPanel {...baseProps} compact />);
+      const input = screen.getByPlaceholderText("Add a comment…") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "compact composer test" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      await waitFor(() => expect(input.value).toBe(""));
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("the compact composer's arrow is a real functional submit target — not merely visually present", () => {
+      render(<ChatPanel {...baseProps} compact />);
+      const button = screen.getByRole("button", { name: "Send comment" });
+      expect(button).toHaveAttribute("type", "submit");
+      expect(button.closest("form")).toBe(screen.getByTestId("chat-composer-form"));
+      expect(button).not.toBeDisabled();
+    });
   });
 
   describe("compact mode (issue #21, '05 — Social Stage' Phase 2: Watch Mode's persistent composer)", () => {
@@ -383,7 +491,14 @@ describe("ChatPanel", () => {
       it("toggling Request-to-Speak never touches the input's own draft value — same DOM node throughout, never remounted", () => {
         const { rerender } = render(<ChatPanel {...baseProps} compact micRequestMode={false} />);
         const input = screen.getByPlaceholderText("Add a comment…") as HTMLInputElement;
-        input.value = "an unfinished comment";
+        // Real-device report, submission-reliability rewrite: the input
+        // is now fully controlled (`draft` state, single source of
+        // truth) — a real user's keystroke fires `onChange`, which
+        // `fireEvent.change` reproduces; directly mutating `.value` (the
+        // old uncontrolled-input test technique) no longer means
+        // anything, since React re-asserts `value={draft}` on every
+        // render regardless.
+        fireEvent.change(input, { target: { value: "an unfinished comment" } });
 
         rerender(<ChatPanel {...baseProps} compact micRequestMode={true} />);
         const sameInput = screen.getByPlaceholderText("What's your topic?") as HTMLInputElement;
@@ -397,7 +512,7 @@ describe("ChatPanel", () => {
       it("canceling a pending request (tapping the mic button again) also never touches the draft", () => {
         const { rerender } = render(<ChatPanel {...baseProps} compact hasPendingRequest={false} />);
         const input = screen.getByPlaceholderText("Add a comment…") as HTMLInputElement;
-        input.value = "still typing this";
+        fireEvent.change(input, { target: { value: "still typing this" } });
 
         rerender(<ChatPanel {...baseProps} compact hasPendingRequest={true} />);
         expect((screen.getByPlaceholderText("Add a comment…") as HTMLInputElement).value).toBe("still typing this");

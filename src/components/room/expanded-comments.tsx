@@ -31,6 +31,8 @@ const CLOSE_DRAG_PX = 90;
 const TOP_REQUESTS_LIMIT = 3;
 /** Distance (px) from the top of Recent Comments still counted as "caught up to newest" — matches AmbientComments' own analogous near-bottom threshold, mirrored here since this list is newest-first (top = newest). */
 const NEAR_TOP_PX = 24;
+/** Real-device report, Section 6: how long the newly-sent-comment flash stays visible before clearing itself — "briefly," within the requested 0.8-1.5s window. */
+const RECENTLY_SENT_FLASH_MS = 1200;
 
 /**
  * Real-device report: is this message authored by the current viewer?
@@ -232,6 +234,22 @@ export function ExpandedComments({
   const isNearTopRef = useRef(true);
   const prevScrollHeightRef = useRef(0);
   const prevNewestIdRef = useRef<string | null>(messages.length > 0 ? messages[messages.length - 1].id : null);
+  // Real-device report, Section 6-7: the exact message id to briefly
+  // flash — identified by the *same* identity-matched "newest arrival is
+  // mine" detection the jump-to-my-comment logic already performs below,
+  // reusing its own already-correct-and-tested targeting rather than a
+  // second, separate "which row is newest/mine" computation. Cleared
+  // automatically after `RECENTLY_SENT_FLASH_MS`; the timeout is tracked
+  // so a rapid second send (or unmount) can cancel a stale one instead of
+  // letting it clear a *different*, newer flash out from under it.
+  const [recentlySentId, setRecentlySentId] = useState<string | null>(null);
+  const recentlySentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (recentlySentTimeoutRef.current !== null) clearTimeout(recentlySentTimeoutRef.current);
+    };
+  }, []);
 
   function scrollToNewest(behavior: ScrollBehavior = "smooth") {
     listRef.current?.scrollTo({ top: 0, behavior: prefersReducedMotion ? "auto" : behavior });
@@ -289,6 +307,18 @@ export function ExpandedComments({
         // "new comments" counter.
         el.scrollTo({ top: 0, behavior: prefersReducedMotion ? "auto" : "smooth" });
         queueMicrotask(() => setCaughtUpToId(newestId));
+        // The brief highlight flash — targets this exact message id
+        // (never "newest row"/display name/text), so a second person's
+        // comment landing moments later can never inherit a flash that
+        // was actually meant for mine, and mine can never bleed onto
+        // theirs either — see this component's own `recentlySentId` doc
+        // comment above.
+        queueMicrotask(() => setRecentlySentId(newestId));
+        if (recentlySentTimeoutRef.current !== null) clearTimeout(recentlySentTimeoutRef.current);
+        recentlySentTimeoutRef.current = setTimeout(() => {
+          recentlySentTimeoutRef.current = null;
+          setRecentlySentId((current) => (current === newestId ? null : current));
+        }, RECENTLY_SENT_FLASH_MS);
       } else if (isNearTopRef.current) {
         // Already at/near the newest position — let it appear naturally
         // at the top with no scroll adjustment at all, and no redundant
@@ -522,6 +552,7 @@ export function ExpandedComments({
               testId="expanded-comment-row"
               profileEntry={message.author_profile_id ? profileDirectory[message.author_profile_id] : undefined}
               isMine={isMyMessage(message, viewerIdentity)}
+              justSent={message.id === recentlySentId}
             />
           ))
         )}
@@ -555,6 +586,7 @@ function CommentRow({
   testId,
   profileEntry,
   isMine = false,
+  justSent = false,
 }: {
   message: LobbyMessage;
   reaction: ReactionState | undefined;
@@ -576,8 +608,22 @@ function CommentRow({
    * posted" at all, only "does this row's author match my identity."
    */
   isMine?: boolean;
+  /**
+   * Real-device report, Section 6-7: true for exactly the one message id
+   * `recentlySentId` currently names — the caller (this file's own
+   * anchoring effect) identifies it by matching the *authoritative*
+   * message id from the live `messages` array against "the newest
+   * arrival is authored by me," never by "is this the newest row" or
+   * display name/text, so a near-simultaneous comment from someone else
+   * can never be mismarked and mine is never lost if another arrives
+   * moments later. Purely a temporary presentation flag — cleared
+   * automatically by the caller after `RECENTLY_SENT_FLASH_MS`, never a
+   * permanent visual state.
+   */
+  justSent?: boolean;
 }) {
   const [, startTransition] = useTransition();
+  const prefersReducedMotion = usePrefersReducedMotion();
   const [optimisticallyLiked, setOptimisticallyLiked] = useState(false);
   const [justLiked, setJustLiked] = useState(false);
   const lastTapRef = useRef(0);
@@ -629,8 +675,18 @@ function CommentRow({
     <div
       data-testid={testId}
       data-message-id={message.id}
+      data-just-sent={justSent ? "true" : undefined}
       onClick={handleTap}
-      className={`flex gap-2 py-2 transition-transform ${justLiked ? "scale-[1.02]" : ""}`}
+      className={cn(
+        "flex gap-2 rounded-lg py-2 transition-transform",
+        justLiked && "scale-[1.02]",
+        // Real-device report, Section 6: brief, temporary — never a
+        // permanent "selected" look. `justSent` itself is already only
+        // true for ~RECENTLY_SENT_FLASH_MS (the caller clears it via
+        // timeout), so this class is never rendered for long regardless
+        // of the animation's own duration.
+        justSent && (prefersReducedMotion ? "bg-accent/20" : "animate-[comment-just-sent-flash_1.2s_ease-out]"),
+      )}
     >
       <ProfileLink username={profileEntry?.username ?? null} ariaLabel={`${message.author_display_name}'s profile`} className="shrink-0">
         <ParticipantAvatar name={message.author_display_name} imageUrl={profileEntry?.avatarUrl} size="sm" className="mt-0.5" />

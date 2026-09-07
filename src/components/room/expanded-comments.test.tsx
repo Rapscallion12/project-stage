@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpandedComments } from "./expanded-comments";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
@@ -478,6 +478,138 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     it("marks nothing at all when no viewer identity is given (degrades gracefully, never crashes)", () => {
       render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1", author_profile_id: "p1" })]} />);
       expect(screen.queryByTestId("comment-mine-marker")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("newly-sent comment highlight flash (real-device report, Section 6-7)", () => {
+    const viewerIdentity = { type: "profile" as const, id: "p1", displayName: "Jamie", username: null };
+    const messages = [makeMessage({ id: "m1", body: "first", author_profile_id: "someone-else", created_at: "2026-01-01T00:00:00.000Z" })];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("the exact newly-sent message id receives a temporary highlight", async () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />);
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...messages, makeMessage({ id: "m2", author_profile_id: "p1" })]}
+        />,
+      );
+      // The state update driving the flash is deliberately deferred a
+      // microtask (see ExpandedComments' own `queueMicrotask` doc
+      // comment) — flush it the same way this file's anchoring tests do.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const flashedRow = document.querySelector('[data-message-id="m2"]');
+      expect(flashedRow).toHaveAttribute("data-just-sent", "true");
+    });
+
+    it("highlight automatically clears after the flash duration", async () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />);
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...messages, makeMessage({ id: "m2", author_profile_id: "p1" })]}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="m2"]')).toHaveAttribute("data-just-sent", "true");
+
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="m2"]')).not.toHaveAttribute("data-just-sent", "true");
+    });
+
+    it("an older comment of mine never flashes — only the one just sent", async () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />);
+      const withMine = [...messages, makeMessage({ id: "m2", author_profile_id: "p1", created_at: "2026-01-01T00:00:01.000Z" })];
+      rerender(<ExpandedComments {...baseProps} open viewerIdentity={viewerIdentity} messages={withMine} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // Let the flash on m2 expire, then send a second comment (m3) —
+      // m2 (an older comment of mine now) must never re-flash.
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...withMine, makeMessage({ id: "m3", author_profile_id: "p1", created_at: "2026-01-01T00:00:02.000Z" })]}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="m2"]')).not.toHaveAttribute("data-just-sent", "true");
+      expect(document.querySelector('[data-message-id="m3"]')).toHaveAttribute("data-just-sent", "true");
+    });
+
+    it("another viewer's newest comment never flashes for me, even though it's the newest arrival", async () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />);
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...messages, makeMessage({ id: "m2", author_profile_id: "someone-else-entirely" })]}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="m2"]')).not.toHaveAttribute("data-just-sent", "true");
+    });
+
+    it("a near-simultaneous incoming message from someone else never steals the flash meant for my own comment", async () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />);
+      // My own comment arrives first.
+      const withMine = [...messages, makeMessage({ id: "mine", author_profile_id: "p1", created_at: "2026-01-01T00:00:01.000Z" })];
+      rerender(<ExpandedComments {...baseProps} open viewerIdentity={viewerIdentity} messages={withMine} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="mine"]')).toHaveAttribute("data-just-sent", "true");
+
+      // An almost-simultaneous comment from someone else arrives next,
+      // before my own flash has expired.
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...withMine, makeMessage({ id: "theirs", author_profile_id: "someone-else-entirely", created_at: "2026-01-01T00:00:02.000Z" })]}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // My own row is still (or again) correctly the one flashing —
+      // never the stranger's, and my own flash was never stolen by it.
+      expect(document.querySelector('[data-message-id="theirs"]')).not.toHaveAttribute("data-just-sent", "true");
+      expect(document.querySelector('[data-message-id="mine"]')).toHaveAttribute("data-just-sent", "true");
     });
   });
 

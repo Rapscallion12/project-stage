@@ -379,3 +379,24 @@ body.room-active > header {
     transform: translateY(-120px) scale(0.9);
   }
 }
+
+/*
+ * Real-device report, Section 6: Expanded Comments' own "that's the one
+ * I just sent" flash — a brief background brighten, fading back to
+ * transparent, purely to let the eye find the exact row that was just
+ * jumped to. No transform/translate at all (unlike the entry animations
+ * above) — this is a color-only cue, not a positional one, which is why
+ * it doesn't need a separate reduced-motion variant the way
+ * `reaction-burst-rise`/`ambient-comment-enter` do (`CommentRow` still
+ * swaps to a plain static highlight under `prefers-reduced-motion`
+ * regardless, matching this codebase's own established caution around
+ * this class of preference).
+ */
+@keyframes comment-just-sent-flash {
+  0% {
+    background-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
