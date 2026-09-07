@@ -13,6 +13,7 @@ import {
   forceSeatClosingDeadline,
   resetSimulatorSession,
   simulateAdvanceSelection,
+  clearTestRoomSandbox,
 } from "./simulator-actions";
 import { createServiceClient } from "@/lib/supabase/service";
 import { requestToSpeakAsGuest, castSpeakerRequestVoteAsGuest } from "@/lib/repositories/speaker-requests";
@@ -92,6 +93,11 @@ describe("simulator-actions (issue #21, Part 5) — refuse to run on production"
   it("resetSimulatorSession throws on production, even with a non-empty guest id list", async () => {
     process.env.VERCEL_ENV = "production";
     await expect(resetSimulatorSession("e1", ["g1", "g2"])).rejects.toThrow(/not available/);
+  });
+
+  it("clearTestRoomSandbox throws on production, before ever checking is_permanent_test", async () => {
+    process.env.VERCEL_ENV = "production";
+    await expect(clearTestRoomSandbox("e1")).rejects.toThrow(/not available/);
   });
 
   it("is available (does not throw the gate error) on a preview deployment — reaches real I/O, which then fails without credentials, proving the gate itself passed", async () => {
@@ -575,5 +581,97 @@ describe.skipIf(!hasServiceCredentials)("simulateAdvanceSelection (real database
         .update({ status: "withdrawn", resolved_at: new Date().toISOString() })
         .eq("id", requestId);
     }
+  });
+});
+
+describe.skipIf(!hasServiceCredentials)("clearTestRoomSandbox (real database) — real-device report: comprehensive, but only against the actual sandbox", () => {
+  let service: ReturnType<typeof createServiceClient>;
+  const originalVercelEnv = process.env.VERCEL_ENV;
+
+  beforeAll(() => {
+    process.env.VERCEL_ENV = "preview";
+    service = createServiceClient();
+  });
+
+  afterAll(() => {
+    if (originalVercelEnv === undefined) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = originalVercelEnv;
+  });
+
+  it("refuses an ordinary event that isn't the designated permanent test room — the actual safety guarantee, not just the preview/dev gate", async () => {
+    const { data: event, error } = await service
+      .from("events")
+      .insert({
+        title: "clearTestRoomSandbox safety-boundary test fixture — must survive untouched",
+        scheduled_start: new Date(Date.now() + 60_000).toISOString(),
+        lobby_opens_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+    if (error || !event) throw new Error(error?.message ?? "failed to create test event");
+
+    try {
+      await expect(clearTestRoomSandbox(event.id)).rejects.toThrow(/not the designated permanent test room/);
+
+      // Confirm nothing was touched — the refusal happens before any delete.
+      const { data: stillThere } = await service.from("events").select("id").eq("id", event.id).maybeSingle();
+      expect(stillThere?.id).toBe(event.id);
+    } finally {
+      await service.from("events").delete().eq("id", event.id);
+    }
+  });
+
+  it("refuses a nonexistent event id the same way — never assumes 'not found' means 'safe to proceed'", async () => {
+    await expect(clearTestRoomSandbox(crypto.randomUUID())).rejects.toThrow(/not the designated permanent test room/);
+  });
+
+  // The real permanent test room is a genuine, enforced singleton
+  // (migration 00000000000015's partial unique index on
+  // is_permanent_test) — there is no way to create a second, isolated
+  // fixture for this test to target, so this deliberately exercises the
+  // *real* shared sandbox, the same one `scripts/dev-harness.test.ts`'s
+  // own clear-sandbox suite already proves the comprehensive per-table
+  // clearing logic against. This test's own job is narrower: prove the
+  // *action wrapper* (its own independent implementation, not imported
+  // from the CLI script — see clearTestRoomSandbox's own doc comment)
+  // correctly reaches and clears the real sandbox, not the underlying
+  // per-table SQL semantics already proven elsewhere.
+  it("clears deliberately-seeded state from the real permanent test room, and leaves the room itself intact", async () => {
+    const { data: sandbox, error: sandboxError } = await service
+      .from("events")
+      .select("id")
+      .eq("is_permanent_test", true)
+      .single();
+    if (sandboxError || !sandbox) throw new Error(sandboxError?.message ?? "permanent test room not found");
+
+    const { data: message, error: messageError } = await service
+      .from("event_chat_messages")
+      .insert({
+        event_id: sandbox.id,
+        author_guest_id: crypto.randomUUID(),
+        author_display_name: "clearTestRoomSandbox test guest",
+        body: "deliberately created by this test — clearTestRoomSandbox must remove it",
+      })
+      .select("id")
+      .single();
+    if (messageError || !message) throw new Error(messageError?.message ?? "failed to insert test message");
+
+    const { error: speakerError } = await service
+      .from("event_speakers")
+      .insert({ event_id: sandbox.id, guest_id: crypto.randomUUID(), seat_number: 2, display_name: "clearTestRoomSandbox test guest" });
+    if (speakerError) throw new Error(speakerError.message);
+
+    const result = await clearTestRoomSandbox(sandbox.id);
+    expect(result.eventId).toBe(sandbox.id);
+    expect(result.messagesDeleted).toBeGreaterThan(0);
+    expect(result.speakersDeleted).toBeGreaterThan(0);
+
+    const { data: messagesAfter } = await service.from("event_chat_messages").select("id").eq("event_id", sandbox.id);
+    expect(messagesAfter).toEqual([]);
+    const { data: speakersAfter } = await service.from("event_speakers").select("id").eq("event_id", sandbox.id);
+    expect(speakersAfter).toEqual([]);
+
+    const { data: sandboxStillThere } = await service.from("events").select("id").eq("id", sandbox.id).maybeSingle();
+    expect(sandboxStillThere?.id).toBe(sandbox.id);
   });
 });

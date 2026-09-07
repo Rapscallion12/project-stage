@@ -233,14 +233,38 @@ export async function resetHarness(client: Client) {
 }
 
 /**
- * Clears the permanent test room's transient state (chat, reactions,
- * pending requests, seated speakers) *without deleting the room itself*
- * — the room is excluded from `reset` on purpose (see above), so this is
- * the safe way to tidy it up between test sessions instead. Deleting
- * `event_chat_messages` cascades to `event_chat_message_reactions` and
- * `speaker_requests` (both reference it `on delete cascade` — see
- * migrations 00000000000003/00000000000011); `event_speakers` is cleared
- * separately since it isn't tied to any message.
+ * Clears the permanent test room's transient state *without deleting the
+ * room itself* — the room is excluded from `reset` on purpose (see
+ * above), so this is the safe way to tidy it up between test sessions
+ * instead.
+ *
+ * **Comprehensive, not just messages/speakers** (real-device report,
+ * issue #21-adjacent: stale "clear-sandbox test guest" comments and a
+ * stuck active seat were visibly leaking into a real user's test
+ * session on the deployed preview): audited every table that
+ * accumulates state scoped to one event and confirmed the *previous*
+ * version of this function only ever cleared two of them.
+ * `event_chat_messages` cascades to `event_chat_message_reactions`,
+ * `speaker_requests`, and (via `speaker_requests`) `speaker_request_votes`
+ * (see migrations 00000000000003/00000000000011/00000000000019's own
+ * `on delete cascade` FKs) — but `event_speakers` does *not* cascade
+ * `speaker_round_votes` transitively through anything this function was
+ * already deleting; `stage_rounds` (the shared round clock,
+ * migration 00000000000024) and `stage_reaction_heat` (the reaction
+ * rate-limit budget, migration 00000000000045) are *both* independent
+ * tables with their own `event_id` FK — neither is reachable via any
+ * cascade from messages or speakers at all, so both were silently never
+ * cleared. Every delete below is explicit and independently counted
+ * (never relying on cascade for the return value, even where a cascade
+ * would also do the job) so the reported counts are exact per table,
+ * and so this stays correct even if a future migration changes a
+ * cascade relationship.
+ *
+ * Order matters here only for accurate independent counts (a child
+ * deleted before its parent is counted once, on its own table, instead
+ * of being silently absorbed into the parent's cascade) — Postgres
+ * itself would handle any order correctly via the FKs' own `on delete
+ * cascade`.
  */
 export async function clearSandbox(client: Client) {
   const { data: sandbox, error: sandboxError } = await client
@@ -254,20 +278,112 @@ export async function clearSandbox(client: Client) {
       "No permanent test room exists — migration 00000000000015 may not be applied to this project.",
     );
   }
+  const eventId = sandbox.id;
+
+  // Speaker request votes + speaker requests (child before parent, for
+  // an exact per-table count — see this function's own doc comment).
+  const { data: requestRows, error: requestsReadError } = await client
+    .from("speaker_requests")
+    .select("id")
+    .eq("event_id", eventId);
+  if (requestsReadError) throw new Error(requestsReadError.message);
+  const requestIds = (requestRows ?? []).map((r) => r.id);
+
+  let requestVotesDeleted = 0;
+  if (requestIds.length > 0) {
+    const { error, count } = await client
+      .from("speaker_request_votes")
+      .delete({ count: "exact" })
+      .in("request_id", requestIds);
+    if (error) throw new Error(error.message);
+    requestVotesDeleted = count ?? 0;
+  }
+
+  const { error: requestsError, count: requestsDeleted } = await client
+    .from("speaker_requests")
+    .delete({ count: "exact" })
+    .eq("event_id", eventId);
+  if (requestsError) throw new Error(requestsError.message);
+
+  // Chat messages (cascades event_chat_message_reactions — counted
+  // separately below, before the cascade, for an exact number).
+  const { data: messageRows, error: messagesReadError } = await client
+    .from("event_chat_messages")
+    .select("id")
+    .eq("event_id", eventId);
+  if (messagesReadError) throw new Error(messagesReadError.message);
+  const messageIds = (messageRows ?? []).map((m) => m.id);
+
+  let reactionsDeleted = 0;
+  if (messageIds.length > 0) {
+    const { error, count } = await client
+      .from("event_chat_message_reactions")
+      .delete({ count: "exact" })
+      .in("message_id", messageIds);
+    if (error) throw new Error(error.message);
+    reactionsDeleted = count ?? 0;
+  }
 
   const { error: messagesError, count: messagesDeleted } = await client
     .from("event_chat_messages")
     .delete({ count: "exact" })
-    .eq("event_id", sandbox.id);
+    .eq("event_id", eventId);
   if (messagesError) throw new Error(messagesError.message);
+
+  // Speaker round votes (child of event_speakers) + speaker seats.
+  const { data: speakerRows, error: speakersReadError } = await client
+    .from("event_speakers")
+    .select("id")
+    .eq("event_id", eventId);
+  if (speakersReadError) throw new Error(speakersReadError.message);
+  const speakerRowIds = (speakerRows ?? []).map((s) => s.id);
+
+  let roundVotesDeleted = 0;
+  if (speakerRowIds.length > 0) {
+    const { error, count } = await client
+      .from("speaker_round_votes")
+      .delete({ count: "exact" })
+      .in("event_speakers_id", speakerRowIds);
+    if (error) throw new Error(error.message);
+    roundVotesDeleted = count ?? 0;
+  }
 
   const { error: speakersError, count: speakersDeleted } = await client
     .from("event_speakers")
     .delete({ count: "exact" })
-    .eq("event_id", sandbox.id);
+    .eq("event_id", eventId);
   if (speakersError) throw new Error(speakersError.message);
 
-  return { eventId: sandbox.id, messagesDeleted: messagesDeleted ?? 0, speakersDeleted: speakersDeleted ?? 0 };
+  // Shared round clock — not reachable via any cascade above; a stale
+  // row here is exactly what left a freshly-cleared room still showing
+  // "Round 7" with no speakers seated.
+  const { error: roundsError, count: roundsDeleted } = await client
+    .from("stage_rounds")
+    .delete({ count: "exact" })
+    .eq("event_id", eventId);
+  if (roundsError) throw new Error(roundsError.message);
+
+  // Reaction heat/cooldown budget — likewise not reachable via any
+  // cascade above; a stale row here is exactly what could leave a
+  // *specific identity* still artificially in cooldown in an otherwise
+  // freshly-cleared room.
+  const { error: heatError, count: reactionHeatDeleted } = await client
+    .from("stage_reaction_heat")
+    .delete({ count: "exact" })
+    .eq("event_id", eventId);
+  if (heatError) throw new Error(heatError.message);
+
+  return {
+    eventId,
+    messagesDeleted: messagesDeleted ?? 0,
+    reactionsDeleted,
+    requestsDeleted: requestsDeleted ?? 0,
+    requestVotesDeleted,
+    speakersDeleted: speakersDeleted ?? 0,
+    roundVotesDeleted,
+    roundsDeleted: roundsDeleted ?? 0,
+    reactionHeatDeleted: reactionHeatDeleted ?? 0,
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -350,10 +466,16 @@ async function main() {
   }
 
   if (command === "clear-sandbox") {
-    const { eventId, messagesDeleted, speakersDeleted } = await clearSandbox(client);
-    console.log(`Cleared the permanent test room (${eventId}) without deleting it:`);
-    console.log(`  ${messagesDeleted} chat message(s) removed`);
-    console.log(`  ${speakersDeleted} speaker seat(s) cleared`);
+    const result = await clearSandbox(client);
+    console.log(`Cleared the permanent test room (${result.eventId}) without deleting it:`);
+    console.log(`  ${result.messagesDeleted} chat message(s) removed`);
+    console.log(`  ${result.reactionsDeleted} message reaction(s) removed`);
+    console.log(`  ${result.requestsDeleted} speaker request(s) removed`);
+    console.log(`  ${result.requestVotesDeleted} speaker request vote(s) removed`);
+    console.log(`  ${result.speakersDeleted} speaker seat row(s) removed`);
+    console.log(`  ${result.roundVotesDeleted} speaker round vote(s) removed`);
+    console.log(`  ${result.roundsDeleted} shared round row(s) removed`);
+    console.log(`  ${result.reactionHeatDeleted} reaction heat/cooldown row(s) removed`);
     return;
   }
 

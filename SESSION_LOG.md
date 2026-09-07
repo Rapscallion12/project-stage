@@ -4,6 +4,92 @@ Newest entry first.
 
 ---
 
+## 2026-09-06 — Session 72: Comprehensive sandbox cleanup — root-caused stale test-room state, fixed `clear-sandbox`, added an internal "Clear Test Room" control (real-device report), on `fix/sandbox-cleanup-comprehensive`
+
+**Goal**: a real user testing the mobile UX correction found stale
+comments/an active seat in `[DEV] Always-On Test Room` (migration
+00000000000015's shared permanent fixture) that the Session Simulator's
+own "Reset" never removed. Branched from `main` (not either open feature
+branch — this is a test-infrastructure fix, independent of both).
+
+**Root cause, traced end to end, not assumed**: two independently-scoped
+cleanup paths exist, and neither is a comprehensive room-wide clear —
+this was by design for one of them, and an incomplete implementation for
+the other.
+1. **Simulator "Reset Session"** (`resetSimulatorSession`) is
+   *deliberately* scoped to the exact `guestIds` the current browser
+   tab's own simulator run generated in memory this session — correct
+   and necessary, since a room-wide wipe there would be unsafe against a
+   room with real participants mixed in. A fresh page load (a new
+   preview deployment, e.g.) starts that in-memory set empty, so it has
+   no memory of a *previous* session's own simulated rows, let alone
+   real interactive activity or CLI-seeded fixtures.
+2. **`scripts/dev-harness.mts`'s `clearSandbox`** (CLI-only, never
+   wired into the app) *is* room-wide, but only ever cleared two of the
+   eight tables a room's transient state actually spans —
+   `event_chat_messages`/`event_speakers` — never `stage_rounds` or
+   `stage_reaction_heat`, neither reachable via any cascade from what it
+   did clear (confirmed by reading every relevant migration's own FKs).
+3. **The visible symptom traced to a self-inflicted feedback loop**: this
+   project's own `scripts/dev-harness.test.ts` inserts a real chat
+   message into this exact shared room as part of proving `clearSandbox`
+   works — but its *own* precondition (a fresh insert into seat 2)
+   collided with real leftover state from interactive simulator use
+   against the same room, throwing *before* the test ever reached its
+   own cleanup call. Every full-suite run across recent sessions left
+   one more "clear-sandbox test guest" comment behind, compounding.
+
+**Fixes**:
+- `clearSandbox` (CLI) rewritten to explicitly, independently clear all
+  eight tables (chat messages → reactions/requests/request votes;
+  speakers → round votes; `stage_rounds` and `stage_reaction_heat`
+  independently), each counted precisely rather than trusting cascades
+  for the reported numbers.
+- `scripts/dev-harness.test.ts`'s own clear-sandbox test rewritten to be
+  self-healing and deterministic: clears first (a precondition, not an
+  assumption of a clean starting state), inserts one deliberate fixture
+  per table, clears again, and authoritatively re-queries every table —
+  rather than depending on whatever state happened to already exist.
+- New `clearTestRoomSandbox` server action (app-side, independently
+  implemented rather than importing the CLI script — that script
+  documents itself as intentionally outside the app boundary) mirrors
+  the same fixed table list, but adds a hard server-side safety check:
+  refuses unless the target event's own `is_permanent_test` column is
+  true, verified fresh from the database, never trusted from the
+  caller. Gated by the same `assertSimulatorAvailable()` every other
+  simulator action already requires.
+- New, clearly-separate **"Clear Test Room"** button in the Session
+  Simulator panel (distinct color/label from "Reset Session," reuses
+  the same `onSimulatorReset` local-state reconciliation callback and
+  the same in-flight/Start-barrier guards) — deliberately *not* a
+  widening of Reset Session's own correctly-scoped behavior.
+- Manually ran the fixed cleanup against the real linked project:
+  authoritatively confirmed genuinely blank (0 across every table),
+  then seeded 2 speakers and re-verified the expected populated state
+  (including a real `stage_rounds` row the seat-claim RPC itself
+  creates), then cleared again and re-confirmed blank.
+
+**Testing**: `dev-harness.test.ts` gained a deterministic, self-healing
+`clear-sandbox` describe block (starts blank, seeds one fixture per
+table, clears, authoritative re-query, plus an idempotent-no-op-on-
+already-blank test). `simulator-actions.test.ts` gained
+`clearTestRoomSandbox` tests (production-gate refusal, refuses an
+ordinary/nonexistent event, and a real-DB test against the actual
+shared sandbox proving the comprehensive clear). `session-simulator-
+panel.test.tsx` gained a "Clear Test Room" describe block (distinct
+from Reset Session, logs comprehensive counts, surfaces a server
+refusal as a log line not a crash, in-flight guard, Start-button
+barrier).
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/room-actions/scripts suites clean (828 tests,
+including the real-DB sandbox tests against the live project). Full
+project suite run separately — see this session's own handoff.
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-05 — Session 70: Reaction cooldown + sender-dedup correction (real-device report, issue #21)
 
 **Goal**: second narrow reaction correction on the same branch — cooldown
