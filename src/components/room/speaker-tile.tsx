@@ -77,6 +77,8 @@ export function SpeakerTile({
   onSpeakerReactions = [],
   showOnSpeakerReactions = false,
   compact = false,
+  revealOwnVideo = false,
+  onTapReturnToSpeakerView,
 }: {
   speaker: EventSpeaker | null;
   participant: Participant | undefined;
@@ -205,6 +207,43 @@ export function SpeakerTile({
   showOnSpeakerReactions?: boolean;
   /** Mobile UX correction: this tile is rendered at a small, side-by-side "mini stage" scale (Expanded Comments' own mini stage — see `SpeakerStage`'s own `compact` doc comment). Only ever shrinks reaction-burst text so a burst doesn't visually overwhelm the tiny tile — everything else about this tile's own rendering is unchanged. Defaults to `false`. */
   compact?: boolean;
+  /**
+   * Speaker presentation-toggle correction (real-device report): true only
+   * for the local participant's own tile, only while `SpeakerStage` is
+   * genuinely presenting Normal Stage View for an active speaker
+   * (`isSpeaker && !soloMode && !compact` — see that component's own doc
+   * comment). Issue #22's original `showBigVideo = hasVideo && !isLocal`
+   * rule was written for a state that could never previously arise (the
+   * local speaker's own seat was never rendered through this ordinary
+   * two-tile branch — `soloMode` always covered that case by rendering
+   * only the *other* seat, and the audience/candidate composition's
+   * `isLocal` never matches either seat). The presentation toggle made
+   * that state real for the first time, and the stale rule silently kept
+   * substituting the "You're live — see your preview in the corner"
+   * placeholder for a genuine full-size tile — this flag is the narrow,
+   * explicit override: when true, this tile shows my own video/audio
+   * exactly like any other occupied seat, and `SpeakerStage` suppresses
+   * its corner self-preview slot for the same duration so my feed is
+   * never rendered twice. Defaults to `false` — every other caller
+   * (audience/candidate composition, compact mini-stage, Speaker-Focused
+   * View) is completely unaffected, `isLocal` tiles there still resolve
+   * exactly as before.
+   */
+  revealOwnVideo?: boolean;
+  /**
+   * Speaker presentation-toggle correction: the one-tap way back to
+   * Speaker-Focused View while `revealOwnVideo` is showing my own tile
+   * normally — the corner self-preview (the previous return affordance)
+   * doesn't exist in this mode, so this tile itself carries a small,
+   * unobtrusive return control instead (Section 6: "a small collapse/
+   * focus icon associated with my tile," not a settings-menu operation).
+   * Only ever rendered when `isLocal && revealOwnVideo` are both true;
+   * the same callback `SpeakerStage` receives as `onTapSelfPreview` — it
+   * already flips the caller's `normalStageView` boolean in both
+   * directions, so no new toggle state is needed, only a second place to
+   * trigger it from.
+   */
+  onTapReturnToSpeakerView?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -247,19 +286,52 @@ export function SpeakerTile({
   const cameraPublication = participant?.getTrackPublication(Track.Source.Camera);
   const microphonePublication = participant?.getTrackPublication(Track.Source.Microphone);
   // Issue #22: this tile's own big video is never shown for the local
-  // speaker's own seat — see this component's doc comment. Only affects
-  // rendering; the underlying publication is untouched.
-  const showBigVideo = hasVideo && !isLocal;
+  // speaker's own seat — see this component's doc comment — *unless*
+  // `revealOwnVideo` says `SpeakerStage` is genuinely presenting Normal
+  // Stage View for me right now, in which case my own seat renders
+  // exactly like any other occupied seat (see that prop's own doc
+  // comment above). Only affects rendering; the underlying publication is
+  // untouched either way.
+  const showBigVideo = hasVideo && (!isLocal || revealOwnVideo);
 
   useEffect(() => {
     const track = cameraPublication?.track;
     const element = videoRef.current;
     if (!track || !element || !showBigVideo) return;
     track.attach(element);
+    // Speaker presentation-toggle correction: when `isLocal &&
+    // revealOwnVideo`, the *same* already-flowing LocalVideoTrack was
+    // just detached from `SelfPreview`'s own <video> element (which
+    // unmounts the instant Normal Stage View is entered — see
+    // `SpeakerStage`'s self-preview-slot doc comment) and is being
+    // reattached here, to a brand-new element, moments later — the exact
+    // "reattached to a brand-new element moments after detaching from
+    // another" remount pattern `SelfPreview`'s own doc comment documents
+    // and works around (see DECISIONS.md — this is *not* a new bug, it's
+    // the same one, just at a second call site). Apply the identical
+    // repaint-nudge technique here, scoped to this exact case: a remote
+    // participant's track is never detached-and-reattached by a local
+    // presentation toggle, so this never runs for any other tile.
+    let raf: number | undefined;
+    if (isLocal && revealOwnVideo) {
+      raf = requestAnimationFrame(() => {
+        if (videoRef.current !== element) return;
+        const stream = element.srcObject;
+        if (!stream) return;
+        element.srcObject = null;
+        element.srcObject = stream;
+        void element.play().catch(() => {
+          // Same tolerance attach() itself already applies to its own
+          // play() call — a rejected replay here is never a reason to
+          // surface an error.
+        });
+      });
+    }
     return () => {
+      if (raf !== undefined) cancelAnimationFrame(raf);
       track.detach(element);
     };
-  }, [cameraPublication?.track, showBigVideo]);
+  }, [cameraPublication?.track, showBigVideo, isLocal, revealOwnVideo]);
 
   useEffect(() => {
     if (isLocal) return; // never play back the local participant's own mic
@@ -364,7 +436,7 @@ export function SpeakerTile({
           <ParticipantAvatar name={speaker.display_name} size="md" className="bg-accent/20" />
           <p className="px-4 text-center text-xs font-medium">Tap to enable camera &amp; mic</p>
         </button>
-      ) : isLocal && (hasVideo || hasAudio) ? (
+      ) : isLocal && (hasVideo || hasAudio) && !revealOwnVideo ? (
         // I'm live (hasVideo or hasAudio is true — a real, unmuted
         // published track), just not shown here — see this component's
         // doc comment. Framed neutrally/positively, not as "Camera off"
@@ -375,7 +447,12 @@ export function SpeakerTile({
         // corner slot (see SpeakerStage), never duplicated here; this
         // tile stays the same neutral message for camera-on and
         // camera-off-mic-on alike, matching how it already treated
-        // camera-on before this pass.
+        // camera-on before this pass. `&& !revealOwnVideo`: Normal Stage
+        // View's whole point is showing my real feed here instead of this
+        // explanatory placeholder — hasVideo-with-revealOwnVideo already
+        // took the showBigVideo branch above; this is only reached for
+        // the camera-off/mic-on case, which falls through to the ordinary
+        // audio-only visualizer branch below instead.
         <div
           data-testid="own-seat-live"
           className="flex h-full w-full flex-col items-center justify-center gap-2 bg-accent/5 text-foreground"
@@ -404,7 +481,7 @@ export function SpeakerTile({
               : `Speaker inactive${reconnectSecondsRemaining !== null ? ` · ${reconnectSecondsRemaining}s` : "…"}`}
           </p>
         </div>
-      ) : !isLocal && hasAudio ? (
+      ) : (!isLocal || revealOwnVideo) && hasAudio ? (
         // Media Readiness pass (issue #21), Section 12: camera off, mic
         // on — a fully valid post-join state (Section 11), never treated
         // as a "camera off" dead end. `!isLocal` here is already
@@ -414,7 +491,12 @@ export function SpeakerTile({
         // remote-viewer/co-speaker path specifically:
         // `microphonePublication.track` is whichever real, subscribed
         // LiveKit audio track this viewer's own client holds for this
-        // seat.
+        // seat. Speaker presentation-toggle correction: `|| revealOwnVideo`
+        // widens this to my *own* camera-off/mic-on tile too, while Normal
+        // Stage View is showing it normally — the same visualizer any
+        // other camera-off speaker gets, not a special local-only
+        // treatment (Section 7: "do not create special speaker reaction/
+        // presentation behavior").
         <AudioOnlyVisualizer
           track={microphonePublication!.track as LocalAudioTrack | RemoteAudioTrack}
           displayName={speaker.display_name}
@@ -443,6 +525,30 @@ export function SpeakerTile({
         </div>
       )}
       {!isLocal && <audio ref={audioRef} autoPlay />}
+      {isLocal && revealOwnVideo && onTapReturnToSpeakerView && (
+        // Speaker presentation-toggle correction, Section 6: the one-tap
+        // way back to Speaker-Focused View — the corner self-preview (the
+        // *previous* return affordance) doesn't exist while Normal Stage
+        // View shows my own tile normally, so this tile carries its own
+        // small, unobtrusive return control instead. Same callback
+        // SpeakerStage already wires to the self-preview tap in the other
+        // direction (`onTapSelfPreview` — see that prop's own doc
+        // comment); it's a plain toggle, direction-agnostic. `z-10`, not
+        // `pointer-events-none` (unlike the reaction-burst overlay this
+        // sits alongside) — this is a real tap target, positioned clear
+        // of the identity label (left-anchored/bottom-gradient, never
+        // top-right) and the round badge.
+        <button
+          type="button"
+          data-testid="return-to-speaker-view"
+          onClick={onTapReturnToSpeakerView}
+          aria-label="Switch stage view"
+          className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow transition-colors hover:bg-black/75"
+        >
+          <span aria-hidden="true">⤡</span>
+          <span>Speaker View</span>
+        </button>
+      )}
       {orientation === "portrait" ? (
         <div
           data-testid="speaker-identity"

@@ -8,7 +8,7 @@ import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
-import type { LocalVideoTrack } from "livekit-client";
+import type { LocalVideoTrack, Participant } from "livekit-client";
 
 /** Same fake-track technique as self-preview.test.tsx's own — attach() must set srcObject for the repaint nudge to read back without throwing. */
 function fakeVideoTrack(): LocalVideoTrack {
@@ -19,6 +19,21 @@ function fakeVideoTrack(): LocalVideoTrack {
     }),
     detach: vi.fn(),
   } as unknown as LocalVideoTrack;
+}
+
+/**
+ * Speaker presentation-toggle correction: a fake LiveKit participant
+ * standing in for `getParticipant(myIdentity)` — the local participant's
+ * own published camera. Needed to prove Normal Stage View renders the
+ * local speaker's *real* video in their own tile (never a fixture with no
+ * participant at all, which can't distinguish "correctly suppressed" from
+ * "never rendered in the first place").
+ */
+function fakeLocalParticipant(): Participant {
+  return {
+    getTrackPublication: (source: string) =>
+      source === "camera" ? { track: fakeVideoTrack(), isMuted: false } : undefined,
+  } as unknown as Participant;
 }
 
 const { leaveSpeakerSeat, sendMessage } = vi.hoisted(() => ({
@@ -364,13 +379,14 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
     });
 
-    it("tapping it again restores the speaker-focused presentation", () => {
+    it("tapping it again restores the speaker-focused presentation, via the in-tile return affordance (the corner preview no longer exists to tap)", () => {
       render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
-      const selfPreview = screen.getByTestId("self-preview");
-      fireEvent.click(selfPreview);
-      fireEvent.click(selfPreview);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+      fireEvent.click(screen.getByTestId("return-to-speaker-view"));
       expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
       expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
     });
 
     it("does not remount the other speaker's tile — the same DOM node is reused, just repositioned", () => {
@@ -378,6 +394,41 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       const before = screen.getByTestId("speaker-tile");
       fireEvent.click(screen.getByTestId("self-preview"));
       expect(screen.getAllByTestId("speaker-tile")).toContain(before);
+    });
+
+    it("real-device correction: Normal Stage View shows MY OWN real video in my own tile, not the tiny corner preview plus a placeholder", () => {
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          getParticipant={(identity) => (identity === "profile:p1" ? fakeLocalParticipant() : undefined)}
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("self-preview"));
+
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+      expect(document.querySelectorAll("video")).toHaveLength(1);
+    });
+
+    it("one-speaker case: with the other seat empty, my own tile still renders my real video, and the other seat shows the normal open/waiting state", () => {
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          speakers={[seat({ id: "s1", seat_number: 1, profile_id: "p1" })]}
+          localVideoTrack={fakeVideoTrack()}
+          getParticipant={(identity) => (identity === "profile:p1" ? fakeLocalParticipant() : undefined)}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+      expect(document.querySelectorAll("video")).toHaveLength(1);
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
     });
 
     it("switching views is purely local — no seat, media, or server action fires just from toggling", () => {
@@ -393,9 +444,8 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
           toggleCamera={toggleCamera}
         />,
       );
-      const selfPreview = screen.getByTestId("self-preview");
-      fireEvent.click(selfPreview);
-      fireEvent.click(selfPreview);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      fireEvent.click(screen.getByTestId("return-to-speaker-view"));
       expect(leaveSpeakerSeat).not.toHaveBeenCalled();
       expect(activateMedia).not.toHaveBeenCalled();
       expect(toggleMicrophone).not.toHaveBeenCalled();
@@ -412,6 +462,25 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       render(<MobileLandscapeSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} stageReactions={stageReactions} />);
       fireEvent.click(screen.getByTestId("self-preview"));
       expect(screen.getByText("🔥")).toBeInTheDocument();
+    });
+
+    it("incoming On-Speaker reaction targeting me renders on my own full-size tile in Normal Stage View", () => {
+      const stageReactions: ReactionsController = {
+        ...MOCK_STAGE_REACTIONS,
+        incoming: [
+          { id: "r1", targetIdentity: "profile:p1", emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <MobileLandscapeSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          getParticipant={(identity) => (identity === "profile:p1" ? fakeLocalParticipant() : undefined)}
+          stageReactions={stageReactions}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getByText("🎉")).toBeInTheDocument();
     });
   });
 

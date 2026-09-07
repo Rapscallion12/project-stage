@@ -113,6 +113,30 @@ import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
  * this with `soloMode` when `isSpeaker` is already true), this falls back
  * to the ordinary two-tile layout rather than rendering nothing.
  *
+ * **`soloMode={false}` while `isSpeaker` is true — "Normal Stage
+ * View"** (speaker presentation-toggle correction, real-device report):
+ * the mobile UX correction that introduced this toggle originally assumed
+ * flipping `soloMode` off was the *entire* fix — real-device testing
+ * proved that wrong. An active speaker's own seat, rendered through the
+ * ordinary two-tile `renderTile()` path for the first time here, hit
+ * `SpeakerTile`'s issue #22 rule (`showBigVideo = hasVideo && !isLocal`)
+ * — written for a state that had never been real before (the local
+ * speaker's own seat never reached this branch; `soloMode=true` always
+ * rendered only the *other* seat instead) — and silently substituted the
+ * "You're live — see your preview in the corner" placeholder for what
+ * should have been a genuine full-size tile. `revealOwnVideo` (computed
+ * below as `isSpeaker && !soloMode && !compact`) is the explicit fix:
+ * when true, the self-preview corner slot is suppressed entirely (my feed
+ * would otherwise render twice) and `SpeakerTile` shows my own seat
+ * exactly like any other occupied one — real video (or the ordinary
+ * audio-only visualizer, camera off/mic on), at normal stage scale,
+ * reactions included. See `SpeakerTile`'s own `revealOwnVideo` doc
+ * comment for the full rendering-side explanation. `!compact` keeps the
+ * Expanded Comments mini-stage (a separate `SpeakerStage` instance that
+ * also happens to pass `soloMode={false}` for a seated speaker) on its
+ * pre-existing behavior, unchanged — that correction is a distinct,
+ * not-yet-tested track.
+ *
  * **`isSpeaker`/`mySeatNumber` are received, never re-derived** (issue
  * #18 consistency fix, real-device finding, 2026-08-24): this component
  * used to compute its own `viewerIsSpeaking`/`mySeatNumber` from raw
@@ -191,16 +215,24 @@ export function SpeakerStage({
   /** Pre-launch interaction pass: the one shared reactions controller (see `useReactionsController`, instantiated once in `EventRoom`) — drives directed double-tap sending, on-speaker/side rendering, and is entirely absent (undefined) for any caller/test that doesn't care about reactions at all. Named `stageReactions`, not `reactions`, to avoid colliding with `RoomLayoutProps`' own pre-existing `reactions` field (the lobby comment-reaction counts — a different, unrelated concept). */
   stageReactions?: ReactionsController;
   /**
-   * Mobile UX correction (live-user-test finding): wired straight through
-   * to the self-preview slot's own `onTap` (both the video and audio-
-   * only-visualizer branches) — see `SelfPreview`'s own doc comment.
-   * This component has no opinion on what tapping means; the caller
-   * (`PortraitSpeakerView`/`MobileLandscapeSpeakerView`) owns the actual
-   * `soloMode`/normal-stage-view toggle state and passes both this and
-   * the resulting `soloMode` value independently. Optional/undefined for
-   * every caller that doesn't want the self-preview to be tappable (the
-   * ordinary pre-claim candidate composition, and `compact` mode below,
-   * which never renders a self-preview at all).
+   * Mobile UX correction (live-user-test finding), widened by the speaker
+   * presentation-toggle correction: wired to *two* tap targets now, not
+   * one — both directions of the same toggle. Entering Normal Stage View
+   * (Speaker-Focused → Normal): the self-preview slot's own `onTap` (both
+   * the video and audio-only-visualizer branches) — see `SelfPreview`'s
+   * own doc comment. Returning (Normal → Speaker-Focused): passed through
+   * as `onTapReturnToSpeakerView` to whichever tile has `revealOwnVideo`,
+   * since the self-preview slot doesn't exist in that mode to tap instead
+   * — see `SpeakerTile`'s own `onTapReturnToSpeakerView` doc comment.
+   * This component has no opinion on what tapping means either way; the
+   * caller (`PortraitSpeakerView`/`MobileLandscapeSpeakerView`) owns the
+   * actual `soloMode`/normal-stage-view toggle state and passes both this
+   * single callback and the resulting `soloMode` value independently — it
+   * already flips in both directions, so one callback covers both tap
+   * targets. Optional/undefined for every caller that doesn't want either
+   * to be tappable (the ordinary pre-claim candidate composition, and
+   * `compact` mode below, which renders neither the self-preview nor the
+   * return affordance).
    */
   onTapSelfPreview?: () => void;
   /**
@@ -442,6 +474,8 @@ export function SpeakerStage({
           }
           onSpeakerReactions={onSpeakerReactions}
           showOnSpeakerReactions={showOnSpeakerReactions}
+          revealOwnVideo={revealOwnVideo}
+          onTapReturnToSpeakerView={onTapSelfPreview}
         />
       </div>
     );
@@ -473,6 +507,19 @@ export function SpeakerStage({
   const showSelfVideo = cameraPublished ? localMediaState.hasVideo : localVideoTrack !== null;
   const showSelfAudioOnly = !showSelfVideo && cameraPublished && localMediaState.hasAudio;
 
+  // Speaker presentation-toggle correction (real-device report): "Normal
+  // Stage View" is `isSpeaker && !soloMode` — an active speaker who has
+  // flipped away from Speaker-Focused View. `!compact` excludes the
+  // Expanded Comments mini-stage deliberately (a second, separate
+  // `SpeakerStage` instance that also happens to pass `soloMode={false}`
+  // for a seated speaker) — that instance is explicitly out of scope for
+  // this pass (see this component's own `compact` doc comment; the
+  // Expanded Comments correction is a separate, not-yet-tested track),
+  // so it keeps its pre-existing behavior unchanged either way. See
+  // `SpeakerTile`'s own `revealOwnVideo` doc comment for what this
+  // actually changes and why the old `showBigVideo = hasVideo && !isLocal`
+  // rule was wrong for this specific, newly-real case.
+  const revealOwnVideo = isSpeaker && !soloMode && !compact;
   const renderSolo = soloMode && mySeatNumber !== null;
   // Pre-launch interaction pass, Section 7: portrait's stacked layout is
   // the *only* one with a real top/bottom relationship — `orientation
@@ -546,8 +593,18 @@ export function SpeakerStage({
           the compact audio-only visualizer takes it instead once the
           camera is authoritatively off but the mic is genuinely
           publishing — the same corner box, same position, never a
-          second local-preview surface. */}
-      {compact ? null : showSelfVideo && localVideoTrack ? (
+          second local-preview surface.
+
+          Speaker presentation-toggle correction: also suppressed
+          whenever `revealOwnVideo` is true — Normal Stage View puts my
+          own feed in my actual stage tile instead (see SpeakerTile's own
+          `revealOwnVideo` doc comment), so this corner slot would
+          otherwise render the *same* feed a second time, floating over
+          the very tile now showing it normally. Candidacy (isSpeaker
+          false, `soloMode` false) and Speaker-Focused View (`soloMode`
+          true) are both unaffected — `revealOwnVideo` is false in both,
+          since it requires `isSpeaker && !soloMode`. */}
+      {compact || revealOwnVideo ? null : showSelfVideo && localVideoTrack ? (
         <SelfPreview track={localVideoTrack} onTap={onTapSelfPreview} />
       ) : showSelfAudioOnly ? (
         <div

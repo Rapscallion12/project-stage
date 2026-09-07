@@ -8,7 +8,7 @@ import type { MediaReadinessState } from "@/hooks/use-live-room-connection";
 import type { ReactionsController } from "@/hooks/use-stage-reactions";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { LobbyMessage } from "@/hooks/use-lobby-realtime";
-import type { LocalVideoTrack } from "livekit-client";
+import type { LocalVideoTrack, Participant } from "livekit-client";
 
 /** Same fake-track technique as self-preview.test.tsx's own — attach() must set srcObject for the repaint nudge to read back without throwing. */
 function fakeVideoTrack(): LocalVideoTrack {
@@ -19,6 +19,21 @@ function fakeVideoTrack(): LocalVideoTrack {
     }),
     detach: vi.fn(),
   } as unknown as LocalVideoTrack;
+}
+
+/**
+ * Speaker presentation-toggle correction: a fake LiveKit participant
+ * standing in for `getParticipant(myIdentity)` — the local participant's
+ * own published camera. Needed to prove Normal Stage View renders the
+ * local speaker's *real* video in their own tile (never a fixture with no
+ * participant at all, which can't distinguish "correctly suppressed" from
+ * "never rendered in the first place").
+ */
+function fakeLocalParticipant(): Participant {
+  return {
+    getTrackPublication: (source: string) =>
+      source === "camera" ? { track: fakeVideoTrack(), isMuted: false } : undefined,
+  } as unknown as Participant;
 }
 
 const { leaveSpeakerSeat, sendMessage, addReaction } = vi.hoisted(() => ({
@@ -524,14 +539,16 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
     });
 
-    it("tapping it again restores the speaker-focused presentation", () => {
+    it("tapping it again restores the speaker-focused presentation, via the in-tile return affordance (the corner preview no longer exists to tap)", () => {
       render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
-      const selfPreview = screen.getByTestId("self-preview");
-      fireEvent.click(selfPreview);
+      fireEvent.click(screen.getByTestId("self-preview"));
       expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
-      fireEvent.click(selfPreview);
+      fireEvent.click(screen.getByTestId("return-to-speaker-view"));
       expect(screen.queryByTestId("speaker-divider")).not.toBeInTheDocument();
       expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+      // And the corner self-preview is back, since we're in Speaker-
+      // Focused View again.
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
     });
 
     it("does not remount the other speaker's tile — the same DOM node is reused, just repositioned", () => {
@@ -542,18 +559,47 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       expect(tilesAfter).toContain(before);
     });
 
-    it("in normal view, the speaker's own seat now renders too, but never shows their own big video a second time", () => {
-      render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
+    it("real-device correction: Normal Stage View shows MY OWN real video in my own tile, not the tiny corner preview plus a placeholder", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          getParticipant={(identity) => (identity === "profile:p1" ? fakeLocalParticipant() : undefined)}
+        />,
+      );
+      // Speaker-Focused View: the corner preview is the only video.
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+
       fireEvent.click(screen.getByTestId("self-preview"));
-      const tiles = screen.getAllByTestId("speaker-tile");
-      expect(tiles).toHaveLength(2);
-      // Still exactly one live <video> element for the local camera — the
-      // self-preview corner's own, not a second copy inside either tile
-      // (baseProps' getParticipant returns no participant at all, so the
-      // local seat's own tile falls back to the ordinary no-video
-      // placeholder here — the real proof is the video count, not which
-      // specific placeholder renders for a participant-less fixture).
+
+      // Normal Stage View: both tiles render, the floating corner preview
+      // is gone entirely, and the "You're live — see your preview in the
+      // corner" placeholder is never substituted for my own tile — my
+      // real video is there instead. Exactly one <video> element exists
+      // throughout (never duplicated).
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(2);
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
       expect(document.querySelectorAll("video")).toHaveLength(1);
+    });
+
+    it("one-speaker case: with the other seat empty, my own tile still renders my real video, and the other seat shows the normal open/waiting state", () => {
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          speakers={[seat({ id: "s1", seat_number: 1, profile_id: "p1" })]}
+          localVideoTrack={fakeVideoTrack()}
+          getParticipant={(identity) => (identity === "profile:p1" ? fakeLocalParticipant() : undefined)}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getAllByTestId("speaker-tile")).toHaveLength(1);
+      expect(document.querySelectorAll("video")).toHaveLength(1);
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      // The empty seat 2 still shows its own ordinary empty-seat state —
+      // untouched by the presentation toggle.
+      expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
     });
 
     it("switching views is purely local — no seat, media, or server action fires just from toggling", () => {
@@ -569,9 +615,8 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
           toggleCamera={toggleCamera}
         />,
       );
-      const selfPreview = screen.getByTestId("self-preview");
-      fireEvent.click(selfPreview);
-      fireEvent.click(selfPreview);
+      fireEvent.click(screen.getByTestId("self-preview"));
+      fireEvent.click(screen.getByTestId("return-to-speaker-view"));
       expect(leaveSpeakerSeat).not.toHaveBeenCalled();
       expect(activateMedia).not.toHaveBeenCalled();
       expect(toggleMicrophone).not.toHaveBeenCalled();
@@ -596,6 +641,25 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
     it("provides a discoverable tap affordance on the self-preview, not just an invisible gesture", () => {
       render(<PortraitSpeakerView {...baseProps} localVideoTrack={fakeVideoTrack()} />);
       expect(screen.getByTestId("self-preview-expand-affordance")).toBeInTheDocument();
+    });
+
+    it("incoming On-Speaker reaction targeting me renders on my own full-size tile in Normal Stage View — the whole reason for this feature", () => {
+      const stageReactions: ReactionsController = {
+        ...MOCK_STAGE_REACTIONS,
+        incoming: [
+          { id: "r1", targetIdentity: "profile:p1", emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          localVideoTrack={fakeVideoTrack()}
+          getParticipant={(identity) => (identity === "profile:p1" ? fakeLocalParticipant() : undefined)}
+          stageReactions={stageReactions}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("self-preview"));
+      expect(screen.getByText("🎉")).toBeInTheDocument();
     });
   });
 

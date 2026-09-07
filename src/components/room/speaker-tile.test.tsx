@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Participant, Track, TrackPublication } from "livekit-client";
 import { SpeakerTile } from "./speaker-tile";
 import type { EventSpeaker } from "@/lib/repositories/event-speakers";
@@ -344,6 +344,154 @@ describe("SpeakerTile", () => {
       );
       expect(screen.getByTestId("tile-activate-media")).toBeInTheDocument();
       expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("revealOwnVideo (speaker presentation-toggle correction, real-device report: Normal Stage View must show my real feed, not the corner-preview placeholder)", () => {
+    it("defaults to false — the existing local-suppression placeholder is completely unaffected when this prop is simply omitted", () => {
+      const fakeTrack = {} as Track;
+      const participant = fakeParticipant({ camera: { track: fakeTrack, isMuted: false } });
+      const { container } = render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} />);
+      expect(screen.getByTestId("own-seat-live")).toHaveTextContent("You're live");
+      expect(container.querySelector("video")).not.toBeInTheDocument();
+    });
+
+    it("renders my own real video, not the 'You're live' placeholder, when isLocal and revealOwnVideo are both true", () => {
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      const { container } = render(
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />,
+      );
+      expect(container.querySelector("video")).toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+    });
+
+    it("camera off, mic on: renders the ordinary audio-only visualizer, not the placeholder — same treatment any other speaker gets", () => {
+      const micTrack = fakeAudioTrack();
+      const participant = fakeParticipant({ camera: { track: undefined }, microphone: { track: micTrack, isMuted: false } });
+      render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("no-video-placeholder")).not.toBeInTheDocument();
+    });
+
+    it("has no effect on a remote (non-local) tile — a co-speaker's tile renders exactly as it always did", () => {
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      const { container } = render(
+        <SpeakerTile speaker={speaker()} participant={participant} isLocal={false} revealOwnVideo={true} />,
+      );
+      expect(container.querySelector("video")).toBeInTheDocument();
+      expect(screen.queryByTestId("own-seat-live")).not.toBeInTheDocument();
+    });
+
+    it("the media-activation tap target still wins over revealOwnVideo when media hasn't been activated yet", () => {
+      render(
+        <SpeakerTile
+          speaker={speaker()}
+          participant={undefined}
+          isLocal={true}
+          revealOwnVideo={true}
+          needsMediaActivation={true}
+          activateMedia={vi.fn(async () => MEDIA_READY)}
+        />,
+      );
+      expect(screen.getByTestId("tile-activate-media")).toBeInTheDocument();
+    });
+
+    describe("repaint nudge — the same 'reattached to a brand-new element' remount pattern SelfPreview already handles, at this second call site", () => {
+      const originalPlay = HTMLMediaElement.prototype.play;
+
+      beforeEach(() => {
+        vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+          cb(0);
+          return 0;
+        });
+        vi.stubGlobal("cancelAnimationFrame", () => {});
+        HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+      });
+
+      afterEach(() => {
+        vi.unstubAllGlobals();
+        HTMLMediaElement.prototype.play = originalPlay;
+      });
+
+      it("resets srcObject a beat after attach when isLocal && revealOwnVideo — the exact scenario the corner preview just vacated", () => {
+        const track = {
+          attach: vi.fn((element: HTMLVideoElement) => {
+            element.srcObject = {} as MediaStream;
+            return element;
+          }),
+          detach: vi.fn(),
+        } as unknown as Track;
+        const participant = fakeParticipant({ camera: { track, isMuted: false } });
+        render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+      });
+
+      it("never runs the nudge for an ordinary remote tile — this remount pattern only ever happens locally", () => {
+        const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+        render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
+        expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("return-to-speaker-view affordance (Section 6: one tap back, since the corner self-preview no longer exists to tap instead)", () => {
+      it("renders only when isLocal, revealOwnVideo, and the callback are all present", () => {
+        const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+        render(
+          <SpeakerTile
+            speaker={speaker()}
+            participant={participant}
+            isLocal={true}
+            revealOwnVideo={true}
+            onTapReturnToSpeakerView={vi.fn()}
+          />,
+        );
+        expect(screen.getByTestId("return-to-speaker-view")).toBeInTheDocument();
+      });
+
+      it("calls the callback when tapped", () => {
+        const onTapReturnToSpeakerView = vi.fn();
+        const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+        render(
+          <SpeakerTile
+            speaker={speaker()}
+            participant={participant}
+            isLocal={true}
+            revealOwnVideo={true}
+            onTapReturnToSpeakerView={onTapReturnToSpeakerView}
+          />,
+        );
+        fireEvent.click(screen.getByTestId("return-to-speaker-view"));
+        expect(onTapReturnToSpeakerView).toHaveBeenCalledTimes(1);
+      });
+
+      it("is absent when revealOwnVideo is false — Speaker-Focused View still relies on the corner self-preview instead", () => {
+        const fakeTrack = {} as Track;
+        const participant = fakeParticipant({ camera: { track: fakeTrack, isMuted: false } });
+        render(
+          <SpeakerTile speaker={speaker()} participant={participant} isLocal={true} onTapReturnToSpeakerView={vi.fn()} />,
+        );
+        expect(screen.queryByTestId("return-to-speaker-view")).not.toBeInTheDocument();
+      });
+
+      it("is absent on a remote tile even if revealOwnVideo happens to be true (it only ever matters for isLocal)", () => {
+        const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+        render(
+          <SpeakerTile
+            speaker={speaker()}
+            participant={participant}
+            isLocal={false}
+            revealOwnVideo={true}
+            onTapReturnToSpeakerView={vi.fn()}
+          />,
+        );
+        expect(screen.queryByTestId("return-to-speaker-view")).not.toBeInTheDocument();
+      });
+
+      it("is absent when no callback is given, even in Normal Stage View — never a dead-end tap target", () => {
+        const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+        render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
+        expect(screen.queryByTestId("return-to-speaker-view")).not.toBeInTheDocument();
+      });
     });
   });
 
