@@ -3,6 +3,97 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-06 — Expanded Comments rebuilt as a live anchored timeline; commenting root-caused (real-device report)
+
+**Problem 1 — "commenting is not working."** Rather than guess, ran the
+actual local dev server against the real linked Supabase project and
+drove it with a real browser (Playwright). Raw guest/profile inserts
+against `event_chat_messages` succeeded immediately — the RLS policies
+and `sendMessage`/`insertMessage` path were never broken. The real
+finding: submitting via Expanded Comments' own composer *did* succeed,
+but the comment never appeared in "Recent Comments" — the frozen-
+snapshot model (captured once, on open) only ever incremented a "↻ N new
+comments" counter for anyone's arrival, including your own, so a
+successful submission read exactly like a silent failure. A second, independently-verified bug compounded this: the drag-to-close handle's
+`onPointerDown` calls `setPointerCapture` on itself, and the ✕ close
+button lives *inside* that same handle — pointer capture redirects the
+resulting `click` to the capturing div, never the nested button, so
+Close was completely unresponsive on a real browser despite passing
+every existing jsdom test (which never exercises real pointer-capture
+click redirection). **Decision**: fix the actual causes rather than add
+a workaround at the reporting layer — exclude real interactive
+descendants from starting a drag (same pattern `useDoubleTap` already
+uses elsewhere in this codebase), and retire the frozen-snapshot model
+entirely per Problem 2 below, so a successful submission is simply
+visible immediately, with nothing left to explain away.
+
+**Problem 2 — the frozen-snapshot model itself was the wrong design once
+a user actually lived with it.** Alternatives considered: (a) keep the
+frozen model, just auto-refresh on your *own* submission specifically —
+rejected, this still requires tracking "was this arrival mine" as a
+special case bolted onto a model whose whole premise is "don't auto-
+update," and leaves the confusing two-competing-models problem (refresh
+button *and* an indicator) intact for everyone else's arrivals; (b) make
+the list fully live with no anchoring at all — rejected outright,
+explicitly called for against ("do not rely on browser luck") and against
+this codebase's own now-twice-documented experience that assuming
+"it'll probably be fine" about scroll/paint timing is how real bugs like
+Problem 1's pointer-capture issue survive to a real device undetected.
+**Decision**: a genuinely live, newest-first timeline (`displayMessages`,
+a plain reversal of the same `messages` array every other composition
+already receives — no local copy, no second source of truth) with
+explicit viewport anchoring: a `useLayoutEffect` captures the scroll
+container's height before an arrival and, if the reader isn't at/near
+the top, shifts `scrollTop` by exactly the height the list just gained —
+the standard "preserve scrollHeight delta" technique, not a hope that
+the browser's own scroll-anchoring heuristic covers this list's specific
+shape. A small "N new comments" indicator (tap to scroll to newest, or
+just scroll there manually) replaces the refresh button — one model,
+not two. Posting your own comment is the one deliberate exception,
+detected via identity match on the newest arrival (not a submit
+callback threaded through `ChatPanel`, which would require new coupling
+between the two components) — always jumps straight to it, even mid-
+read of older comments.
+
+**A real bug the new `setCaughtUpToId` calls' own lint fix surfaced,
+worth naming**: `react-hooks/set-state-in-effect` (already documented
+elsewhere in this codebase, e.g. `useAutomaticPromotion`'s own `await
+Promise.resolve()`) flagged calling `setState` synchronously inside the
+anchoring `useLayoutEffect`. Fixed the same way this codebase already
+does elsewhere — deferring the *state* update (which has no pre-paint
+timing requirement) to a microtask via `queueMicrotask`, while the
+scroll *mutation* itself (which does need to happen before paint) stays
+synchronous in the layout effect.
+
+**Problem 3 — a real bug found while adding the "draft preserved on
+failure" test Section 20 asked for, not by inspection.** `ChatPanel`'s
+composer submits through a native `<form action={...}>`; a real browser
+resets every uncontrolled field the instant it processes that submit,
+synchronously, regardless of whether the action's own promise later
+resolves or rejects — so a *failed* submission was silently erasing
+whatever the user had just typed, with a generic error appearing below
+an already-blank input. **Decision**: capture the draft's value in the
+form's own `onSubmit` (which still runs before the browser's native
+reset, in the same submit event) and restore it on a failed settle —
+minimal, no controlled-input rewrite of the whole composer.
+
+**Reset Session / Clear Test Room, consolidated per explicit real-device
+feedback** ("I should hit Reset Session and get a clean slate," not
+choose between two buttons): "Reset Session" now calls the comprehensive
+`clearTestRoomSandbox` directly; the separate "Clear Test Room" button
+is removed from the panel entirely. The narrower `resetSimulatorSession`
+(exact guest-id-scoped delete) is *not* deleted — it stays defined and
+tested in `simulator-actions.ts` for a genuinely mixed real+simulated
+room scenario this dedicated, `is_permanent_test`-only test room never
+actually presents; this panel simply stopped calling it. One accepted,
+narrow, already-pre-existing tradeoff carried forward: the follow-up
+sweep's own comprehensive re-clear (unlike the old guest-id-scoped one)
+can't distinguish "a straggler from the session just reset" from "a
+brand-new session started in the last 2 seconds" — a narrow, self-
+inflicted developer action against an internal tool, not a real-user-
+facing risk, and this was already "Clear Test Room"'s own accepted shape
+before the two buttons merged into one.
+
 ## 2026-09-06 — Normal Stage View corrections: bounded local-video repaint retry, reaction stacking-context fix, single-tap return gesture (real iPhone Safari report)
 
 **Problem 1 — one repaint-nudge attempt (copied from `SelfPreview`) wasn't

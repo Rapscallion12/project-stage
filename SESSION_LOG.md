@@ -4,6 +4,67 @@ Newest entry first.
 
 ---
 
+## 2026-09-06 — Session 74: Small self-preview reactions, comment submission root-caused and fixed, Expanded Comments rebuilt as a live anchored timeline, own-comment "You" marker, Reset Session/Clear Test Room consolidated (issue #21), on `feature/mobile-speaker-view-toggle`
+
+**Small self-preview reactions**: audited — `SelfPreview` simply never had
+a reaction overlay at all (not a filtering bug). Added a `reactions` prop
+(`SpeakerStage` filters `stageReactions.incoming` to `targetIdentity ===
+myIdentity`, unconditionally — deliberately not gated on the viewer's own
+On Speaker/Side preference, since a preview this small has no room for a
+side lane), rendered via the same `OnSpeakerReactionBursts` every tile
+already uses, `compact` scale. Self-echo suppression needed no new logic
+— `useStageReactions`' own id-based dedup already keeps a sender's
+confirmed echo out of `incoming` entirely.
+
+**Commenting root-caused via a real local dev server against the real
+backend, not guessed**: raw inserts (guest and profile) succeeded fine —
+the actual bug was Expanded Comments' own frozen-snapshot model silently
+hiding a just-posted comment behind a "N new comments" counter, reading
+as "my comment didn't send." A second, independent real bug found the
+same way: the drag-to-close handle's `setPointerCapture` was stealing
+the nested ✕ button's own click (fixed by excluding real interactive
+descendants from starting a drag, same pattern `useDoubleTap` already
+uses). A third, smaller one: `insertMessage` discarded the real Postgres
+error behind a bare boolean — now returns it, logged unconditionally
+server-side and surfaced to the caller only on non-production builds.
+
+**Expanded Comments rebuilt**: frozen snapshot retired entirely for a
+live, newest-first timeline with viewport anchoring (`scrollHeight`-delta
+technique, `useLayoutEffect`) — new arrivals prepend without moving the
+reader's position; a small indicator appears while they're scrolled away
+and clears on reaching/tapping back to the top; posting your own comment
+is the deliberate exception, always jumping straight to it. Comments now
+carry a small "You" marker via stable `author_profile_id`/`author_guest_id`
+identity matching (never display name).
+
+**Reset Session / Clear Test Room consolidated**: real-device feedback
+found two reset buttons confusing — "Reset Session" now calls the
+comprehensive `clearTestRoomSandbox` directly; the separate button is
+gone from the UI. The narrower `resetSimulatorSession` stays defined,
+tested, just no longer called by this panel (Section 16's own explicit
+"don't delete the cleanup architecture").
+
+**Testing**: new `src/app/events/[id]/lobby/actions.test.ts` (sendMessage
+had zero prior coverage) — guest/account × viewer/speaker submission,
+error observability, validation-before-insert. `chat-panel.test.tsx`
+gained a real bug catch: native `<form action>` submission resets
+uncontrolled fields immediately regardless of outcome, silently erasing
+a failed draft — fixed by capturing/restoring it. `expanded-comments.test.tsx`
+rewritten for the live model (anchoring, indicator, own-comment jump,
+"You" marker). `self-preview.test.tsx`/`speaker-stage.test.tsx` gained
+reaction-in-small-preview coverage. `session-simulator-panel.test.tsx`'s
+Reset Session and Clear Test Room blocks merged into one.
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/hooks/lobby suites clean (1186/1187 — the one
+failure is a pre-existing, unrelated real-DB timing flake, reproduced
+passing in isolation). Full project suite run separately — see this
+session's own handoff.
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-06 — Session 73: Normal Stage View corrections — real iPhone Safari testing found grey local video, invisible reactions, and an awkward return gesture (issue #21), on `feature/mobile-speaker-view-toggle`
 
 **Goal**: two rounds of real-device testing on the Normal Stage View

@@ -189,17 +189,29 @@ export function ChatPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const wasPending = useRef(false);
+  // Real-device report ("failed submission does NOT silently erase
+  // draft"): submitting via a native `<form action={...}>` — which this
+  // form is, in both modes — resets every uncontrolled field the instant
+  // the browser processes the submit, synchronously, before the action's
+  // own promise ever resolves. That happens regardless of whether the
+  // action eventually succeeds or fails, so a rejected submission was
+  // silently wiping whatever the user had just typed, with no way back.
+  // Captured in this form's own `onSubmit` (below) — which still runs
+  // *before* that native reset, in the same submit event — so a failure
+  // can restore exactly what was typed.
+  const lastSubmittedValueRef = useRef("");
 
   const pending = micRequestMode ? requestPending : sendPending;
   const error = micRequestMode ? requestState?.error : sendState?.error;
 
-  // Clear the input and refocus once a submission completes successfully
-  // (no error from whichever mode was actually active — not both raw
-  // states, since a stale error from the *other* mode's last attempt
-  // must never block this one) — covers both modes, since only one is
-  // ever pending at a time. A successful request also flips
-  // hasPendingRequest and drops back to normal mode, the same way a
-  // granted claim already updates RoomControls elsewhere.
+  // On settle: success clears the input and refocuses (no error from
+  // whichever mode was actually active — not both raw states, since a
+  // stale error from the *other* mode's last attempt must never block
+  // this one); failure restores the draft the native reset already wiped
+  // — never a silent loss of what the user typed. Covers both modes,
+  // since only one is ever pending at a time. A successful request also
+  // flips hasPendingRequest and drops back to normal mode, the same way
+  // a granted claim already updates RoomControls elsewhere.
   useEffect(() => {
     if (wasPending.current && !pending) {
       if (!error) {
@@ -211,6 +223,8 @@ export function ChatPanel({
           onHasPendingRequestChange(true);
           onMicRequestModeChange(false);
         }
+      } else if (inputRef.current && lastSubmittedValueRef.current) {
+        inputRef.current.value = lastSubmittedValueRef.current;
       }
     }
     wasPending.current = pending;
@@ -220,6 +234,10 @@ export function ChatPanel({
     // version used.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, error]);
+
+  function captureDraftBeforeNativeReset() {
+    lastSubmittedValueRef.current = inputRef.current?.value ?? "";
+  }
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -235,13 +253,10 @@ export function ChatPanel({
     <form
       data-testid="chat-composer-form"
       action={micRequestMode ? requestFormAction : sendFormAction}
-      onSubmit={
-        micRequestMode
-          ? () => {
-              void onPrepareMedia();
-            }
-          : undefined
-      }
+      onSubmit={() => {
+        captureDraftBeforeNativeReset();
+        if (micRequestMode) void onPrepareMedia();
+      }}
       className={compact ? "flex min-w-0 items-center gap-2 landscape:max-w-[40%]" : "flex gap-2"}
     >
       {compact ? (

@@ -125,6 +125,28 @@ describe("ChatPanel", () => {
     expect(onMicRequestModeChange).not.toHaveBeenCalledWith(false);
   });
 
+  describe("draft preserved/cleared correctly on submission outcome (real-device report, Section 20)", () => {
+    it("clears the draft only after a successful submission", async () => {
+      sendMessage.mockResolvedValue(undefined);
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "hello there" } });
+      expect(input.value).toBe("hello there");
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(input.value).toBe(""));
+    });
+
+    it("never silently erases the draft on a failed submission — it stays exactly as typed", async () => {
+      sendMessage.mockResolvedValue({ error: "Couldn't send your message. Try again." });
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "this will fail" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(screen.getByText("Couldn't send your message. Try again.")).toBeInTheDocument());
+      expect(input.value).toBe("this will fail");
+    });
+  });
+
   describe("compact mode (issue #21, '05 — Social Stage' Phase 2: Watch Mode's persistent composer)", () => {
     it("renders only the form — no message history, no quick-emoji row", () => {
       render(<ChatPanel {...baseProps} compact messages={[{

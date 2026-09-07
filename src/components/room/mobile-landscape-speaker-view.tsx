@@ -191,6 +191,7 @@ export function MobileLandscapeSpeakerView({
         reactions={reactions}
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
+        viewerIdentity={identity}
         micRequestMode={false}
         onMicRequestModeChange={() => {}}
         onHasPendingRequestChange={() => {}}

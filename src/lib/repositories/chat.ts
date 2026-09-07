@@ -77,7 +77,7 @@ export async function insertMessage(params: {
   identity: AuthorIdentity;
   displayName: string;
   body: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; error?: { message: string; code: string | undefined } }> {
   const supabase = await createClient();
   const { error } = await supabase.from("event_chat_messages").insert({
     event_id: params.eventId,
@@ -86,7 +86,14 @@ export async function insertMessage(params: {
     author_display_name: params.displayName,
     body: params.body,
   });
-  return { ok: !error };
+  // Real-device report ("commenting is currently not working"): this
+  // used to collapse `error` to a bare boolean, discarding the actual
+  // Postgres error (an RLS rejection, an FK violation, a constraint
+  // failure) entirely — undiagnosable from the caller's side no matter
+  // how many times it failed. The caller (`sendMessage`) decides what a
+  // *user* ever sees; this repository's job is just to stop throwing the
+  // real reason away.
+  return error ? { ok: false, error: { message: error.message, code: error.code } } : { ok: true };
 }
 
 export async function insertReaction(params: {

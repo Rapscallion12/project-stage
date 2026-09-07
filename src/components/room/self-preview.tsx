@@ -3,6 +3,8 @@
 import { useEffect, useRef } from "react";
 import type { LocalVideoTrack } from "livekit-client";
 import { cn } from "@/lib/utils";
+import { OnSpeakerReactionBursts } from "@/components/room/stage-reactions-overlay";
+import type { IncomingStageReaction } from "@/hooks/use-stage-reactions";
 
 /**
  * Issue #22: the local candidate/speaker's own camera preview, rendered
@@ -70,14 +72,34 @@ import { cn } from "@/lib/utils";
  * given. Purely additive: every caller that doesn't pass `onTap` (the
  * ordinary pre-claim candidate self-preview, unaffected) renders exactly
  * as before, non-interactive.
+ *
+ * **`reactions`** (real-device report: "I still cannot see incoming
+ * audience emoji reactions in the small speaker self-preview"): audited
+ * end to end — this component simply never had a reaction overlay at
+ * all (not a filtering bug; there was nothing here to filter). Audience
+ * reactions targeting the local speaker already flow through the same
+ * `stageReactions.incoming` array every other reaction render reads;
+ * `SpeakerStage` (the one caller) is what filters that down to
+ * "reactions whose `targetIdentity` is my own identity" and passes the
+ * result here — this component itself still has no reaction-domain
+ * knowledge, same presentation-only discipline as the rest of this file.
+ * Rendered via the *same* `OnSpeakerReactionBursts` every full-size tile
+ * already uses (never a second, bespoke overlay), `compact` for the tiny
+ * preview's scale — normalized tap coordinates and self-echo suppression
+ * are therefore both already correct by construction, inherited from
+ * that shared component/hook rather than reimplemented here. Defaults to
+ * empty, so every caller that doesn't care renders exactly as before.
  */
 export function SelfPreview({
   track,
   onTap,
+  reactions = [],
 }: {
   track: LocalVideoTrack;
   /** When provided, the preview becomes a real tap target — see this component's own doc comment above `onTap`. */
   onTap?: () => void;
+  /** See this component's own `reactions` doc comment above. */
+  reactions?: IncomingStageReaction[];
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -136,6 +158,7 @@ export function SelfPreview({
           person it belongs to — never their own mic, same reasoning as
           SpeakerTile's local video element. */}
       <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+      {reactions.length > 0 && <OnSpeakerReactionBursts reactions={reactions} compact />}
       {/* Discoverability affordance (Section 11: "should not rely only on
           an invisible gesture") — a small, unobtrusive expand glyph, never
           a label large enough to clutter the tiny preview. */}

@@ -241,6 +241,7 @@ export function PortraitSpeakerView({
         reactions={reactions}
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
+        viewerIdentity={identity}
         micRequestMode={false}
         onMicRequestModeChange={() => {}}
         onHasPendingRequestChange={() => {}}

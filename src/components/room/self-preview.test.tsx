@@ -16,6 +16,39 @@ function fakeVideoTrack(): LocalVideoTrack {
 }
 
 describe("SelfPreview", () => {
+  describe("reactions (real-device report: incoming audience reactions were never visible in the small self-preview)", () => {
+    it("renders nothing extra when no reactions are given (the default)", () => {
+      render(<SelfPreview track={fakeVideoTrack()} />);
+      expect(document.querySelector("video")).toBeInTheDocument();
+      // No emoji text anywhere — just the video/affordance/label this
+      // component already rendered before reactions existed.
+    });
+
+    it("renders a given reaction's emoji, positioned via its own normalized coordinates", () => {
+      render(
+        <SelfPreview
+          track={fakeVideoTrack()}
+          reactions={[{ id: "r1", targetIdentity: "profile:me", emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() }]}
+        />,
+      );
+      expect(screen.getByText("🎉")).toBeInTheDocument();
+    });
+
+    it("renders multiple simultaneous reactions", () => {
+      render(
+        <SelfPreview
+          track={fakeVideoTrack()}
+          reactions={[
+            { id: "r1", targetIdentity: "profile:me", emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:a", ts: Date.now() },
+            { id: "r2", targetIdentity: "profile:me", emoji: "🔥", x: 0.2, y: 0.8, senderIdentity: "profile:b", ts: Date.now() },
+          ]}
+        />,
+      );
+      expect(screen.getByText("🎉")).toBeInTheDocument();
+      expect(screen.getByText("🔥")).toBeInTheDocument();
+    });
+  });
+
   it("attaches the given track to its video element", () => {
     const track = fakeVideoTrack();
     render(<SelfPreview track={track} />);

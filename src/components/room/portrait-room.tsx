@@ -378,6 +378,7 @@ export function PortraitRoom(props: RoomLayoutProps) {
             reactions={reactions}
             pendingRequests={pendingRequests}
             profileDirectory={profileDirectory}
+            viewerIdentity={identity}
             micRequestMode={micRequestMode}
             onMicRequestModeChange={onMicRequestModeChange}
             onHasPendingRequestChange={onHasPendingRequestChange}

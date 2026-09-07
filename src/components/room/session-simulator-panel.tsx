@@ -12,7 +12,6 @@ import {
   simulateOpenSeat,
   forceStageRoundDeadline,
   forceSeatClosingDeadline,
-  resetSimulatorSession,
   simulateAdvanceSelection,
   fetchDebugSnapshotState,
   clearTestRoomSandbox,
@@ -440,12 +439,17 @@ export function SessionSimulatorPanel({
   // startSimulation, reused by every subsequent Seed 2 Speakers click in
   // the same run, never re-randomized per click.
   const seedSpeakersRef = useRef<[SimulatedIdentity, SimulatedIdentity] | null>(null);
-  // Reset Session: every guest id this panel has ever generated since the
-  // last reset (or mount), across every Start/Stop cycle — not just the
-  // current run's `audienceRef`, which Start *replaces* rather than
-  // extends. This is the exact ownership list Reset deletes by; see
-  // `resetSimulatorSession`'s own doc comment for why an exact in-memory
-  // id list is the safe mechanism here, not a new schema column.
+  // Every guest id this panel has ever generated since the last reset (or
+  // mount), across every Start/Stop cycle — not just the current run's
+  // `audienceRef`, which Start *replaces* rather than extends. Used to
+  // tell a simulated occupant/request apart from a real one throughout
+  // this file (the "Simulated speaker" badge, stale-request filtering,
+  // advance-selection calls) — cleared as part of Reset's own local
+  // bookkeeping reset, same as every other run-scoped ref below, but
+  // Reset's actual *database* cleanup no longer deletes by this list (see
+  // `handleReset`'s own doc comment: it now calls the comprehensive
+  // `clearTestRoomSandbox` instead of the narrower, guest-id-scoped
+  // `resetSimulatorSession`).
   const allSimulatedGuestIdsRef = useRef<Set<string>>(new Set());
   // Issue #21, tenth corrective pass, Section 27: guards the delayed
   // Reset follow-up sweep's own log update (see `handleReset`) against
@@ -455,10 +459,10 @@ export function SessionSimulatorPanel({
   const mountedRef = useRef(true);
   // The follow-up sweep's own timer handle — cleared on unmount (see the
   // cleanup effect below) so a real, still-pending sweep can never fire
-  // *after* this panel is gone and call `resetSimulatorSession` a second
-  // time nobody asked for (harmless in a real browser tab, which rarely
-  // "unmounts" mid-session — but real hygiene, and avoids a stray real
-  // timer bleeding a second mock call into an unrelated later test).
+  // *after* this panel is gone and call the comprehensive cleanup a
+  // second time nobody asked for (harmless in a real browser tab, which
+  // rarely "unmounts" mid-session — but real hygiene, and avoids a stray
+  // real timer bleeding a second mock call into an unrelated later test).
   const resetFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Issue #21, eleventh corrective pass, Section 16: guards
   // `copyDebugSnapshot` against a duplicate concurrent capture — a
@@ -476,24 +480,19 @@ export function SessionSimulatorPanel({
   // The Reset-Start completion barrier (Section "RESET MUST HAVE A
   // COMPLETION BARRIER"): true for exactly as long as `handleReset`'s own
   // *primary* delete pass is in flight — never held for the ~2s delayed
-  // follow-up sweep, which no longer needs to block anything now that it
-  // can't touch the shared `stage_rounds` row either (see
-  // `resetSimulatorSession`'s own doc comment on `reconcileStageRound`).
-  // Mirrored into state (`resetInFlight`) purely so the Start button can
+  // follow-up sweep, which is fire-and-forget by design (see
+  // `handleReset`'s own doc comment on the follow-up sweep for the one
+  // accepted tradeoff this implies: a *second* Reset-then-immediate-Start
+  // within that ~2s window would have its brand-new seats/round caught by
+  // the first Reset's own follow-up sweep too — narrow, self-inflicted,
+  // and already the accepted shape of this control before today's
+  // consolidation, not a new risk). Mirrored into state (`resetInFlight`)
+  // purely so the Start button can
   // reactively disable itself; the ref is what `startSimulation` actually
   // reads, since a ref read is synchronous and a state read inside an
   // event handler can be one render behind.
   const resetInFlightRef = useRef(false);
   const [resetInFlight, setResetInFlight] = useState(false);
-  // Same synchronous re-entrancy guard as `resetInFlightRef`, for the
-  // separate "Clear Test Room" control below — deliberately its own
-  // ref/state pair, not shared with Reset Session's, since the two are
-  // genuinely different operations (one run's own guest ids vs. the
-  // whole room) that a developer might reasonably want to distinguish
-  // mid-flight in the UI.
-  const clearTestRoomInFlightRef = useRef(false);
-  const [clearTestRoomInFlight, setClearTestRoomInFlight] = useState(false);
-  const clearTestRoomFollowUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A bare counter, bumped once per `handleReset` call — distinct from
   // `startupTokenRef` (which tracks *startup* generations): this is
   // "which Reset generation are we in," surfaced in the debug snapshot's
@@ -958,13 +957,6 @@ export function SessionSimulatorPanel({
       appendLog("Reset still in progress — try Start again in a moment");
       return;
     }
-    // Same barrier, for Clear Test Room's own comprehensive delete pass —
-    // starting a fresh simulated session while a room-wide clear is still
-    // in flight could seed brand-new state right as it's being wiped.
-    if (clearTestRoomInFlightRef.current) {
-      appendLog("Clear Test Room still in progress — try Start again in a moment");
-      return;
-    }
     startupInFlightRef.current = true;
     try {
       const token = ++startupTokenRef.current;
@@ -1145,16 +1137,42 @@ export function SessionSimulatorPanel({
   }
 
   /**
-   * "Reset Session" — genuinely destroys everything the simulator wrote
-   * this run and returns to a clean test room, unlike Stop (which only
-   * halts future activity). Stops the session first (a reset run can't
-   * keep generating activity against data that's about to be deleted),
-   * deletes every DB row owned by any guest id this panel has generated
-   * since the last reset, then clears every piece of local run state —
-   * the *next* Start Simulated Session genuinely starts fresh, with a new
-   * audience and no memory of the old one (including the shared round:
-   * once both seeded seats are gone, `ensure_stage_round` marks the stage
-   * `awaiting_pairing` again server-side, same as any other double-vacancy).
+   * "Reset Session" — genuinely destroys *everything* in the designated
+   * test room and returns it to a true blank slate, unlike Stop (which
+   * only halts future activity).
+   *
+   * **Real-device report, UI consolidation**: this button used to call
+   * the narrower `resetSimulatorSession` (deletes only the exact guest
+   * ids this panel itself generated this run), sitting alongside a
+   * separate "Clear Test Room" button that called the comprehensive
+   * `clearTestRoomSandbox` (deletes everything in the room regardless of
+   * origin — speakers, comments, requests/votes, the shared round,
+   * reaction heat). Real-device feedback: two buttons for "reset" reads
+   * as confusing, redundant UI, not two genuinely different everyday
+   * actions — "I should hit Reset Session and get a clean slate," full
+   * stop. **Decision**: one button, "Reset Session," now calls the
+   * comprehensive `clearTestRoomSandbox` directly. The narrower
+   * `resetSimulatorSession` is *not* deleted (Section 16's own explicit
+   * instruction: simplify the UI, don't delete cleanup architecture) —
+   * it remains defined, tested, and available in `simulator-actions.ts`
+   * for a genuinely mixed real+simulated room scenario this dedicated,
+   * `is_permanent_test`-only room never actually presents; this panel
+   * simply no longer calls it. **Safety, unchanged**: `clearTestRoomSandbox`
+   * re-verifies `is_permanent_test` on the target event server-side
+   * before deleting anything — this button could never touch an ordinary
+   * event's real data even if this panel were somehow reachable against
+   * one (it isn't, gated by `isPreviewOrDevBuild() && isSimulatorUiEnabled()`
+   * — see `preview-mode.ts` — a boundary this consolidation doesn't touch
+   * at all).
+   *
+   * Stops the session first (a reset run can't keep generating activity
+   * against data that's about to be deleted), then clears every piece of
+   * local run state — the *next* Start Simulated Session genuinely starts
+   * fresh, with a new audience and no memory of the old one (including
+   * the shared round: comprehensively cleared here, so
+   * `ensure_stage_round` establishes a brand new `awaiting_pairing` state
+   * server-side the next time anything asks, same end state the narrower
+   * reset's own double-vacancy detection used to reach).
    *
    * **One tap, no confirmation** (issue #21, seventh corrective pass,
    * Section 20 — explicit instruction): this is a preview-only tool, not
@@ -1209,22 +1227,27 @@ export function SessionSimulatorPanel({
    * activity draws from `audienceRef.current`, already fully registered
    * in `allSimulatedGuestIdsRef` at Start).
    *
-   * **Fix**: a second, delayed sweep — the exact same
-   * `resetSimulatorSession` call, same captured `guestIds` snapshot,
-   * fire-and-forget ~2s after the first pass. By then any write that was
-   * merely in flight at the moment of the first pass has long since
-   * landed, so the second pass's own DELETE catches it. Never blocks the
-   * UI and never re-confirms anything (Section 29: Reset stays one tap,
-   * immediate) — the button's own "executing" state still resolves after
-   * the *first* pass; the sweep runs silently afterward and only adds a
-   * log line if it actually found something, so the ordinary (no race)
-   * case is invisible. Re-running the same deletion against ids that are
-   * already gone is a safe no-op (`resetSimulatorSession` itself is
-   * idempotent — `count: 0` on every table, same as calling Reset twice
-   * in a row already was). Cannot delete a *new* run's own data even if
-   * one starts within that 2s window: guest ids are always freshly
-   * generated (`crypto.randomUUID()`), so an old run's captured id list
-   * can never collide with a new run's.
+   * **Fix**: a second, delayed sweep — the exact same comprehensive
+   * cleanup call, fire-and-forget ~2s after the first pass. By then any
+   * write that was merely in flight at the moment of the first pass has
+   * long since landed, so the second pass's own DELETE catches it. Never
+   * blocks the UI and never re-confirms anything (Section 29: Reset stays
+   * one tap, immediate) — the button's own "executing" state still
+   * resolves after the *first* pass; the sweep runs silently afterward
+   * and only adds a log line if it actually found something, so the
+   * ordinary (no race) case is invisible. Re-running the same
+   * comprehensive clear against an already-blank room is a safe no-op
+   * (every count is 0, same as calling Reset twice in a row already was).
+   * **One accepted, narrow tradeoff of consolidating onto the
+   * comprehensive cleanup** (see this function's own doc comment above):
+   * unlike the old guest-id-scoped sweep, this one has no way to tell "a
+   * brand new session someone started in the last 2 seconds" apart from
+   * "stray writes from the session that was just reset" — both would be
+   * caught. Reset-then-immediately-Start-again inside that ~2s window is
+   * a narrow, self-inflicted developer action against their own internal
+   * tool, not a real-user-facing risk, and was already exactly this
+   * button's own accepted shape before today's consolidation (this is
+   * "Clear Test Room"'s own pre-existing follow-up sweep, unchanged).
    */
   async function handleReset() {
     // Issue #21, fourteenth corrective pass: a synchronous duplicate-Reset
@@ -1243,106 +1266,9 @@ export function SessionSimulatorPanel({
     runningRef.current = false;
     setRunning(false);
     stopAllTimers();
-
-    try {
-      const guestIds = Array.from(allSimulatedGuestIdsRef.current);
-      const result = await resetSimulatorSession(eventId, guestIds);
-
-      allSimulatedGuestIdsRef.current = new Set();
-      guestDisplayNamesRef.current = {};
-      setGuestDisplayNames({});
-      roundMoodRef.current = new Map();
-      audienceRef.current = [];
-      seedSpeakersRef.current = null;
-      setAudience([]);
-      setStartupState(IDLE_STARTUP_STATE);
-      setRoundVoteTallies({});
-      setPoolResetCount(0);
-      prevPendingCountRef.current = 0;
-      lastSeatFailureRef.current = { 1: null, 2: null };
-      nonSimulatorBlockerRef.current = { 1: null, 2: null };
-      bootstrapResultRef.current = { seat1: null, seat2: null, result: null };
-      staleRequestsCleanedRef.current = 0;
-      staleGenerationDetectedRef.current = false;
-      setLog([
-        `${new Date().toLocaleTimeString()} — Reset — cleared ${result.messagesDeleted} comments, ${result.reactionsDeleted} likes, ${result.speakersDeleted} speaker seats, ${result.requestVotesDeleted} request votes, ${result.roundVotesDeleted} round votes`,
-      ]);
-      onSimulatorReset?.();
-
-      // The barrier itself is released here, once the *primary* pass has
-      // actually landed — not in a `finally` around the whole function,
-      // and deliberately not held for the delayed follow-up sweep below.
-      // See `resetInFlightRef`'s own doc comment for why the follow-up no
-      // longer needs to block Start at all now that it can't touch the
-      // shared `stage_rounds` row either (`reconcileStageRound: false`).
-      resetInFlightRef.current = false;
-      setResetInFlight(false);
-
-      if (guestIds.length > 0) {
-        resetFollowUpTimerRef.current = setTimeout(() => {
-          resetFollowUpTimerRef.current = null;
-          void resetSimulatorSession(eventId, guestIds, false).then((followUp) => {
-            const strayTotal =
-              followUp.messagesDeleted +
-              followUp.reactionsDeleted +
-              followUp.speakersDeleted +
-              followUp.requestVotesDeleted +
-              followUp.roundVotesDeleted;
-            if (strayTotal === 0 || !mountedRef.current) return;
-            setLog((prev) =>
-              [
-                `${new Date().toLocaleTimeString()} — Reset follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight when Reset ran`,
-                ...prev,
-              ].slice(0, 30),
-            );
-          });
-        }, 2000);
-      }
-    } finally {
-      // Safety net: if `resetSimulatorSession` itself threw (network
-      // failure, etc.) the barrier above never got a chance to release —
-      // this guarantees it always does, so a genuine error can't leave
-      // Start permanently blocked.
-      resetInFlightRef.current = false;
-      setResetInFlight(false);
-    }
-  }
-
-  /**
-   * Real-device report: "Clear Test Room" — a genuinely comprehensive,
-   * room-wide sandbox clear, deliberately kept separate from "Reset
-   * Session" above rather than widening it (see `clearTestRoomSandbox`'s
-   * own doc comment for why: Reset Session is intentionally scoped to
-   * one run's own exact guest ids, which is the *correct*, safe behavior
-   * for its own purpose — a room-wide wipe there would be unsafe against
-   * a room with real participants).
-   *
-   * **Safety**: `clearTestRoomSandbox` re-verifies `is_permanent_test`
-   * on the server before touching anything — this button can never
-   * delete an ordinary event's real data even if this panel were
-   * somehow reachable against one (it isn't, today, but the server-side
-   * check is the actual guarantee, not this panel's own gating alone).
-   *
-   * **Determinism (Section 4's own requirement)**: resets the exact same
-   * local simulator bookkeeping `handleReset` does — a room-wide clear
-   * implies at least as much local staleness as a run-scoped reset — and
-   * calls the same `onSimulatorReset` the caller (`EventRoom`) already
-   * wires to clear its own `simulatedGuestIds` and refetch speakers, so
-   * the UI reconciles without a manual reload. A delayed ~2s follow-up
-   * sweep, same reasoning as Reset Session's own, catches a write that
-   * was still in flight at the moment of the first pass (e.g. a real
-   * comment submitted at that exact instant) — idempotent either way.
-   */
-  async function handleClearTestRoom() {
-    if (clearTestRoomInFlightRef.current) {
-      appendLog("Clear Test Room already in progress — ignoring duplicate tap");
-      return;
-    }
-    clearTestRoomInFlightRef.current = true;
-    setClearTestRoomInFlight(true);
-    if (clearTestRoomFollowUpTimerRef.current !== null) {
-      clearTimeout(clearTestRoomFollowUpTimerRef.current);
-      clearTestRoomFollowUpTimerRef.current = null;
+    if (resetFollowUpTimerRef.current !== null) {
+      clearTimeout(resetFollowUpTimerRef.current);
+      resetFollowUpTimerRef.current = null;
     }
 
     try {
@@ -1364,16 +1290,19 @@ export function SessionSimulatorPanel({
       bootstrapResultRef.current = { seat1: null, seat2: null, result: null };
       staleRequestsCleanedRef.current = 0;
       staleGenerationDetectedRef.current = false;
-      runningRef.current = false;
-      setRunning(false);
-      stopAllTimers();
       setLog([
-        `${new Date().toLocaleTimeString()} — Clear Test Room — cleared ${result.messagesDeleted} comments, ${result.reactionsDeleted} likes, ${result.requestsDeleted} requests, ${result.requestVotesDeleted} request votes, ${result.speakersDeleted} speaker seats, ${result.roundVotesDeleted} round votes, ${result.roundsDeleted} shared round row(s), ${result.reactionHeatDeleted} reaction heat row(s)`,
+        `${new Date().toLocaleTimeString()} — Reset — cleared ${result.messagesDeleted} comments, ${result.reactionsDeleted} likes, ${result.requestsDeleted} requests, ${result.requestVotesDeleted} request votes, ${result.speakersDeleted} speaker seats, ${result.roundVotesDeleted} round votes, ${result.roundsDeleted} shared round row(s), ${result.reactionHeatDeleted} reaction heat row(s)`,
       ]);
       onSimulatorReset?.();
 
-      clearTestRoomFollowUpTimerRef.current = setTimeout(() => {
-        clearTestRoomFollowUpTimerRef.current = null;
+      // The barrier itself is released here, once the *primary* pass has
+      // actually landed — not in a `finally` around the whole function,
+      // and deliberately not held for the delayed follow-up sweep below.
+      resetInFlightRef.current = false;
+      setResetInFlight(false);
+
+      resetFollowUpTimerRef.current = setTimeout(() => {
+        resetFollowUpTimerRef.current = null;
         void clearTestRoomSandbox(eventId).then((followUp) => {
           const strayTotal =
             followUp.messagesDeleted +
@@ -1387,17 +1316,21 @@ export function SessionSimulatorPanel({
           if (strayTotal === 0 || !mountedRef.current) return;
           setLog((prev) =>
             [
-              `${new Date().toLocaleTimeString()} — Clear Test Room follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight`,
+              `${new Date().toLocaleTimeString()} — Reset follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight when Reset ran`,
               ...prev,
             ].slice(0, 30),
           );
         });
       }, 2000);
     } catch (error) {
-      appendLog(`Clear Test Room failed: ${error instanceof Error ? error.message : String(error)}`);
+      appendLog(`Reset failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      clearTestRoomInFlightRef.current = false;
-      setClearTestRoomInFlight(false);
+      // Safety net: if `clearTestRoomSandbox` itself threw (network
+      // failure, etc.) the barrier above never got a chance to release —
+      // this guarantees it always does, so a genuine error can't leave
+      // Start permanently blocked.
+      resetInFlightRef.current = false;
+      setResetInFlight(false);
     }
   }
 
@@ -1406,7 +1339,6 @@ export function SessionSimulatorPanel({
       mountedRef.current = false;
       stopAllTimers();
       if (resetFollowUpTimerRef.current !== null) clearTimeout(resetFollowUpTimerRef.current);
-      if (clearTestRoomFollowUpTimerRef.current !== null) clearTimeout(clearTestRoomFollowUpTimerRef.current);
     };
   }, []);
 
@@ -2547,7 +2479,6 @@ export function SessionSimulatorPanel({
     push("Bootstrap mode: simulator-authoritative bypass");
     push(`Bootstrap generation: ${startupTokenRef.current}`);
     push(`Reset in progress: ${resetInFlightRef.current ? "yes" : "no"}`);
-    push(`Clear Test Room in progress: ${clearTestRoomInFlightRef.current ? "yes" : "no"}`);
     push(`Reset generation: ${resetGenerationRef.current}`);
     push(`Startup attempt: ${startupAttemptRef.current}`);
     push(`Existing stage established: ${established ? "yes" : "no"}`);
@@ -2643,7 +2574,7 @@ export function SessionSimulatorPanel({
           // own `resetInFlightRef` check is the actual, render-timing-
           // independent guarantee; this just keeps the button's own
           // visible state honest with it.
-          disabled={running || startingUp || resetInFlight || clearTestRoomInFlight}
+          disabled={running || startingUp || resetInFlight}
           className="rounded bg-emerald-600 px-2 py-1 font-medium"
         >
           Start Simulated Session
@@ -2673,23 +2604,6 @@ export function SessionSimulatorPanel({
         */}
         <SimButton data-testid="sim-reset" onClick={handleReset} className="rounded bg-orange-700 px-2 py-1 font-medium">
           Reset Session
-        </SimButton>
-        {/*
-          Real-device report: genuinely comprehensive, room-wide sandbox
-          clear — deliberately a *separate*, distinctly-labeled/colored
-          control from Reset Session above, not a widening of it (see
-          `handleClearTestRoom`'s own doc comment). Same one-tap, no-
-          confirmation-step reasoning as Reset Session: this is a preview-
-          only tool, and the server-side `is_permanent_test` check is the
-          actual safety guarantee regardless of how easy this button is
-          to tap.
-        */}
-        <SimButton
-          data-testid="sim-clear-test-room"
-          onClick={handleClearTestRoom}
-          className="rounded bg-red-800 px-2 py-1 font-medium"
-        >
-          Clear Test Room
         </SimButton>
         <SimButton data-testid="sim-seed-speakers" onClick={seedTwoSpeakers} className="rounded bg-white/10 px-2 py-1">
           Seed 2 Speakers

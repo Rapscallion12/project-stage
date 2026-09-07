@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { resolveIdentity } from "@/lib/identity";
 import { GUEST_COOKIE_MAX_AGE_SECONDS, GUEST_NAME_COOKIE } from "@/lib/guest";
 import { hasSentMessageRecently, insertMessage, insertReaction } from "@/lib/repositories/chat";
+import { isPreviewOrDevBuild } from "@/lib/preview-mode";
 
 const MESSAGE_MAX_LENGTH = 500;
 const RATE_LIMIT_MS = 2000;
@@ -27,9 +28,20 @@ export async function sendMessage(
     return { error: "You're sending messages too quickly." };
   }
 
-  const { ok } = await insertMessage({ eventId, identity, displayName: identity.displayName, body });
+  const { ok, error } = await insertMessage({ eventId, identity, displayName: identity.displayName, body });
   if (!ok) {
-    return { error: "Couldn't send your message. Try again." };
+    // Real-device report ("commenting is currently not working"): never
+    // silently swallow this — always logged server-side (visible in
+    // Vercel's function logs / the local dev terminal regardless of
+    // environment), and the *actual* Postgres error is surfaced to the
+    // caller too, but only on a non-production build
+    // (`isPreviewOrDevBuild()` — the same gate the Session Simulator
+    // itself already uses) so a real user on the real production site
+    // never sees raw backend detail, while this exact internal preview
+    // does.
+    console.error("[sendMessage] insertMessage failed", { eventId, identityType: identity.type, error });
+    const detail = isPreviewOrDevBuild() && error ? ` (${error.code ?? "?"}: ${error.message})` : "";
+    return { error: `Couldn't send your message. Try again.${detail}` };
   }
 
   return undefined;

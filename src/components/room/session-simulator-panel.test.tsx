@@ -831,11 +831,21 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
 
     it("the Start button is disabled, and Start cannot proceed, while a Reset's primary pass is still in flight", async () => {
       let resolveReset!: () => void;
-      resetSimulatorSession.mockImplementationOnce(
+      clearTestRoomSandbox.mockImplementationOnce(
         () =>
           new Promise((resolve) => {
             resolveReset = () =>
-              resolve({ messagesDeleted: 0, reactionsDeleted: 0, speakersDeleted: 0, requestVotesDeleted: 0, roundVotesDeleted: 0, stageReactionHeatDeleted: 0 });
+              resolve({
+                eventId: "e1",
+                messagesDeleted: 0,
+                reactionsDeleted: 0,
+                requestsDeleted: 0,
+                requestVotesDeleted: 0,
+                speakersDeleted: 0,
+                roundVotesDeleted: 0,
+                roundsDeleted: 0,
+                reactionHeatDeleted: 0,
+              });
           }),
       );
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -1725,7 +1735,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
     });
   });
 
-  describe("Reset Session (destroys simulator-created state, distinct from Stop)", () => {
+  describe("Reset Session (real-device report: consolidated onto the comprehensive room-wide cleanup — see handleReset's own doc comment for why the separate 'Clear Test Room' control was folded into this single one)", () => {
     // Issue #21, seventh corrective pass, Section 20: explicit instruction
     // to remove the confirmation step entirely — a preview-only tool, one
     // tap, reset begins immediately. Replaces the old "shows a
@@ -1734,7 +1744,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-reset"));
       expect(screen.queryByTestId("sim-reset-confirm-row")).not.toBeInTheDocument();
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
     });
 
     it("shows an immediate pressed/executing acknowledgment and rejects a second tap while the first reset is still in flight (Sections 21, 25)", async () => {
@@ -1745,52 +1755,27 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(resetButton).toBeDisabled();
       fireEvent.click(resetButton); // a real disabled button wouldn't even deliver this — belt and suspenders
 
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(resetButton).not.toBeDisabled());
     });
 
-    it("clicking Reset stops the simulation and calls resetSimulatorSession with every generated guest id", async () => {
+    it("clicking Reset stops the simulation and calls the comprehensive clearTestRoomSandbox with this event's id", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
 
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
-      const [calledEventId, guestIds] = resetSimulatorSession.mock.calls[0] as [string, string[]];
-      expect(calledEventId).toBe("e1");
-      expect(guestIds.length).toBe(22); // 20 audience + 2 stable seed speakers, per Start's own accounting
-      expect(new Set(guestIds).size).toBe(22);
-
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledWith("e1"));
       expect(screen.getByTestId("sim-stop")).toBeDisabled();
       expect(screen.getByTestId("sim-start")).not.toBeDisabled();
     });
 
-    it("accumulates guest ids across multiple Start/Stop cycles, not just the latest run's audience", async () => {
+    it("real-device report: this is the ONE reset action now — no separate 'Clear Test Room' control exists anywhere in the panel", () => {
       render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-start"));
-      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-      fireEvent.click(screen.getByTestId("sim-stop"));
-
-      // Stop (unlike Reset) never touches `stage_rounds` — the stage the
-      // first run established genuinely stays established. This test
-      // isn't about seeding mechanics, so simulate a fresh, never-
-      // established stage for the second run the same way Reset would
-      // have (issue #21, fourth corrective pass — see this file's own
-      // doc comment on the hoisted mock block for why the pre-seeding
-      // read matters here).
-      stageRoundRow.current = { round_number: 0, phase: "awaiting_pairing" };
-      resetSeedTracking();
-
-      fireEvent.click(screen.getByTestId("sim-start")); // second run — generates a fresh, different 22 identities
-      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-
-      fireEvent.click(screen.getByTestId("sim-reset"));
-
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
-      const [, guestIds] = resetSimulatorSession.mock.calls[0] as [string, string[]];
-      // Both runs' identities are included — never just the second run's 22.
-      expect(guestIds.length).toBe(44);
+      expect(screen.getByTestId("sim-reset")).toBeInTheDocument();
+      expect(screen.queryByTestId("sim-clear-test-room")).not.toBeInTheDocument();
+      expect(screen.queryByText("Clear Test Room")).not.toBeInTheDocument();
     });
 
     it("clears the activity log down to a single reset confirmation line — old entries do not survive", async () => {
@@ -1801,12 +1786,32 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByTestId("sim-log")).toHaveTextContent("Generated 5 comments");
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
 
       const log = screen.getByTestId("sim-log");
       expect(log).not.toHaveTextContent("Generated 5 comments");
       expect(log).not.toHaveTextContent("Started");
       expect(log).toHaveTextContent("Reset");
+    });
+
+    it("logs the comprehensive per-table counts the action returned", async () => {
+      clearTestRoomSandbox.mockResolvedValueOnce({
+        eventId: "e1",
+        messagesDeleted: 3,
+        reactionsDeleted: 1,
+        requestsDeleted: 2,
+        requestVotesDeleted: 1,
+        speakersDeleted: 2,
+        roundVotesDeleted: 1,
+        roundsDeleted: 1,
+        reactionHeatDeleted: 4,
+      });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Reset"));
+      const log = screen.getByTestId("sim-log");
+      expect(log).toHaveTextContent("3 comments");
+      expect(log).toHaveTextContent("4 reaction heat row(s)");
     });
 
     it("clears round-vote tallies and pool-reset count back to a fresh state", async () => {
@@ -1815,7 +1820,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
 
       expect(screen.getByTestId("sim-pool-reset-count")).toHaveTextContent("pool resets observed: 0");
     });
@@ -1825,7 +1830,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
 
       const callsAtReset = simulateComment.mock.calls.length + simulateLike.mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);
@@ -1837,55 +1842,43 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       fireEvent.click(screen.getByTestId("sim-start"));
       await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
 
       simulateComment.mockClear();
       fireEvent.click(screen.getByTestId("sim-generate-comments"));
       expect(simulateComment).not.toHaveBeenCalled();
     });
 
-    it("starting again after reset creates a genuinely new run — a fresh, non-overlapping set of identities", async () => {
-      render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-start"));
-      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-      fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
-      const firstRunIds = resetSimulatorSession.mock.calls[0][1] as string[];
-
-      fireEvent.click(screen.getByTestId("sim-start"));
-      await waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
-      fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
-      const secondRunIds = resetSimulatorSession.mock.calls[1][1] as string[];
-
-      expect(secondRunIds.length).toBe(22); // not accumulated with the first (reset) run
-      expect(secondRunIds.some((id) => firstRunIds.includes(id))).toBe(false);
-    });
-
-    // Issue #21, tenth corrective pass, Sections 26-27: a real-device
-    // report found a simulator-generated comment/request still visible
-    // after Reset — traced to a real ordering race (a scheduled
-    // background write already in flight, landing in the database
-    // *after* Reset's own DELETE already ran), not the guest-id list
-    // being wrong. Fixed with a second, delayed sweep — same call, same
-    // id snapshot, ~2s later, silent unless it actually finds something.
+    // Issue #21, tenth corrective pass, Sections 26-27, carried over into
+    // the comprehensive-cleanup consolidation: a real-device report found
+    // a simulator-generated comment/request still visible after Reset —
+    // traced to a real ordering race (a scheduled background write
+    // already in flight, landing in the database *after* Reset's own
+    // DELETE already ran). Fixed with a second, delayed sweep — same
+    // call, ~2s later, silent unless it actually finds something.
     it("a delayed follow-up sweep catches a straggler write that lands after the first Reset pass, and reports it in the log", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
-      resetSimulatorSession.mockResolvedValueOnce({
+      clearTestRoomSandbox.mockResolvedValueOnce({
+        eventId: "e1",
         messagesDeleted: 0,
         reactionsDeleted: 0,
-        speakersDeleted: 0,
+        requestsDeleted: 0,
         requestVotesDeleted: 0,
+        speakersDeleted: 0,
         roundVotesDeleted: 0,
-        stageReactionHeatDeleted: 0,
+        roundsDeleted: 0,
+        reactionHeatDeleted: 0,
       });
-      resetSimulatorSession.mockResolvedValueOnce({
+      clearTestRoomSandbox.mockResolvedValueOnce({
+        eventId: "e1",
         messagesDeleted: 1,
         reactionsDeleted: 0,
-        speakersDeleted: 0,
+        requestsDeleted: 0,
         requestVotesDeleted: 0,
+        speakersDeleted: 0,
         roundVotesDeleted: 0,
-        stageReactionHeatDeleted: 0,
+        roundsDeleted: 0,
+        reactionHeatDeleted: 0,
       });
 
       render(<SessionSimulatorPanel {...baseProps} />);
@@ -1893,13 +1886,11 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(1));
       expect(screen.getByTestId("sim-log")).not.toHaveTextContent("follow-up");
 
       await vi.advanceTimersByTimeAsync(2000);
-      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
-      // Same captured guest-id snapshot both times.
-      expect(resetSimulatorSession.mock.calls[1][1]).toEqual(resetSimulatorSession.mock.calls[0][1]);
+      await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(2));
       expect(screen.getByTestId("sim-log")).toHaveTextContent("follow-up");
       expect(screen.getByTestId("sim-log")).toHaveTextContent("caught 1 straggler row(s)");
     });
@@ -1911,10 +1902,10 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(1));
 
       await vi.advanceTimersByTimeAsync(2000);
-      await vi.waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(2));
       expect(screen.getByTestId("sim-log")).not.toHaveTextContent("follow-up");
     });
 
@@ -1924,7 +1915,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(simulateSeedSpeaker).toHaveBeenCalledTimes(2));
 
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalled());
+      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
 
       simulateSeedSpeaker.mockClear();
       fireEvent.click(screen.getByTestId("sim-start"));
@@ -1943,62 +1934,20 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(onSimulatorReset).toHaveBeenCalledTimes(1));
     });
 
-    it("reset with nothing ever started is a harmless no-op (no crash, resetSimulatorSession still called with an empty list)", async () => {
+    it("reset with nothing ever started is a harmless no-op (no crash, clearTestRoomSandbox still called)", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-reset"));
-      await waitFor(() => expect(resetSimulatorSession).toHaveBeenCalledWith("e1", []));
-    });
-  });
-
-  describe("Clear Test Room (real-device report: a genuinely comprehensive, room-wide sandbox clear, distinct from Reset Session)", () => {
-    it("a single tap calls clearTestRoomSandbox with this event's id — no confirmation step, same as Reset Session", async () => {
-      render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
       await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledWith("e1"));
-    });
-
-    it("is a visually and functionally distinct control from Reset Session — clicking it never calls resetSimulatorSession", async () => {
-      render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
-      await waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalled());
-      expect(resetSimulatorSession).not.toHaveBeenCalled();
-    });
-
-    it("calls onSimulatorReset so the caller reconciles its own local state, same as Reset Session does", async () => {
-      const onSimulatorReset = vi.fn();
-      render(<SessionSimulatorPanel {...baseProps} onSimulatorReset={onSimulatorReset} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
-      await waitFor(() => expect(onSimulatorReset).toHaveBeenCalledTimes(1));
-    });
-
-    it("logs the comprehensive per-table counts the action returned", async () => {
-      clearTestRoomSandbox.mockResolvedValueOnce({
-        eventId: "e1",
-        messagesDeleted: 3,
-        reactionsDeleted: 1,
-        requestsDeleted: 2,
-        requestVotesDeleted: 1,
-        speakersDeleted: 2,
-        roundVotesDeleted: 1,
-        roundsDeleted: 1,
-        reactionHeatDeleted: 4,
-      });
-      render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
-      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Clear Test Room"));
-      const log = screen.getByTestId("sim-log");
-      expect(log).toHaveTextContent("3 comments");
-      expect(log).toHaveTextContent("4 reaction heat row(s)");
     });
 
     it("surfaces a server-side refusal (e.g. this isn't actually the permanent test room) as a log line, not a crash", async () => {
       clearTestRoomSandbox.mockRejectedValueOnce(new Error("Clear Test Room refused: this event is not the designated permanent test room."));
       render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
-      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent(/Clear Test Room failed/));
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent(/Reset failed/));
     });
 
-    it("a second tap while one is already in flight is ignored, not a duplicate concurrent clear", async () => {
+    it("a second tap while one is already in flight is ignored, not a duplicate concurrent reset", async () => {
       let resolveFirst: (value: ClearTestRoomResult) => void = () => {};
       clearTestRoomSandbox.mockReturnValueOnce(
         new Promise((resolve) => {
@@ -2006,8 +1955,8 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         }),
       );
       render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      fireEvent.click(screen.getByTestId("sim-reset"));
       expect(clearTestRoomSandbox).toHaveBeenCalledTimes(1);
       resolveFirst({
         eventId: "e1",
@@ -2020,20 +1969,20 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
         roundsDeleted: 0,
         reactionHeatDeleted: 0,
       });
-      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Clear Test Room"));
+      await waitFor(() => expect(screen.getByTestId("sim-log")).toHaveTextContent("Reset"));
     });
 
-    it("Start Simulated Session is disabled while a Clear Test Room is in flight, same barrier as Reset Session", async () => {
-      let resolveClear: (value: ClearTestRoomResult) => void = () => {};
+    it("Start Simulated Session is disabled while a Reset is in flight", async () => {
+      let resolveReset: (value: ClearTestRoomResult) => void = () => {};
       clearTestRoomSandbox.mockReturnValueOnce(
         new Promise((resolve) => {
-          resolveClear = resolve;
+          resolveReset = resolve;
         }),
       );
       render(<SessionSimulatorPanel {...baseProps} />);
-      fireEvent.click(screen.getByTestId("sim-clear-test-room"));
+      fireEvent.click(screen.getByTestId("sim-reset"));
       expect(screen.getByTestId("sim-start")).toBeDisabled();
-      resolveClear({
+      resolveReset({
         eventId: "e1",
         messagesDeleted: 0,
         reactionsDeleted: 0,
@@ -2423,7 +2372,7 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 
       expect(simulateAdvanceSelection).not.toHaveBeenCalled();
-      expect(resetSimulatorSession).not.toHaveBeenCalled();
+      expect(clearTestRoomSandbox).not.toHaveBeenCalled();
       expect(simulateRoundVote).not.toHaveBeenCalled();
       expect(simulateRequestVote).not.toHaveBeenCalled();
     });

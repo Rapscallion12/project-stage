@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpandedComments } from "./expanded-comments";
 import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 import type { RankedPendingRequest } from "@/hooks/use-active-speaker-requests";
@@ -231,7 +231,7 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
       expect(screen.getByTitle("Requested the mic")).toBeInTheDocument();
     });
 
-    it("does not insert a new arrival into the visible list — it stays frozen at the moment of opening", () => {
+    it("real-device report: is genuinely live — a new arrival appears in the visible list immediately, no manual refresh", () => {
       const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
       expect(screen.getAllByTestId("expanded-comment-row")).toHaveLength(3);
 
@@ -243,52 +243,22 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
         />,
       );
 
-      // Still 3 rows — the new arrival did not get inserted automatically.
-      expect(screen.getAllByTestId("expanded-comment-row")).toHaveLength(3);
-      expect(screen.queryByText(/arrived after opening/)).not.toBeInTheDocument();
-    });
-
-    it("increments the new-comments counter as arrivals accumulate in the background", () => {
-      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
-      expect(screen.queryByTestId("expanded-comments-refresh")).not.toBeInTheDocument();
-
-      rerender(
-        <ExpandedComments {...baseProps} open messages={[...messages, makeMessage({ id: "m4" })]} />,
-      );
-      expect(screen.getByTestId("expanded-comments-refresh")).toHaveTextContent("1 new comment");
-
-      rerender(
-        <ExpandedComments
-          {...baseProps}
-          open
-          messages={[...messages, makeMessage({ id: "m4" }), makeMessage({ id: "m5" })]}
-        />,
-      );
-      expect(screen.getByTestId("expanded-comments-refresh")).toHaveTextContent("2 new comments");
-    });
-
-    it("tapping refresh incorporates the waiting comments at the top, newest first, and resets the counter", () => {
-      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
-      rerender(
-        <ExpandedComments
-          {...baseProps}
-          open
-          messages={[...messages, makeMessage({ id: "m4", body: "brand new", created_at: "2026-01-01T00:00:03.000Z" })]}
-        />,
-      );
-
-      fireEvent.click(screen.getByTestId("expanded-comments-refresh"));
-
+      // Now 4 rows — the new arrival is inserted live, no refresh tap needed.
       const rows = screen.getAllByTestId("expanded-comment-row");
       expect(rows).toHaveLength(4);
-      expect(rows[0]).toHaveTextContent("brand new");
+      expect(rows[0]).toHaveTextContent("arrived after opening");
+    });
+
+    it("the old manual-refresh model is retired entirely — no refresh control exists anywhere", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      rerender(<ExpandedComments {...baseProps} open messages={[...messages, makeMessage({ id: "m4" })]} />);
       expect(screen.queryByTestId("expanded-comments-refresh")).not.toBeInTheDocument();
     });
 
-    it("re-opening after being closed takes a fresh snapshot", () => {
+    it("re-opening after being closed lands at the newest position again", () => {
       const { rerender } = render(<ExpandedComments {...baseProps} open={false} messages={messages} />);
       rerender(<ExpandedComments {...baseProps} open messages={messages} />);
-      expect(screen.getAllByTestId("expanded-comment-row")).toHaveLength(3);
+      expect(screen.getAllByTestId("expanded-comment-row")[0]).toHaveTextContent("third");
 
       rerender(<ExpandedComments {...baseProps} open={false} messages={messages} />);
       const withNewOne = [...messages, makeMessage({ id: "m4", body: "landed while closed" })];
@@ -297,7 +267,217 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
       const rows = screen.getAllByTestId("expanded-comment-row");
       expect(rows).toHaveLength(4);
       expect(rows[0]).toHaveTextContent("landed while closed");
-      expect(screen.queryByTestId("expanded-comments-refresh")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("live viewport anchoring + new-comments indicator (real-device report: retired the frozen-snapshot model)", () => {
+    const messages = [
+      makeMessage({ id: "m1", body: "first", created_at: "2026-01-01T00:00:00.000Z" }),
+      makeMessage({ id: "m2", body: "second", created_at: "2026-01-01T00:00:01.000Z" }),
+      makeMessage({ id: "m3", body: "third", created_at: "2026-01-01T00:00:02.000Z" }),
+    ];
+
+    /** jsdom never actually lays out real pixel heights, so scrollHeight/scrollTop stay 0 by default — every anchoring test drives the scroll state explicitly rather than relying on real layout. */
+    function stubScrollMetrics(el: HTMLElement, opts: { scrollTop: number; scrollHeight: number }) {
+      Object.defineProperty(el, "scrollTop", { value: opts.scrollTop, writable: true, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: opts.scrollHeight, configurable: true });
+    }
+
+    /**
+     * Two jsdom gaps this whole describe block works around, neither a
+     * bug in the component itself:
+     * 1. `Element.scrollTo` is a jsdom no-op — it never actually updates
+     *    `scrollTop`, so a "jump to newest" assertion needs a real
+     *    implementation to check against.
+     * 2. The anchoring effect only *captures* the "before" scrollHeight
+     *    on a render where its own dependencies (`messages`, by
+     *    reference) actually change — a `stubScrollMetrics` call alone,
+     *    with no accompanying prop change, is invisible to it. Every
+     *    "establish a scrolled-away baseline" step below re-renders with
+     *    a fresh array *reference* (`[...messages]`, same content) for
+     *    exactly this reason.
+     */
+    const originalScrollTo = HTMLElement.prototype.scrollTo;
+    beforeEach(() => {
+      HTMLElement.prototype.scrollTo = function (this: HTMLElement, opts?: ScrollToOptions | number) {
+        if (typeof opts === "object" && opts !== null && typeof opts.top === "number") {
+          Object.defineProperty(this, "scrollTop", { value: opts.top, writable: true, configurable: true });
+        }
+      };
+    });
+    afterEach(() => {
+      HTMLElement.prototype.scrollTo = originalScrollTo;
+    });
+
+    it("a reader scrolled away from the newest position sees no scroll jump when a new comment arrives — the new-comments indicator appears instead", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      const scroller = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 800 });
+      rerender(<ExpandedComments {...baseProps} open messages={[...messages]} />);
+      fireEvent.scroll(scroller);
+      expect(screen.queryByTestId("expanded-comments-new-indicator")).not.toBeInTheDocument();
+
+      // A new comment prepends — simulate the resulting taller list.
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 850 });
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4", body: "new arrival", author_guest_id: "someone-else", author_profile_id: null })]}
+        />,
+      );
+
+      // Anchor preserved: scrollTop shifted by exactly the added height (50px), never reset to 0.
+      expect(scroller.scrollTop).toBe(250);
+      expect(screen.getByTestId("expanded-comments-new-indicator")).toHaveTextContent("1 new comment");
+    });
+
+    it("tapping the new-comments indicator scrolls to the newest position and clears the count", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      const scroller = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 800 });
+      rerender(<ExpandedComments {...baseProps} open messages={[...messages]} />);
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 850 });
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4", author_guest_id: "someone-else", author_profile_id: null })]}
+        />,
+      );
+      expect(screen.getByTestId("expanded-comments-new-indicator")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("expanded-comments-new-indicator"));
+      expect(scroller.scrollTop).toBe(0);
+      expect(screen.queryByTestId("expanded-comments-new-indicator")).not.toBeInTheDocument();
+    });
+
+    it("scrolling back up near the top manually also clears the indicator, without tapping it", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      const scroller = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 800 });
+      rerender(<ExpandedComments {...baseProps} open messages={[...messages]} />);
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 850 });
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4", author_guest_id: "someone-else", author_profile_id: null })]}
+        />,
+      );
+      expect(screen.getByTestId("expanded-comments-new-indicator")).toBeInTheDocument();
+
+      stubScrollMetrics(scroller, { scrollTop: 5, scrollHeight: 850 });
+      fireEvent.scroll(scroller);
+      expect(screen.queryByTestId("expanded-comments-new-indicator")).not.toBeInTheDocument();
+    });
+
+    it("a reader already at/near the newest position sees the new comment appear naturally, with no redundant indicator", async () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      // Stays at the top (the default state right after opening — never
+      // scrolled away in this test at all).
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m4", body: "appears naturally", author_guest_id: "someone-else", author_profile_id: null })]}
+        />,
+      );
+      expect(screen.getByText("appears naturally")).toBeInTheDocument();
+      // The state update that keeps `newCount` at 0 here is deliberately
+      // deferred a microtask (see the component's own `queueMicrotask`
+      // doc comment) — `waitFor` covers that gap the same way it already
+      // covers a real async round trip.
+      await waitFor(() => expect(screen.queryByTestId("expanded-comments-new-indicator")).not.toBeInTheDocument());
+    });
+
+    it("posting my own comment jumps straight to it, even while I was reading older comments (the deliberate anchoring exception)", async () => {
+      const viewerIdentity = { type: "profile" as const, id: "p1", displayName: "Jamie", username: null };
+      const { rerender } = render(
+        <ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />,
+      );
+      const scroller = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 800 });
+      rerender(<ExpandedComments {...baseProps} open messages={[...messages]} viewerIdentity={viewerIdentity} />);
+
+      stubScrollMetrics(scroller, { scrollTop: 200, scrollHeight: 850 });
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...messages, makeMessage({ id: "m4", body: "my own new comment", author_profile_id: "p1" })]}
+        />,
+      );
+
+      // Jumped to top (0), not anchored at the preserved 250 a stranger's
+      // comment would have produced.
+      expect(scroller.scrollTop).toBe(0);
+      expect(screen.getAllByTestId("expanded-comment-row")[0]).toHaveTextContent("my own new comment");
+      // Same deferred-microtask gap as the "already at newest" test above.
+      await waitFor(() => expect(screen.queryByTestId("expanded-comments-new-indicator")).not.toBeInTheDocument());
+    });
+  });
+
+  describe("own-comment 'You' marker (real-device report, Section 11-12)", () => {
+    const viewerIdentity = { type: "profile" as const, id: "p1", displayName: "Jamie", username: null };
+    const guestViewerIdentity = { type: "guest" as const, id: "g1", displayName: "Cheerful Raven" };
+
+    it("marks my own comment with a 'You' indicator", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[makeMessage({ id: "m1", author_profile_id: "p1", author_display_name: "Jamie" })]}
+        />,
+      );
+      expect(screen.getByTestId("comment-mine-marker")).toBeInTheDocument();
+    });
+
+    it("does not mark someone else's comment, even with the exact same display name", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[makeMessage({ id: "m1", author_profile_id: "someone-else", author_display_name: "Jamie" })]}
+        />,
+      );
+      expect(screen.queryByTestId("comment-mine-marker")).not.toBeInTheDocument();
+    });
+
+    it("marks the guest viewer's own comment using stable guest identity, never display name", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={guestViewerIdentity}
+          messages={[makeMessage({ id: "m1", author_profile_id: null, author_guest_id: "g1", author_display_name: "Cheerful Raven" })]}
+        />,
+      );
+      expect(screen.getByTestId("comment-mine-marker")).toBeInTheDocument();
+    });
+
+    it("marks every one of my comments across the whole history, not only the newest", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[
+            makeMessage({ id: "m1", author_profile_id: "p1", created_at: "2026-01-01T00:00:00.000Z" }),
+            makeMessage({ id: "m2", author_profile_id: "someone-else", created_at: "2026-01-01T00:00:01.000Z" }),
+            makeMessage({ id: "m3", author_profile_id: "p1", created_at: "2026-01-01T00:00:02.000Z" }),
+          ]}
+        />,
+      );
+      expect(screen.getAllByTestId("comment-mine-marker")).toHaveLength(2);
+    });
+
+    it("marks nothing at all when no viewer identity is given (degrades gracefully, never crashes)", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1", author_profile_id: "p1" })]} />);
+      expect(screen.queryByTestId("comment-mine-marker")).not.toBeInTheDocument();
     });
   });
 

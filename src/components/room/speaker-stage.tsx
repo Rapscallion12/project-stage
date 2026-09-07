@@ -3,7 +3,7 @@ import type { LocalAudioTrack, LocalVideoTrack, Participant, RemoteAudioTrack } 
 import { SpeakerTile } from "@/components/room/speaker-tile";
 import { SelfPreview } from "@/components/room/self-preview";
 import { AudioOnlyVisualizer } from "@/components/room/audio-only-visualizer";
-import { ReactionSideLane } from "@/components/room/stage-reactions-overlay";
+import { OnSpeakerReactionBursts, ReactionSideLane } from "@/components/room/stage-reactions-overlay";
 import { getParticipantIdentity } from "@/lib/livekit/token";
 import { deriveParticipantMediaState } from "@/lib/participant-media-state";
 import { cn } from "@/lib/utils";
@@ -507,6 +507,31 @@ export function SpeakerStage({
   const showSelfVideo = cameraPublished ? localMediaState.hasVideo : localVideoTrack !== null;
   const showSelfAudioOnly = !showSelfVideo && cameraPublished && localMediaState.hasAudio;
 
+  // Real-device report: "I still cannot see incoming audience emoji
+  // reactions in the small speaker self-preview." The self-preview slot
+  // (video or audio-only) simply never had a reaction overlay at all —
+  // not a filtering bug, there was nothing here to filter (see
+  // SelfPreview's own `reactions` doc comment for the full audit). Every
+  // reaction whose `targetIdentity` is my own identity, unconditionally —
+  // deliberately *not* gated on `stageReactions.displayMode` the way
+  // `renderTile`'s own `onSpeakerReactions` is: the whole self-preview
+  // slot only exists to let a speaker perceive audience feedback in a
+  // tiny corner, so per explicit instruction it always renders on-preview
+  // regardless of the viewer's global On Speaker/Side preference — Side
+  // mode's side-lane treatment doesn't fit inside a preview this small
+  // anyway. `showReactions=false` (Hidden) still suppresses this
+  // uniformly, same as every other reaction surface. Self-echo
+  // suppression needs no extra logic here: `stageReactions.incoming`
+  // itself never contains a duplicate of this browser's own confirmed
+  // echo (see useStageReactions' own id-dedup doc comment) — filtering by
+  // `targetIdentity === myIdentity` alone is already correct, since a
+  // speaker never sends a reaction targeting their own identity through
+  // any existing gesture.
+  const selfPreviewReactions =
+    stageReactions && stageReactions.showReactions
+      ? stageReactions.incoming.filter((r) => r.targetIdentity === myIdentity)
+      : [];
+
   // Speaker presentation-toggle correction (real-device report): "Normal
   // Stage View" is `isSpeaker && !soloMode` — an active speaker who has
   // flipped away from Speaker-Focused View. `!compact` excludes the
@@ -605,7 +630,7 @@ export function SpeakerStage({
           true) are both unaffected — `revealOwnVideo` is false in both,
           since it requires `isSpeaker && !soloMode`. */}
       {compact || revealOwnVideo ? null : showSelfVideo && localVideoTrack ? (
-        <SelfPreview track={localVideoTrack} onTap={onTapSelfPreview} />
+        <SelfPreview track={localVideoTrack} onTap={onTapSelfPreview} reactions={selfPreviewReactions} />
       ) : showSelfAudioOnly ? (
         <div
           data-testid="self-preview-audio-only"
@@ -632,6 +657,7 @@ export function SpeakerStage({
             track={localMediaState.microphoneTrack as LocalAudioTrack | RemoteAudioTrack}
             compact
           />
+          {selfPreviewReactions.length > 0 && <OnSpeakerReactionBursts reactions={selfPreviewReactions} compact />}
           {onTapSelfPreview && (
             <span
               aria-hidden="true"

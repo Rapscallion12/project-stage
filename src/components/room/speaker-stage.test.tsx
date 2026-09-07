@@ -292,6 +292,177 @@ describe("SpeakerStage", () => {
     });
   });
 
+  describe("self-preview reactions (real-device report: incoming audience reactions were never visible in the small self-preview)", () => {
+    const localIdentity = "profile:me";
+
+    it("a reaction targeting me renders inside the small self-preview, in Speaker-Focused View (soloMode)", () => {
+      const participant = fakeParticipant({ camera: { track: {} as never, isMuted: false } });
+      const stageReactions = {
+        ...MOCK_STAGE_REACTIONS_BASE,
+        myIdentity: localIdentity,
+        incoming: [
+          { id: "r1", targetIdentity: localIdentity, emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "me" }), speaker({ id: "s2", seat_number: 2, profile_id: "p2" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+          getParticipant={(identity) => (identity === localIdentity ? participant : undefined)}
+          localVideoTrack={fakeVideoTrack()}
+          stageReactions={stageReactions}
+        />,
+      );
+      const preview = screen.getByTestId("self-preview");
+      expect(preview).toHaveTextContent("🎉");
+    });
+
+    it("still renders regardless of the viewer's own global display preference — Side mode doesn't exempt the self-preview", () => {
+      const participant = fakeParticipant({ camera: { track: {} as never, isMuted: false } });
+      const stageReactions = {
+        ...MOCK_STAGE_REACTIONS_BASE,
+        myIdentity: localIdentity,
+        displayMode: "side" as const,
+        incoming: [
+          { id: "r1", targetIdentity: localIdentity, emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "me" }), speaker({ id: "s2", seat_number: 2, profile_id: "p2" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+          getParticipant={(identity) => (identity === localIdentity ? participant : undefined)}
+          localVideoTrack={fakeVideoTrack()}
+          stageReactions={stageReactions}
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toHaveTextContent("🔥");
+    });
+
+    it("renders in the audio-only self-preview too, when the camera is off but the mic is on", () => {
+      const participant = fakeParticipant({
+        camera: { track: {} as never, isMuted: true },
+        microphone: { track: {} as never, isMuted: false },
+      });
+      const stageReactions = {
+        ...MOCK_STAGE_REACTIONS_BASE,
+        myIdentity: localIdentity,
+        incoming: [
+          { id: "r1", targetIdentity: localIdentity, emoji: "😂", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "me" }), speaker({ id: "s2", seat_number: 2, profile_id: "p2" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+          getParticipant={(identity) => (identity === localIdentity ? participant : undefined)}
+          stageReactions={stageReactions}
+        />,
+      );
+      expect(screen.getByTestId("self-preview-audio-only")).toHaveTextContent("😂");
+    });
+
+    it("hidden mode (showReactions=false) suppresses it, same as every other reaction surface", () => {
+      const participant = fakeParticipant({ camera: { track: {} as never, isMuted: false } });
+      const stageReactions = {
+        ...MOCK_STAGE_REACTIONS_BASE,
+        myIdentity: localIdentity,
+        showReactions: false,
+        incoming: [
+          { id: "r1", targetIdentity: localIdentity, emoji: "😂", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "me" }), speaker({ id: "s2", seat_number: 2, profile_id: "p2" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+          getParticipant={(identity) => (identity === localIdentity ? participant : undefined)}
+          localVideoTrack={fakeVideoTrack()}
+          stageReactions={stageReactions}
+        />,
+      );
+      expect(screen.queryByText("😂")).not.toBeInTheDocument();
+    });
+
+    it("my own returned reaction (targeting someone else) never appears in my own self-preview — it isn't targeted at me", () => {
+      const participant = fakeParticipant({ camera: { track: {} as never, isMuted: false } });
+      const stageReactions = {
+        ...MOCK_STAGE_REACTIONS_BASE,
+        myIdentity: localIdentity,
+        incoming: [
+          { id: "r1", targetIdentity: "profile:p2", emoji: "❤️", x: 0.5, y: 0.5, senderIdentity: localIdentity, ts: Date.now() },
+        ],
+      };
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "me" }), speaker({ id: "s2", seat_number: 2, profile_id: "p2" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+          getParticipant={(identity) => (identity === localIdentity ? participant : undefined)}
+          localVideoTrack={fakeVideoTrack()}
+          stageReactions={stageReactions}
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).not.toHaveTextContent("❤️");
+    });
+
+    it("does not duplicate reactions in Normal Stage View — the self-preview is suppressed there and the full-size tile already shows them (see revealOwnVideo's own describe block)", () => {
+      // revealOwnVideo actually attaches my own tile's video here (unlike
+      // the soloMode tests above, where my own tile never renders at
+      // all) — a real fake track (attach/detach) is required, not the
+      // bare `{}` fixture the other tests get away with.
+      const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
+      const stageReactions = {
+        ...MOCK_STAGE_REACTIONS_BASE,
+        myIdentity: localIdentity,
+        incoming: [
+          { id: "r1", targetIdentity: localIdentity, emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+        ],
+      };
+      render(
+        <SpeakerStage
+          speakers={[speaker({ id: "s1", seat_number: 1, profile_id: "me" }), speaker({ id: "s2", seat_number: 2, profile_id: "p2" })]}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity={localIdentity}
+          isSpeaker
+          mySeatNumber={1}
+          getParticipant={(identity) => (identity === localIdentity ? participant : undefined)}
+          localVideoTrack={fakeVideoTrack()}
+          stageReactions={stageReactions}
+        />,
+      );
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      // Exactly one 🎉 — on my normal tile, never duplicated in a
+      // (now-absent) corner preview.
+      expect(screen.getAllByText("🎉")).toHaveLength(1);
+    });
+  });
+
   it("establishes the scrim, invisible and inert by default so it never blocks a tap on a tile underneath", () => {
     render(<SpeakerStage speakers={[]} orientation="portrait" {...baseProps} />);
     const scrim = screen.getByTestId("room-scrim");
