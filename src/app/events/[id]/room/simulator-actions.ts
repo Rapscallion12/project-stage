@@ -96,7 +96,12 @@ async function listActiveSpeakersForSimulator(eventId: string): Promise<EventSpe
 
 export async function simulateComment(eventId: string, guestId: string, displayName: string, body: string) {
   assertSimulatorAvailable();
-  await insertMessage({ eventId, identity: { type: "guest", id: guestId }, displayName, body });
+  // `insertMessage` now requires a client-generated id (optimistic-send
+  // redesign, real-device report) — the simulator has no optimistic UI
+  // of its own to correlate against, so a fresh id here is simply the
+  // row's own id, same as `gen_random_uuid()` would have produced by
+  // default before this pass.
+  await insertMessage({ eventId, identity: { type: "guest", id: guestId }, displayName, body, id: crypto.randomUUID() });
 }
 
 export async function simulateLike(messageId: string, guestId: string) {

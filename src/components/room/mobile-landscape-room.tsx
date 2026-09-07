@@ -124,6 +124,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
     onOpenRoomInfo,
     messages,
     reactions,
+    submitComment,
+    retryComment,
     pendingRequests,
     profileDirectory,
     stageReactions,
@@ -219,6 +221,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
                   eventId={event.id}
                   messages={messages}
                   reactions={reactions}
+                  submitComment={submitComment}
+                  retryComment={retryComment}
                   micRequestMode={micRequestMode}
                   onMicRequestModeChange={onMicRequestModeChange}
                   onHasPendingRequestChange={onHasPendingRequestChange}
@@ -249,6 +253,8 @@ export function MobileLandscapeRoom(props: RoomLayoutProps) {
             eventId={event.id}
             messages={messages}
             reactions={reactions}
+            submitComment={submitComment}
+            retryComment={retryComment}
             pendingRequests={pendingRequests}
             profileDirectory={profileDirectory}
             viewerIdentity={identity}

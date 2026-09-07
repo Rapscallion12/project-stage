@@ -136,6 +136,8 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  submitComment: vi.fn(),
+  retryComment: vi.fn(),
   pendingRequests: [],
   profileDirectory: {},
   isPreviewBuild: false,
@@ -198,12 +200,12 @@ describe("MobileLandscapeSpeakerView (issue #18, Speaker View landscape correcti
       expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
     });
 
-    it("sending a comment calls the existing sendMessage action", async () => {
-      sendMessage.mockResolvedValue(undefined);
-      render(<MobileLandscapeSpeakerView {...baseProps} />);
+    it("sending a comment calls submitComment (optimistic-send redesign)", () => {
+      const submitComment = vi.fn();
+      render(<MobileLandscapeSpeakerView {...baseProps} submitComment={submitComment} />);
       fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
       fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
-      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitComment).toHaveBeenCalledWith("hi");
     });
 
     it("renders ambient comments from the same messages stream", () => {

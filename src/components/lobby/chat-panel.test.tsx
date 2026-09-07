@@ -2,22 +2,26 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatPanel } from "./chat-panel";
 
-const { sendMessage, submitSpeakerRequest } = vi.hoisted(() => ({
-  sendMessage: vi.fn(),
+const { submitSpeakerRequest } = vi.hoisted(() => ({
   submitSpeakerRequest: vi.fn(),
 }));
 
-vi.mock("@/app/events/[id]/lobby/actions", () => ({ sendMessage }));
 vi.mock("@/app/events/[id]/room/actions", () => ({ submitSpeakerRequest }));
 
 // jsdom doesn't implement Element.scrollTo — unrelated to anything this
 // file tests.
 Element.prototype.scrollTo = vi.fn();
 
+// Real-device report (optimistic-send redesign): ordinary commenting no
+// longer goes through a server action from this component at all —
+// `submitComment` (a prop, from `useLobbyRealtime`) is the one thing this
+// file asserts against for the comment path now. Mic-request mode is
+// unchanged and still exercises the real `submitSpeakerRequest` mock.
 const baseProps = {
   eventId: "e1",
   messages: [],
   reactions: {},
+  submitComment: vi.fn(),
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
   onHasPendingRequestChange: vi.fn(),
@@ -51,24 +55,25 @@ describe("ChatPanel", () => {
     expect(screen.queryByPlaceholderText("Say something…")).not.toBeInTheDocument();
   });
 
-  it("submitting in normal mode calls sendMessage, never submitSpeakerRequest", async () => {
-    sendMessage.mockResolvedValue(undefined);
-    render(<ChatPanel {...baseProps} />);
+  it("submitting in normal mode calls submitComment immediately, never submitSpeakerRequest", () => {
+    const submitComment = vi.fn();
+    render(<ChatPanel {...baseProps} submitComment={submitComment} />);
     fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+    expect(submitComment).toHaveBeenCalledWith("hello");
     expect(submitSpeakerRequest).not.toHaveBeenCalled();
   });
 
-  it("submitting in mic-request mode calls the existing authoritative request path (submitSpeakerRequest), never sendMessage", async () => {
+  it("submitting in mic-request mode calls the existing authoritative request path (submitSpeakerRequest), never submitComment", async () => {
     submitSpeakerRequest.mockResolvedValue(undefined);
-    render(<ChatPanel {...baseProps} micRequestMode={true} />);
+    const submitComment = vi.fn();
+    render(<ChatPanel {...baseProps} submitComment={submitComment} micRequestMode={true} />);
     fireEvent.change(screen.getByPlaceholderText("What do you want to talk about?"), {
       target: { value: "AI and creativity" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Request" }));
     await waitFor(() => expect(submitSpeakerRequest).toHaveBeenCalled());
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(submitComment).not.toHaveBeenCalled();
   });
 
   it("a successful request flips hasPendingRequest and drops the composer back to normal mode", async () => {
@@ -104,7 +109,6 @@ describe("ChatPanel", () => {
   });
 
   it("submitting a normal chat message never acquires camera/mic", () => {
-    sendMessage.mockResolvedValue(undefined);
     const onPrepareMedia = vi.fn();
     render(<ChatPanel {...baseProps} onPrepareMedia={onPrepareMedia} />);
     fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
@@ -125,133 +129,154 @@ describe("ChatPanel", () => {
     expect(onMicRequestModeChange).not.toHaveBeenCalledWith(false);
   });
 
-  describe("draft preserved/cleared correctly on submission outcome (real-device report, Section 20)", () => {
-    it("clears the draft only after a successful submission", async () => {
-      sendMessage.mockResolvedValue(undefined);
-      render(<ChatPanel {...baseProps} />);
+  describe("comment draft clears instantly on submit, never waits for the server (optimistic-send redesign, Sections 1-2, 8, 10)", () => {
+    it("clears the draft the instant of submit — before submitComment's own caller ever resolves anything", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
       const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "hello there" } });
       expect(input.value).toBe("hello there");
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      await waitFor(() => expect(input.value).toBe(""));
+      expect(input.value).toBe("");
+      expect(submitComment).toHaveBeenCalledWith("hello there");
     });
 
-    it("never silently erases the draft on a failed submission — it stays exactly as typed", async () => {
-      sendMessage.mockResolvedValue({ error: "Couldn't send your message. Try again." });
-      render(<ChatPanel {...baseProps} />);
-      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "this will fail" } });
-      fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      await waitFor(() => expect(screen.getByText("Couldn't send your message. Try again.")).toBeInTheDocument());
-      expect(input.value).toBe("this will fail");
-    });
-
-    // Real-device report, second pass: found only by actually driving
-    // this against the real backend, not by inspection — a completely
-    // ordinary sequence (type comment 1, hit send, immediately start
-    // typing comment 2 while comment 1 is still round-tripping) meant
-    // comment 1's own *later* success cleared whatever the input
-    // currently held, silently erasing comment 2's already-in-progress,
-    // never-yet-submitted draft the moment comment 1 settled.
-    it("typing a new draft while a previous submission is still in flight is never wiped by that submission's own later success", async () => {
-      let resolveSend!: (value: undefined) => void;
-      sendMessage.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
-      render(<ChatPanel {...baseProps} />);
+    // Real-device report: the previous (blocking) composer could wipe a
+    // second, not-yet-submitted draft the moment an earlier submission's
+    // own success settled. Comment-mode no longer has any settle
+    // lifecycle to race with at all — this pins that a second draft typed
+    // immediately after sending the first is never touched.
+    it("typing a new draft immediately after sending the previous one is never wiped — no pending/settle lifecycle exists to race with", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
       const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
 
       fireEvent.change(input, { target: { value: "first comment" } });
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(input.value).toBe("");
 
-      // While "first comment" is still in flight, the user starts typing
-      // the next one — never submitted yet.
       fireEvent.change(input, { target: { value: "second comment, not yet sent" } });
-
-      // "first comment"'s own request now resolves successfully.
-      resolveSend(undefined);
-      await waitFor(() => expect(screen.getByPlaceholderText("Say something…")).toHaveFocus());
-
-      // The second draft survives — it was never submitted, so clearing
-      // the field now would silently erase real, unsent user input.
       expect(input.value).toBe("second comment, not yet sent");
-      expect(sendMessage).toHaveBeenCalledTimes(1); // never auto-submitted on its own
+      expect(submitComment).toHaveBeenCalledTimes(1);
+      expect(submitComment).toHaveBeenCalledWith("first comment");
+    });
+
+    it("refocuses the input immediately after submit — ready for the next comment with zero delay", () => {
+      render(<ChatPanel {...baseProps} />);
+      const input = screen.getByPlaceholderText("Say something…");
+      fireEvent.change(input, { target: { value: "hello" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(input).toHaveFocus();
     });
   });
 
-  describe("exactly-once submission, visible arrow and keyboard share one authoritative path (real-device report, Sections 1-2, 5, 21-22)", () => {
-    it("a single tap on the visible arrow submits exactly once", async () => {
-      sendMessage.mockResolvedValue(undefined);
+  describe("send button governed only by the current draft — never by an earlier comment's own pending state (Section 7)", () => {
+    it("disabled for an empty or whitespace-only draft, enabled otherwise", () => {
       render(<ChatPanel {...baseProps} />);
+      const button = screen.getByRole("button", { name: "Send" });
+      expect(button).toBeDisabled();
+      fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "   " } });
+      expect(button).toBeDisabled();
+      fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hi" } });
+      expect(button).not.toBeDisabled();
+    });
+
+    it("stays active for a freshly-typed valid draft immediately after sending a previous comment — ChatPanel itself has no notion of an 'earlier comment still pending' at all; that state lives entirely in useLobbyRealtime's own messages array, never here", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
+      const input = screen.getByPlaceholderText("Say something…");
+      const button = screen.getByRole("button", { name: "Send" });
+
+      fireEvent.change(input, { target: { value: "hello" } });
+      fireEvent.click(button);
+      expect(button).toBeDisabled(); // empty draft again, momentarily
+
+      fireEvent.change(input, { target: { value: "another one" } });
+      expect(button).not.toBeDisabled();
+    });
+  });
+
+  describe("multiple comments can be in flight at once — never single-flight-guarded (Section 5)", () => {
+    it("sending comment A, then immediately B, then C, calls submitComment three times in order — no dedup, no queueing at this layer", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
+      const input = screen.getByPlaceholderText("Say something…");
+      const button = screen.getByRole("button", { name: "Send" });
+
+      fireEvent.change(input, { target: { value: "A" } });
+      fireEvent.click(button);
+      fireEvent.change(input, { target: { value: "B" } });
+      fireEvent.click(button);
+      fireEvent.change(input, { target: { value: "C" } });
+      fireEvent.click(button);
+
+      expect(submitComment.mock.calls.map((call) => call[0])).toEqual(["A", "B", "C"]);
+    });
+  });
+
+  describe("exactly-once submission, visible arrow and keyboard share one authoritative path (real-device report, Sections 1-2, 9-10)", () => {
+    it("a single tap on the visible arrow submits exactly once", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
       fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      expect(submitComment).toHaveBeenCalledTimes(1);
     });
 
     it("an empty or whitespace-only draft never submits at all", () => {
-      render(<ChatPanel {...baseProps} />);
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
       fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "   " } });
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      expect(sendMessage).not.toHaveBeenCalled();
+      expect(submitComment).not.toHaveBeenCalled();
     });
 
-    it("a rapid second tap while the first send is still pending is ignored — never a duplicate submission", async () => {
-      let resolveSend!: (value: undefined) => void;
-      sendMessage.mockImplementation(() => new Promise((resolve) => { resolveSend = resolve; }));
-      render(<ChatPanel {...baseProps} />);
-      fireEvent.change(screen.getByPlaceholderText("Say something…"), { target: { value: "hello" } });
-      const sendButton = screen.getByRole("button", { name: "Send" });
-      fireEvent.click(sendButton);
-      fireEvent.click(sendButton); // same tick — a real disabled button wouldn't even deliver this, belt and suspenders
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-      resolveSend(undefined);
-      await waitFor(() => expect(screen.getByPlaceholderText("Say something…")).toHaveValue(""));
-    });
-
-    it("keyboard submission (the form's native submit event, e.g. Enter on this single-line input) invokes the exact same sendMessage path as the visible arrow, exactly once", async () => {
-      sendMessage.mockResolvedValue(undefined);
-      render(<ChatPanel {...baseProps} />);
+    it("keyboard submission (the form's native submit event, e.g. Enter on this single-line input) invokes the exact same submitComment path as the visible arrow, exactly once", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} />);
       const input = screen.getByPlaceholderText("Say something…");
       fireEvent.change(input, { target: { value: "typed then entered" } });
       fireEvent.submit(screen.getByTestId("chat-composer-form"));
-      await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
-      expect(sendMessage).toHaveBeenCalledWith("e1", undefined, expect.any(FormData));
+      expect(submitComment).toHaveBeenCalledTimes(1);
+      expect(submitComment).toHaveBeenCalledWith("typed then entered");
     });
 
-    it("keyboard submission clears the draft on success, same as the visible arrow", async () => {
-      sendMessage.mockResolvedValue(undefined);
+    it("keyboard submission clears the draft immediately, same as the visible arrow", () => {
       render(<ChatPanel {...baseProps} />);
       const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "typed then entered" } });
       fireEvent.submit(screen.getByTestId("chat-composer-form"));
-      await waitFor(() => expect(input.value).toBe(""));
+      expect(input.value).toBe("");
     });
 
-    it("keyboard submission preserves the draft on failure, same as the visible arrow", async () => {
-      sendMessage.mockResolvedValue({ error: "Couldn't send your message. Try again." });
+    it("sets enterKeyHint to 'send' on the single-line input, for a deterministic mobile keyboard action key (Section 9)", () => {
       render(<ChatPanel {...baseProps} />);
-      const input = screen.getByPlaceholderText("Say something…") as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "typed then entered" } });
-      fireEvent.submit(screen.getByTestId("chat-composer-form"));
-      await waitFor(() => expect(screen.getByText("Couldn't send your message. Try again.")).toBeInTheDocument());
-      expect(input.value).toBe("typed then entered");
+      expect(screen.getByPlaceholderText("Say something…")).toHaveAttribute("enterkeyhint", "send");
     });
 
-    it("the compact composer (both the ambient bar and Expanded Comments render this exact mode) uses the identical submission behavior", async () => {
-      sendMessage.mockResolvedValue(undefined);
-      render(<ChatPanel {...baseProps} compact />);
+    it("the compact composer (both the ambient bar and Expanded Comments render this exact mode) uses the identical submission behavior", () => {
+      const submitComment = vi.fn();
+      render(<ChatPanel {...baseProps} submitComment={submitComment} compact />);
       const input = screen.getByPlaceholderText("Add a comment…") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "compact composer test" } });
       fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
-      await waitFor(() => expect(input.value).toBe(""));
-      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(input.value).toBe("");
+      expect(submitComment).toHaveBeenCalledTimes(1);
+      expect(submitComment).toHaveBeenCalledWith("compact composer test");
     });
 
     it("the compact composer's arrow is a real functional submit target — not merely visually present", () => {
       render(<ChatPanel {...baseProps} compact />);
+      fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
       const button = screen.getByRole("button", { name: "Send comment" });
       expect(button).toHaveAttribute("type", "submit");
       expect(button.closest("form")).toBe(screen.getByTestId("chat-composer-form"));
       expect(button).not.toBeDisabled();
+    });
+
+    it("sets enterKeyHint to 'send' on the compact input too", () => {
+      render(<ChatPanel {...baseProps} compact />);
+      expect(screen.getByPlaceholderText("Add a comment…")).toHaveAttribute("enterkeyhint", "send");
     });
   });
 
@@ -357,13 +382,13 @@ describe("ChatPanel", () => {
       expect(onMicRequestModeChange).toHaveBeenCalledWith(true);
     });
 
-    it("sending a normal comment calls sendMessage, never submitSpeakerRequest or onPrepareMedia", async () => {
-      sendMessage.mockResolvedValue(undefined);
+    it("sending a normal comment calls submitComment, never submitSpeakerRequest or onPrepareMedia", () => {
+      const submitComment = vi.fn();
       const onPrepareMedia = vi.fn();
-      render(<ChatPanel {...baseProps} compact onPrepareMedia={onPrepareMedia} />);
+      render(<ChatPanel {...baseProps} submitComment={submitComment} compact onPrepareMedia={onPrepareMedia} />);
       fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "nice point" } });
       fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
-      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitComment).toHaveBeenCalledWith("nice point");
       expect(submitSpeakerRequest).not.toHaveBeenCalled();
       expect(onPrepareMedia).not.toHaveBeenCalled();
     });
@@ -401,12 +426,12 @@ describe("ChatPanel", () => {
         expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
       });
 
-      it("still submits an ordinary comment via sendMessage with the toggle hidden", async () => {
-        sendMessage.mockResolvedValue(undefined);
-        render(<ChatPanel {...baseProps} compact allowMicRequest={false} />);
+      it("still submits an ordinary comment via submitComment with the toggle hidden", () => {
+        const submitComment = vi.fn();
+        render(<ChatPanel {...baseProps} submitComment={submitComment} compact allowMicRequest={false} />);
         fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hi" } });
         fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
-        await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+        expect(submitComment).toHaveBeenCalledWith("hi");
       });
     });
 

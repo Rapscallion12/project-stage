@@ -24,6 +24,14 @@ merged to `main`.
   finding) — opening it now keeps a compact live view of both speakers,
   side by side, at the top of the screen the whole time you're reading
   comments, so you never lose sight of the conversation.
+- **The comment composer felt like it was waiting for the server before
+  letting you keep going** (real-device report) — sending a comment now
+  feels instant: it appears in the live feed and the input clears the
+  moment you hit send or press Return, and you can immediately start
+  typing (and sending) the next one without waiting on the previous
+  one's confirmation. A comment that fails to send stays visible with a
+  small "Not sent · Retry" — tapping it retries just that message,
+  without touching whatever you're currently typing.
 
 ## [public-beta-v2] - 2026-09-05
 

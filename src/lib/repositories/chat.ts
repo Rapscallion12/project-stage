@@ -77,15 +77,42 @@ export async function insertMessage(params: {
   identity: AuthorIdentity;
   displayName: string;
   body: string;
+  /**
+   * Real-device report (optimistic-send redesign): client-generated —
+   * the exact same id the caller already showed the user optimistically,
+   * *before* this insert was even attempted. Passing it through
+   * explicitly (rather than leaving the column to its own `default
+   * gen_random_uuid()`) is what lets the client's own Realtime
+   * subscription recognize its own confirmed row by exact id match,
+   * never by guessing from body/display-name/timestamp — and what makes
+   * a retry of an already-successful send idempotent (see `error.code
+   * === "23505"` below): retrying with a *new* random id would always
+   * insert a genuine duplicate row instead of safely no-op'ing against
+   * the original.
+   */
+  id: string;
 }): Promise<{ ok: boolean; error?: { message: string; code: string | undefined } }> {
   const supabase = await createClient();
   const { error } = await supabase.from("event_chat_messages").insert({
+    id: params.id,
     event_id: params.eventId,
     author_profile_id: params.identity.type === "profile" ? params.identity.id : null,
     author_guest_id: params.identity.type === "guest" ? params.identity.id : null,
     author_display_name: params.displayName,
     body: params.body,
   });
+
+  if (!error) return { ok: true };
+
+  // Idempotent retry, same reasoning `insertReaction` below already
+  // established: a primary-key conflict on this exact client-generated
+  // id means the *original* attempt actually reached the database —
+  // only its acknowledgment was lost (a dropped response, a client
+  // retry firing before the first one's result came back) — never a
+  // second, genuinely new row. Reported to the caller as success, not a
+  // failure to retry again.
+  if (error.code === "23505") return { ok: true };
+
   // Real-device report ("commenting is currently not working"): this
   // used to collapse `error` to a bare boolean, discarding the actual
   // Postgres error (an RLS rejection, an FK violation, a constraint
@@ -93,7 +120,7 @@ export async function insertMessage(params: {
   // how many times it failed. The caller (`sendMessage`) decides what a
   // *user* ever sees; this repository's job is just to stop throwing the
   // real reason away.
-  return error ? { ok: false, error: { message: error.message, code: error.code } } : { ok: true };
+  return { ok: false, error: { message: error.message, code: error.code } };
 }
 
 export async function insertReaction(params: {

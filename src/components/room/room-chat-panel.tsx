@@ -19,6 +19,8 @@ export function RoomChatPanel({
   eventId,
   messages,
   reactions,
+  submitComment,
+  retryComment,
   micRequestMode,
   onMicRequestModeChange,
   onHasPendingRequestChange,
@@ -29,6 +31,9 @@ export function RoomChatPanel({
   eventId: string;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /** From `useLobbyRealtime` — see `ChatPanel`'s own doc comment. */
+  submitComment: (body: string) => void;
+  retryComment?: (id: string) => void;
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
@@ -44,6 +49,8 @@ export function RoomChatPanel({
         eventId={eventId}
         messages={messages}
         reactions={reactions}
+        submitComment={submitComment}
+        retryComment={retryComment}
         micRequestMode={micRequestMode}
         onMicRequestModeChange={onMicRequestModeChange}
         onHasPendingRequestChange={onHasPendingRequestChange}

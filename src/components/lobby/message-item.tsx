@@ -8,9 +8,20 @@ import type { LobbyMessage, ReactionState } from "@/hooks/use-lobby-realtime";
 export function MessageItem({
   message,
   reaction,
+  onRetry,
 }: {
   message: LobbyMessage;
   reaction: ReactionState | undefined;
+  /**
+   * Real-device report (optimistic-send redesign, Section 16 — "both
+   * composer surfaces... same underlying system"): the full (non-compact)
+   * `ChatPanel` renders live comments through this same `submitComment`
+   * path, so an own message here can be `optimisticStatus: "sending"` or
+   * `"failed"` exactly like `ExpandedComments`' `CommentRow`. `onRetry`
+   * is `useLobbyRealtime`'s `retryComment`, called with this message's own
+   * id — undefined for callers (or messages) that never need it.
+   */
+  onRetry?: (id: string) => void;
 }) {
   const [pending, startTransition] = useTransition();
   const [optimisticallyReacted, setOptimisticallyReacted] = useState(false);
@@ -44,7 +55,19 @@ export function MessageItem({
             🎤 requesting to speak
           </span>
         )}
-        <span className="text-xs text-muted">{time}</span>
+        {message.optimisticStatus === "failed" ? (
+          <button
+            type="button"
+            onClick={() => onRetry?.(message.id)}
+            className="text-xs font-medium text-red-500 underline-offset-2 hover:underline"
+          >
+            Not sent · Retry
+          </button>
+        ) : message.optimisticStatus === "sending" ? (
+          <span className="text-xs text-muted/70">Sending…</span>
+        ) : (
+          <span className="text-xs text-muted">{time}</span>
+        )}
       </div>
       <div className="flex items-end gap-2">
         <p className="break-words text-sm">{message.body}</p>

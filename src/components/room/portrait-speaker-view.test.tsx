@@ -136,6 +136,8 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  submitComment: vi.fn(),
+  retryComment: vi.fn(),
   pendingRequests: [],
   profileDirectory: {},
   isPreviewBuild: false,
@@ -234,12 +236,12 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       expect(screen.queryByTestId("watch-composer-mic")).not.toBeInTheDocument();
     });
 
-    it("sending a comment calls the existing sendMessage action", async () => {
-      sendMessage.mockResolvedValue(undefined);
-      render(<PortraitSpeakerView {...baseProps} />);
+    it("sending a comment calls submitComment (optimistic-send redesign)", () => {
+      const submitComment = vi.fn();
+      render(<PortraitSpeakerView {...baseProps} submitComment={submitComment} />);
       fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello from the stage" } });
       fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
-      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitComment).toHaveBeenCalledWith("hello from the stage");
     });
 
     it("Gift stays inert, unchanged", () => {

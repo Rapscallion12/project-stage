@@ -165,6 +165,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
     stageRound,
     messages,
     reactions,
+    submitComment,
+    retryComment,
     pendingRequests,
     profileDirectory,
     onOpenRoomInfo,
@@ -346,6 +348,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
                   eventId={event.id}
                   messages={messages}
                   reactions={reactions}
+                  submitComment={submitComment}
+                  retryComment={retryComment}
                   micRequestMode={micRequestMode}
                   onMicRequestModeChange={onMicRequestModeChange}
                   onHasPendingRequestChange={onHasPendingRequestChange}
@@ -376,6 +380,8 @@ export function PortraitRoom(props: RoomLayoutProps) {
             eventId={event.id}
             messages={messages}
             reactions={reactions}
+            submitComment={submitComment}
+            retryComment={retryComment}
             pendingRequests={pendingRequests}
             profileDirectory={profileDirectory}
             viewerIdentity={identity}

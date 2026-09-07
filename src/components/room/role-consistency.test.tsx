@@ -122,6 +122,8 @@ const audienceProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  submitComment: vi.fn(),
+  retryComment: vi.fn(),
   pendingRequests: [],
   profileDirectory: {},
   isPreviewBuild: false,

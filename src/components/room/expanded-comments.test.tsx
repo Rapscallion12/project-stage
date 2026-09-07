@@ -56,6 +56,8 @@ const baseProps = {
   eventId: "e1",
   onClose: vi.fn(),
   reactions: {} as Record<string, ReactionState>,
+  submitComment: vi.fn(),
+  retryComment: vi.fn(),
   pendingRequests: [] as RankedPendingRequest[],
   micRequestMode: false,
   onMicRequestModeChange: vi.fn(),
@@ -613,6 +615,115 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     });
   });
 
+  describe("optimistic comment status (optimistic-send redesign, Sections 11-15)", () => {
+    const viewerIdentity = { type: "profile" as const, id: "p1", displayName: "Jamie", username: null };
+
+    it("shows a subtle 'Sending…' in place of the timestamp while optimisticStatus is 'sending'", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", optimisticStatus: "sending" })]}
+        />,
+      );
+      expect(screen.getByTestId("comment-sending")).toHaveTextContent("Sending…");
+    });
+
+    it("shows a tappable 'Not sent · Retry' in place of the timestamp when optimisticStatus is 'failed'", () => {
+      render(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[makeMessage({ id: "m1", optimisticStatus: "failed" })]}
+        />,
+      );
+      expect(screen.getByTestId("comment-not-sent-retry")).toHaveTextContent("Not sent · Retry");
+    });
+
+    it("tapping Retry calls retryComment with that exact message's id — never touches the composer's own draft", () => {
+      const retryComment = vi.fn();
+      render(
+        <ExpandedComments
+          {...baseProps}
+          retryComment={retryComment}
+          open
+          messages={[makeMessage({ id: "m1", optimisticStatus: "failed" })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("comment-not-sent-retry"));
+      expect(retryComment).toHaveBeenCalledWith("m1");
+      expect((screen.getByPlaceholderText("Add a comment…") as HTMLInputElement).value).toBe("");
+    });
+
+    it("tapping Retry never also triggers the row's own double-tap-to-like handler", () => {
+      const retryComment = vi.fn();
+      const onLike = vi.fn();
+      render(
+        <ExpandedComments
+          {...baseProps}
+          retryComment={retryComment}
+          open
+          messages={[makeMessage({ id: "m1", optimisticStatus: "failed" })]}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("comment-not-sent-retry"));
+      fireEvent.click(screen.getByTestId("comment-not-sent-retry"));
+      expect(onLike).not.toHaveBeenCalled();
+    });
+
+    it("a normal (never-optimistic) message still shows its ordinary timestamp, not a status", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage({ id: "m1" })]} />);
+      expect(screen.queryByTestId("comment-sending")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("comment-not-sent-retry")).not.toBeInTheDocument();
+    });
+
+    // Design insight (optimistic-send redesign): confirmation replaces the
+    // optimistic entry in place — same id, same array index — so the
+    // anchoring effect's own "is this a new arrival" check (id changed)
+    // never fires again on confirmation. This is what keeps the earlier
+    // optimistic-insert flash from firing a second time, and confirms no
+    // extra guarding was needed in this file for that.
+    it("confirming an optimistic message (same id, optimisticStatus clearing) never re-flashes or re-jumps — only the original optimistic insert flashes", async () => {
+      vi.useFakeTimers();
+      const messages = [makeMessage({ id: "m0", body: "earlier", author_profile_id: "someone-else" })];
+      const { rerender } = render(
+        <ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />,
+      );
+
+      // The optimistic insert — flashes immediately.
+      const optimistic = makeMessage({ id: "mine", author_profile_id: "p1", optimisticStatus: "sending" });
+      rerender(
+        <ExpandedComments {...baseProps} open viewerIdentity={viewerIdentity} messages={[...messages, optimistic]} />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="mine"]')).toHaveAttribute("data-just-sent", "true");
+
+      // Let the flash expire, exactly as a real confirmation delay would.
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="mine"]')).not.toHaveAttribute("data-just-sent", "true");
+
+      // Confirmation: same id, optimisticStatus cleared — never a new
+      // array id, so this must not re-trigger the flash.
+      const confirmed = { ...optimistic, optimisticStatus: undefined };
+      rerender(
+        <ExpandedComments {...baseProps} open viewerIdentity={viewerIdentity} messages={[...messages, confirmed]} />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="mine"]')).not.toHaveAttribute("data-just-sent", "true");
+      expect(screen.queryByTestId("comment-sending")).not.toBeInTheDocument();
+      vi.useRealTimers();
+    });
+  });
+
   describe("Top Speaker Requests — separate section, live, not frozen", () => {
     it("renders nothing for the section when there are no pending requests", () => {
       render(<ExpandedComments {...baseProps} open messages={[]} pendingRequests={[]} />);
@@ -904,17 +1015,15 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
     });
   });
 
-  it("sends a comment from the expanded composer via the existing sendMessage action", async () => {
-    sendMessage.mockResolvedValue(undefined);
-    render(<ExpandedComments {...baseProps} open messages={[]} />);
+  it("sends a comment from the expanded composer via submitComment (optimistic-send redesign)", () => {
+    const submitComment = vi.fn();
+    render(<ExpandedComments {...baseProps} submitComment={submitComment} open messages={[]} />);
 
     const input = screen.getByPlaceholderText("Add a comment…");
     fireEvent.change(input, { target: { value: "hello from the sheet" } });
     fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
 
-    await waitFor(() => expect(sendMessage).toHaveBeenCalled());
-    const formData = sendMessage.mock.calls[0][2] as FormData;
-    expect(formData.get("body")).toBe("hello from the sheet");
+    expect(submitComment).toHaveBeenCalledWith("hello from the sheet");
   });
 
   describe("miniStage (mobile UX correction: this sheet must not cover the entire stage)", () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileLandscapeRoom } from "./mobile-landscape-room";
 import type { RoomLayoutProps } from "@/components/room/types";
@@ -118,6 +118,8 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  submitComment: vi.fn(),
+  retryComment: vi.fn(),
   pendingRequests: [],
   profileDirectory: {},
   isPreviewBuild: false,
@@ -221,12 +223,12 @@ describe("MobileLandscapeRoom (real-device finding: a phone rotated sideways is 
       expect(input).not.toBeDisabled();
     });
 
-    it("sending a comment calls the existing sendMessage action", async () => {
-      sendMessage.mockResolvedValue(undefined);
-      render(<MobileLandscapeRoom {...baseProps} />);
+    it("sending a comment calls submitComment (optimistic-send redesign)", () => {
+      const submitComment = vi.fn();
+      render(<MobileLandscapeRoom {...baseProps} submitComment={submitComment} />);
       fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello from the audience" } });
       fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
-      await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+      expect(submitComment).toHaveBeenCalledWith("hello from the audience");
       expect(submitSpeakerRequest).not.toHaveBeenCalled();
     });
 

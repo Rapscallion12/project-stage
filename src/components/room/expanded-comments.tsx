@@ -167,6 +167,8 @@ export function ExpandedComments({
   eventId,
   messages,
   reactions,
+  submitComment,
+  retryComment,
   pendingRequests,
   micRequestMode,
   onMicRequestModeChange,
@@ -184,6 +186,10 @@ export function ExpandedComments({
   eventId: string;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /** From `useLobbyRealtime` — see `ChatPanel`'s own doc comment for the full optimistic-send design this embedded composer now uses. */
+  submitComment: (body: string) => void;
+  /** Retries one previously-failed optimistic comment by id — surfaced on `CommentRow`'s own "Not sent · Retry" control. */
+  retryComment: (id: string) => void;
   pendingRequests: RankedPendingRequest[];
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
@@ -507,6 +513,7 @@ export function ExpandedComments({
                   requestVote={voteByMessageId.get(message.id)}
                   onLike={handleLike}
                   onVote={handleVote}
+                  onRetry={retryComment}
                   testId="expanded-top-request-row"
                   profileEntry={message.author_profile_id ? profileDirectory[message.author_profile_id] : undefined}
                   isMine={isMyMessage(message, viewerIdentity)}
@@ -549,6 +556,7 @@ export function ExpandedComments({
               requestVote={voteByMessageId.get(message.id)}
               onLike={handleLike}
               onVote={handleVote}
+              onRetry={retryComment}
               testId="expanded-comment-row"
               profileEntry={message.author_profile_id ? profileDirectory[message.author_profile_id] : undefined}
               isMine={isMyMessage(message, viewerIdentity)}
@@ -563,6 +571,8 @@ export function ExpandedComments({
           eventId={eventId}
           messages={messages}
           reactions={reactions}
+          submitComment={submitComment}
+          retryComment={retryComment}
           micRequestMode={micRequestMode}
           onMicRequestModeChange={onMicRequestModeChange}
           onHasPendingRequestChange={onHasPendingRequestChange}
@@ -583,6 +593,7 @@ function CommentRow({
   requestVote,
   onLike,
   onVote,
+  onRetry,
   testId,
   profileEntry,
   isMine = false,
@@ -594,6 +605,13 @@ function CommentRow({
   requestVote: RankedPendingRequest | undefined;
   onLike: (messageId: string) => void;
   onVote: (messageId: string) => void;
+  /**
+   * Real-device report (optimistic-send redesign, Sections 12/16): from
+   * `useLobbyRealtime`'s `retryComment` — retries this exact message by
+   * id when it's showing `optimisticStatus === "failed"`. Never touches
+   * the composer's current draft — see `retryComment`'s own doc comment.
+   */
+  onRetry: (id: string) => void;
   testId: string;
   /** Issue #29: this message author's own public profile, if `message.author_profile_id` has one. Undefined for a guest or an account without a username yet — the avatar stays non-navigable exactly as before. */
   profileEntry?: ProfileDirectoryEntry;
@@ -707,7 +725,25 @@ function CommentRow({
             🎙 requesting to speak
           </span>
         )}
-        <span className="text-xs text-white/40">{time}</span>
+        {message.optimisticStatus === "failed" ? (
+          <button
+            type="button"
+            data-testid="comment-not-sent-retry"
+            onClick={(event) => {
+              event.stopPropagation(); // don't also trigger this row's own double-tap-to-like handler
+              onRetry(message.id);
+            }}
+            className="text-xs font-medium text-red-400 underline-offset-2 hover:underline"
+          >
+            Not sent · Retry
+          </button>
+        ) : message.optimisticStatus === "sending" ? (
+          <span data-testid="comment-sending" className="text-xs text-white/30">
+            Sending…
+          </span>
+        ) : (
+          <span className="text-xs text-white/40">{time}</span>
+        )}
       </div>
       <div className="flex items-end justify-between gap-2">
         <p className="break-words text-sm text-white/80">{message.body}</p>

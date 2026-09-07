@@ -100,6 +100,18 @@ export type RoomLayoutProps = {
   reconnectingIdentities: ReadonlySet<string>;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /**
+   * Real-device report (optimistic-send redesign): from `useLobbyRealtime`
+   * (instantiated once, in EventRoom, alongside `messages`/`reactions`
+   * themselves) — inserts an optimistic comment into `messages`
+   * synchronously and returns immediately; the server round trip and
+   * reconciliation happen entirely in the background. Every
+   * `ChatPanel`/`ExpandedComments` call site threads this straight
+   * through — see `ChatPanel`'s own doc comment for the full design.
+   */
+  submitComment: (body: string) => void;
+  /** Retries one previously-failed optimistic comment by id — see `ChatPanel`'s own doc comment. */
+  retryComment: (id: string) => void;
   /** Issue #21, Phase 1: every currently-pending speaker request, ranked by live vote count — the live (never frozen) source for Expanded Comments' "Top Speaker Requests" section. See useActiveSpeakerRequests' own doc comment for why this stays live while Recent Comments freezes. */
   pendingRequests: RankedPendingRequest[];
   /** Issue #29: `profile_id` → `{username, avatarUrl}` for every currently-visible speaker/comment-author/RTS-candidate with a public profile — computed once in EventRoom (`useProfileDirectory`), passed straight through to SpeakerStage/ExpandedComments. */

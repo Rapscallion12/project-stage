@@ -4,6 +4,112 @@ Newest entry first.
 
 ---
 
+## 2026-09-07 — Session 76: comment composer rebuilt as fully optimistic/non-blocking (client-generated id reconciliation, outgoing queue, per-message failure/retry), a real StrictMode-only "comments never send" bug found and fixed live (issue #21), on `feature/mobile-speaker-view-toggle`
+
+**Why the previous pass's composer still felt blocked**: last session's
+fix (a single controlled `draft` + one `useActionState` pending/settle
+lifecycle) was still fundamentally a blocking model — the user's own
+comment only appeared once the server round trip settled, and the
+composer's `pending` state (shared with mic-request mode) disabled the
+send control while any comment was in flight. Real iPhone Safari testing
+called this out explicitly as the actual product defect, not an edge
+case to patch: a live chat composer must never wait on the network for
+the *sending* interaction, only for eventual confirmation.
+
+**Optimistic-send architecture**: `submitComment` (new, on
+`useLobbyRealtime`) inserts a locally-built comment into the same live
+`messages` array immediately — client-generated `crypto.randomUUID()`,
+current identity, `optimisticStatus: "sending"` — and returns
+synchronously; `ChatPanel`'s `handleSubmit` clears `draft` and refocuses
+in the same tick, never awaiting anything. The server round trip
+(`sendMessage`) runs entirely in the background via a small outgoing
+queue. Mic-request mode (`submitSpeakerRequest`) is deliberately
+untouched — claiming the mic is a real, singular server authorization
+decision, not a chat message worth optimistically assuming succeeded —
+so `handleSubmit` now branches at its very top between the old blocking
+path and the new instant one.
+
+**Reconciliation, exact not heuristic**: `event_chat_messages.id` accepts
+a client-supplied UUID at insert time (`insertMessage` now takes an `id`
+param) — the same id the optimistic entry already used becomes the row's
+own primary key, so `useLobbyRealtime`'s own Realtime `postgres_changes`
+INSERT handler finds and replaces the optimistic entry *in place* (same
+array index) by exact id match, never by guessing from body/name/
+timestamp. Same-id in-place replacement is also what keeps
+`ExpandedComments`' existing jump/flash-on-my-newest-comment effect from
+re-firing on confirmation, with zero changes to that effect — the
+"newest message id" never actually changes across the optimistic→
+confirmed transition. `insertMessage` treats a primary-key conflict
+(`23505`) as success (mirroring `insertReaction`'s own established
+pattern), making a retry of an already-server-side-successful send safe.
+
+**Outgoing queue**: a strict FIFO (`outgoingQueueRef`) drains one id at a
+time, pacing consecutive dispatches ≥2100ms apart — a small safety margin
+over the server's own 2000ms per-identity rate limit — so a fast typing
+burst never trips that check, while every message still appears to the
+user instantly regardless of the pacing (only the *background* dispatch
+is delayed). The 2000ms server rule itself was audited, reported, and
+left untouched, per explicit instruction.
+
+**Failure/retry**: a failed or thrown send marks that one message
+`optimisticStatus: "failed"` — never restores its text into the
+composer, never freezes it, never blocks new comments. `CommentRow`/
+`MessageItem` render "Not sent · Retry" in place of the timestamp;
+tapping it calls `retryComment(id)`, which re-marks that exact message
+"sending" and re-enqueues it under its original id (never a new one).
+
+**A real bug found only by driving this against a real `next dev`
+server, not caught by any mock-based test**: `mountedRef` — a plain
+`useRef(true)` paired with a *cleanup-only* effect (`useEffect(() => ()
+=> { mountedRef.current = false }, [])`) — never got reset back to
+`true` on React StrictMode's dev-only mount→simulated-unmount→remount
+double-invoke. The ref stayed permanently `false` for the rest of the
+component's real, still-mounted lifetime, silently defeating
+`runOutgoingQueue`'s own `if (!mountedRef.current) return` guard: every
+comment still appeared optimistically (that part never touched the ref),
+but the actual background dispatch to `sendMessage` never ran at all —
+every comment stuck on "Sending…" forever, confirmed via a direct query
+against the real linked database showing zero rows ever landed. This is
+dev-only (StrictMode never double-invokes in a production build), so an
+internal preview deploy alone would never have surfaced it — only
+running a real local dev server and checking the real database caught
+it. Fixed by moving `mountedRef.current = true` into the effect body
+itself, not just the initial `useRef`. Not reproducible in this
+project's own vitest+RTL harness (confirmed directly: `renderHook`'s
+`wrapper: StrictMode` does not actually double-invoke effects here), so
+this is documented in the hook's own doc comment rather than backed by a
+misleading unit test — the real-browser verification below is the
+authoritative check for this one.
+
+**Testing**: `use-lobby-realtime.test.ts` gained dedicated describe
+blocks for optimistic insert, reconciliation/idempotency, failure/retry,
+outgoing-queue order and pacing (fake timers), and Reset Session's
+`clearOptimisticState`. `chat-panel.test.tsx` rewritten for the
+`submitComment`-prop-based instant path (mic-request-mode tests
+unchanged). `expanded-comments.test.tsx` gained a "Sending…"/"Not sent ·
+Retry" describe block, including a test pinning that confirmation (same
+id, `optimisticStatus` clearing) never re-triggers the newest-comment
+flash. `lobby/actions.test.ts` rewritten for `sendMessage`'s new
+`(eventId, body, clientMessageId)` signature.
+
+**Verified live against the real backend** (real `next dev`, real linked
+Supabase, not jsdom): single send, keyboard Enter, three rapid sends
+(A/B/C) all appearing instantly and landing in the database in the exact
+order sent, no duplicates, send button staying active for a fresh draft
+while an earlier comment was still transporting. Failure/retry validated
+via the automated suite (a live failure would require deliberately
+breaking RLS/rate-limiting against the shared sandbox, judged out of
+scope for this pass).
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, full suite 1614/1615 (the one failure is the
+pre-existing, already-documented `stage-rounds.test.ts` real-DB timeout
+flake, unrelated to this change).
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-07 — Session 75: comment-composer reliability — one controlled draft state replaces a native-form-reset/manual-ref-restore race, real double-submission and mid-flight-typing bugs found and fixed live, newly-sent comment flash added (issue #21), on `feature/mobile-speaker-view-toggle`
 
 **Root cause of "send is unreliable, draft doesn't consistently clear"**:

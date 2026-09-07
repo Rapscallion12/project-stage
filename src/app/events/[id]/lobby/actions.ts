@@ -7,28 +7,61 @@ import { hasSentMessageRecently, insertMessage, insertReaction } from "@/lib/rep
 import { isPreviewOrDevBuild } from "@/lib/preview-mode";
 
 const MESSAGE_MAX_LENGTH = 500;
+/**
+ * Real-device report (optimistic-send redesign, Section 6's own
+ * explicit "report the exact current rate limit" instruction): the
+ * *actual* rule, unchanged by this pass — one message per identity per
+ * event every 2 seconds, enforced here by re-querying this identity's
+ * own most recent message fresh from the database (`hasSentMessageRecently`
+ * below), never a client-trusted clock. This exists as basic anti-spam,
+ * not a chat-pacing feature — 2s is well inside "a human typing and
+ * hitting send twice in a row" territory, which is exactly the real-
+ * device symptom that prompted this whole pass. Not weakened here (an
+ * explicit instruction: "do not automatically change security policy
+ * without inspecting it") — instead, `useLobbyRealtime`'s own outgoing
+ * queue (`MIN_SEND_INTERVAL_MS`, currently 2100ms, a small safety margin
+ * over this exact value) paces this *one* tab's own successive
+ * dispatches so a normal burst of typing never actually reaches this
+ * check fast enough to trip it, while every message still *appears*
+ * instantly to the user regardless of that pacing.
+ */
 const RATE_LIMIT_MS = 2000;
 
-export type SendMessageState = { error: string } | undefined;
+export type SendCommentResult = { ok: boolean; error?: string };
 
-export async function sendMessage(
-  eventId: string,
-  _prevState: SendMessageState,
-  formData: FormData,
-): Promise<SendMessageState> {
-  const body = String(formData.get("body") ?? "").trim();
-  if (!body) return { error: "Message can't be empty." };
-  if (body.length > MESSAGE_MAX_LENGTH) {
-    return { error: `Keep it under ${MESSAGE_MAX_LENGTH} characters.` };
+/**
+ * Real-device report (optimistic-send redesign): no longer a
+ * `useActionState`-shaped `(prevState, formData)` action — the comment
+ * composer no longer submits through React's form-action machinery at
+ * all (see `useLobbyRealtime`'s own `submitComment` doc comment for why:
+ * the optimistic insert/queue/reconciliation model this pass introduces
+ * needs to call this directly, from a plain async function it fully
+ * controls the timing of, not from a form's own submit lifecycle). A
+ * plain, directly-callable async function instead — `eventId`/`body`/
+ * `clientMessageId` are all it needs. `submitSpeakerRequest` (mic-request
+ * mode, unrelated to this redesign — see this file's own untouched
+ * neighbor) keeps its original action shape.
+ */
+export async function sendMessage(eventId: string, body: string, clientMessageId: string): Promise<SendCommentResult> {
+  const trimmed = body.trim();
+  if (!trimmed) return { ok: false, error: "Message can't be empty." };
+  if (trimmed.length > MESSAGE_MAX_LENGTH) {
+    return { ok: false, error: `Keep it under ${MESSAGE_MAX_LENGTH} characters.` };
   }
 
   const identity = await resolveIdentity();
 
   if (await hasSentMessageRecently(eventId, identity, RATE_LIMIT_MS)) {
-    return { error: "You're sending messages too quickly." };
+    return { ok: false, error: "You're sending messages too quickly." };
   }
 
-  const { ok, error } = await insertMessage({ eventId, identity, displayName: identity.displayName, body });
+  const { ok, error } = await insertMessage({
+    eventId,
+    identity,
+    displayName: identity.displayName,
+    body: trimmed,
+    id: clientMessageId,
+  });
   if (!ok) {
     // Real-device report ("commenting is currently not working"): never
     // silently swallow this — always logged server-side (visible in
@@ -41,10 +74,10 @@ export async function sendMessage(
     // does.
     console.error("[sendMessage] insertMessage failed", { eventId, identityType: identity.type, error });
     const detail = isPreviewOrDevBuild() && error ? ` (${error.code ?? "?"}: ${error.message})` : "";
-    return { error: `Couldn't send your message. Try again.${detail}` };
+    return { ok: false, error: `Couldn't send your message. Try again.${detail}` };
   }
 
-  return undefined;
+  return { ok: true };
 }
 
 export async function addReaction(messageId: string, emoji: string = "👍"): Promise<{ error?: string }> {

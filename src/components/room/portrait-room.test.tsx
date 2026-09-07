@@ -116,6 +116,8 @@ const baseProps: RoomLayoutProps = {
   reconnectingIdentities: new Set<string>(),
   messages: [],
   reactions: {},
+  submitComment: vi.fn(),
+  retryComment: vi.fn(),
   pendingRequests: [],
   profileDirectory: {},
   isPreviewBuild: false,
@@ -237,15 +239,15 @@ describe("PortraitRoom (issue #21, '05 — Social Stage' interaction model)", ()
         expect(input).not.toBeDisabled();
       });
 
-      it("sending a normal comment calls the existing sendMessage action, never submitSpeakerRequest or onPrepareMedia", async () => {
-        sendMessage.mockResolvedValue(undefined);
+      it("sending a normal comment calls submitComment (optimistic-send redesign), never submitSpeakerRequest or onPrepareMedia", () => {
+        const submitComment = vi.fn();
         const onPrepareMedia = vi.fn();
-        render(<PortraitRoom {...baseProps} onPrepareMedia={onPrepareMedia} />);
+        render(<PortraitRoom {...baseProps} submitComment={submitComment} onPrepareMedia={onPrepareMedia} />);
 
         fireEvent.change(screen.getByPlaceholderText("Add a comment…"), { target: { value: "hello room" } });
         fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
 
-        await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+        expect(submitComment).toHaveBeenCalledWith("hello room");
         expect(submitSpeakerRequest).not.toHaveBeenCalled();
         expect(onPrepareMedia).not.toHaveBeenCalled();
       });

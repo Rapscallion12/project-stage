@@ -1,7 +1,6 @@
 "use client";
 
 import { startTransition, useActionState, useEffect, useRef, useState, type FormEvent } from "react";
-import { sendMessage } from "@/app/events/[id]/lobby/actions";
 import { submitSpeakerRequest } from "@/app/events/[id]/room/actions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,17 +13,29 @@ const QUICK_EMOJI = ["😂", "🔥", "👀", "❤️", "😮", "🎉"];
 
 /**
  * One composer, two modes (issue #27) — never a second form elsewhere in
- * the room. Normal mode posts a chat message (`sendMessage`, unchanged);
- * activating 🎤 switches the *same* input/button pair into speaker-
- * request mode (`submitSpeakerRequest`, a thin adapter over the existing
- * authoritative `requestToSpeak` — see room/actions.ts), which both
- * posts the request's badged chat message and creates its
- * `speaker_requests` row atomically, exactly as the removed standalone
- * "Request the mic" form already did. Two separate `useActionState`
- * hooks (one per action, `useActionState` only ever binds one action
- * each) rather than one, but only one input/button pair is ever
- * rendered — the mode decides which hook's state/action/pending governs
- * it, not which component is mounted.
+ * the room. Normal mode posts a chat message; activating 🎤 switches the
+ * *same* input/button pair into speaker-request mode
+ * (`submitSpeakerRequest`, a thin adapter over the existing authoritative
+ * `requestToSpeak` — see room/actions.ts), which both posts the
+ * request's badged chat message and creates its `speaker_requests` row
+ * atomically, exactly as the removed standalone "Request the mic" form
+ * already did.
+ *
+ * **Real-device report — comment mode is now fully optimistic, request
+ * mode deliberately is not.** These two modes no longer share one
+ * pending/settle lifecycle the way they used to: an ordinary comment is
+ * never blocked on the server at all (see `submitComment`, from
+ * `useLobbyRealtime`, called directly — its own doc comment there has
+ * the full optimistic-insert/queue/reconciliation design), while
+ * `micRequestMode`'s `submitSpeakerRequest` keeps its original
+ * `useActionState`-driven pending/settle behavior completely unchanged
+ * (out of scope for this pass — claiming the mic is a real, singular
+ * authorization decision the server makes, not a chat message this
+ * composer can afford to just optimistically assume succeeded). One
+ * shared `draft` state and one shared `handleSubmit` still exist, but
+ * `handleSubmit` now branches at its very first line: mic-request mode
+ * takes the old blocking path, ordinary commenting takes the new
+ * instant one.
  *
  * `micRequestMode` is a controlled prop, not local state — tapping an
  * empty seat that turns out to have a queue (see `SpeakerTile`/
@@ -143,6 +154,8 @@ export function ChatPanel({
   eventId,
   messages,
   reactions,
+  submitComment,
+  retryComment,
   micRequestMode,
   onMicRequestModeChange,
   onHasPendingRequestChange,
@@ -156,6 +169,26 @@ export function ChatPanel({
   eventId: string;
   messages: LobbyMessage[];
   reactions: Record<string, ReactionState>;
+  /**
+   * Real-device report (optimistic-send redesign): from
+   * `useLobbyRealtime` (instantiated once, in `EventRoom`, same as
+   * `messages`/`reactions` themselves) — inserts an optimistic message
+   * into the shared `messages` array synchronously and returns
+   * immediately; the actual server round trip and reconciliation happen
+   * entirely in the background. See that hook's own `submitComment` doc
+   * comment for the full design. This component never calls
+   * `sendMessage` directly anymore.
+   */
+  submitComment: (body: string) => void;
+  /**
+   * Real-device report (optimistic-send redesign): from
+   * `useLobbyRealtime` — retries one previously-failed optimistic message
+   * by id, without touching the current draft. Passed through to the
+   * full (non-compact) mode's `MessageItem` for its own "Not sent · Retry"
+   * control; the compact composer renders no history so it never uses
+   * this. Optional since compact-mode callers don't need it either.
+   */
+  retryComment?: (id: string) => void;
   micRequestMode: boolean;
   onMicRequestModeChange: (value: boolean) => void;
   onHasPendingRequestChange: (value: boolean) => void;
@@ -181,7 +214,11 @@ export function ChatPanel({
    */
   idle?: boolean;
 }) {
-  const [sendState, sendFormAction, sendPending] = useActionState(sendMessage.bind(null, eventId), undefined);
+  // Real-device report: the comment path no longer has a `useActionState`
+  // of its own at all — `submitComment` (a prop, from `useLobbyRealtime`)
+  // is a plain, synchronous, non-blocking call. Only mic-request mode —
+  // deliberately untouched by this pass — still uses `useActionState`'s
+  // pending/settle lifecycle.
   const [requestState, requestFormAction, requestPending] = useActionState(
     submitSpeakerRequest.bind(null, eventId),
     undefined,
@@ -241,20 +278,31 @@ export function ChatPanel({
   // touched.
   const submittedValueRef = useRef("");
 
-  const pending = micRequestMode ? requestPending : sendPending;
-  const error = micRequestMode ? requestState?.error : sendState?.error;
+  // Real-device report (optimistic-send redesign, Section 1/7): ordinary
+  // commenting no longer has a composer-level pending/settle lifecycle at
+  // all — sending never blocks the composer, so there is nothing here to
+  // wait on. Only mic-request-mode (a real, singular server authorization
+  // decision, not a chat message) still uses `useActionState`'s own
+  // pending/error pair. A comment's own success/failure is per-message
+  // state (`optimisticStatus`, `retryComment`) surfaced next to that one
+  // message, not a composer-wide banner — see `useLobbyRealtime`.
+  const pending = micRequestMode && requestPending;
+  const error = micRequestMode ? requestState?.error : undefined;
+  // Section 7: the send control is disabled only for an empty/whitespace
+  // draft, or the (mic-request-only) real fatal pending condition above —
+  // never merely because an earlier *comment* is still awaiting server
+  // confirmation. A previous comment's own in-flight state lives entirely
+  // outside `draft`/`pending` now.
+  const canSend = draft.trim().length > 0 && !pending;
 
   // On settle: success clears the draft (but only if it's still exactly
   // what was submitted — see `submittedValueRef`'s own doc comment) and
-  // refocuses (no error from whichever mode was actually active — not
-  // both raw states, since a stale error from the *other* mode's last
-  // attempt must never block this one) and releases the re-entrancy
-  // guard; failure does nothing to `draft` at all — it was never touched
-  // before this point (Section 4: "do not clear before success"), so
-  // it's still exactly what the user typed, ready to retry. Covers both
-  // modes, since only one is ever pending at a time. A successful
-  // request also flips hasPendingRequest and drops back to normal mode,
-  // the same way a granted claim already updates RoomControls elsewhere.
+  // refocuses, and releases the re-entrancy guard; failure does nothing to
+  // `draft` at all — it was never touched before this point (Section 4:
+  // "do not clear before success"), so it's still exactly what the user
+  // typed, ready to retry. Mic-request-mode only now — ordinary commenting
+  // never enters this effect's pending->settled transition since it has no
+  // pending state to transition out of.
   useEffect(() => {
     if (wasPending.current && !pending) {
       submittingRef.current = false;
@@ -270,10 +318,8 @@ export function ChatPanel({
         // requirement the way a pre-paint scroll adjustment would.
         queueMicrotask(() => setDraft((current) => (current === justSubmitted ? "" : current)));
         inputRef.current?.focus();
-        if (micRequestMode) {
-          onHasPendingRequestChange(true);
-          onMicRequestModeChange(false);
-        }
+        onHasPendingRequestChange(true);
+        onMicRequestModeChange(false);
       }
     }
     wasPending.current = pending;
@@ -285,36 +331,63 @@ export function ChatPanel({
   }, [pending, error]);
 
   /**
-   * The one authoritative submit path (Section 2's own explicit
-   * requirement) — bound to the `<form>`'s own `onSubmit`, which fires
-   * identically whether triggered by tapping the visible arrow
-   * (`<button type="submit">`) or by the keyboard's Enter/Return/Go
-   * action on this single-line input (the browser's own native
-   * single-input-form-submits-on-Enter behavior, not anything this
-   * component has to wire up itself) — one handler, one validation path,
-   * one pending/settle lifecycle, never two slightly different ones to
-   * keep in sync by hand.
+   * The one authoritative submit path — bound to the `<form>`'s own
+   * `onSubmit`, which fires identically whether triggered by tapping the
+   * visible arrow (`<button type="submit">`) or by the keyboard's
+   * Enter/Return/Go action on this single-line input (the browser's own
+   * native single-text-input-submits-on-Enter behavior, not anything this
+   * component has to wire up itself).
+   *
+   * Real-device report (optimistic-send redesign): this now branches at
+   * the very top. Mic-request-mode is a real, singular, authoritative
+   * server decision — it keeps the *original* blocking submit/pending/
+   * settle lifecycle entirely unchanged (the exactly-once guard, the
+   * captured `submittedValueRef`, `useActionState`'s own dispatch).
+   * Ordinary commenting is a live chat message — Section 1's own explicit
+   * rule ("sending must feel instant... do not patch another pending-
+   * state edge case onto the current behavior") means it takes a
+   * completely different, non-blocking path: clear the draft and hand the
+   * trimmed text to `submitComment` (from `useLobbyRealtime`), which
+   * inserts an optimistic row into the live list immediately and sends to
+   * the backend in the background. No `submittingRef` guard is needed on
+   * this path — `submitComment` is idempotent-safe to call repeatedly in
+   * a tick (each call makes its own new optimistic message with its own
+   * new id; Section 5 explicitly wants multiple own comments in flight at
+   * once, not a single-flight guard that would block comment 2 while
+   * comment 1 is still sending).
    */
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submittingRef.current) return; // exactly-once guard — see submittingRef's own doc comment
     const trimmed = draft.trim();
     if (!trimmed) return; // empty/whitespace draft — silently do nothing, same as the server's own validation would reject anyway
-    submittingRef.current = true;
-    submittedValueRef.current = draft; // see this ref's own doc comment above
 
-    // Issue #22: acquiring camera/mic must stay a *direct*, synchronous
-    // call from this same gesture — see this component's own doc
-    // comment on `onPrepareMedia` for the Safari user-activation
-    // requirement this preserves unchanged.
-    if (micRequestMode) void onPrepareMedia();
+    if (micRequestMode) {
+      if (submittingRef.current) return; // exactly-once guard — see submittingRef's own doc comment
+      submittingRef.current = true;
+      submittedValueRef.current = draft; // see this ref's own doc comment above
 
-    const formData = new FormData();
-    formData.set("body", draft);
-    const dispatch = micRequestMode ? requestFormAction : sendFormAction;
-    startTransition(() => {
-      dispatch(formData);
-    });
+      // Issue #22: acquiring camera/mic must stay a *direct*, synchronous
+      // call from this same gesture — see this component's own doc
+      // comment on `onPrepareMedia` for the Safari user-activation
+      // requirement this preserves unchanged.
+      void onPrepareMedia();
+
+      const formData = new FormData();
+      formData.set("body", draft);
+      startTransition(() => {
+        requestFormAction(formData);
+      });
+      return;
+    }
+
+    // Section 8: `draft` clears the instant of submit, not waiting for
+    // server success — the submitted text now belongs entirely to the
+    // optimistic message `submitComment` creates. Refocus immediately so
+    // the composer is ready for the next comment with zero delay
+    // (Section 2: "allow immediately typing the next comment").
+    setDraft("");
+    submitComment(trimmed);
+    inputRef.current?.focus();
   }
 
   useEffect(() => {
@@ -393,6 +466,13 @@ export function ChatPanel({
             placeholder={micRequestMode ? "What's your topic?" : "Add a comment…"}
             autoComplete="off"
             maxLength={500}
+            // Section 9: deterministic mobile keyboard submission for this
+            // single-line composer — hints the virtual keyboard's own
+            // action key as "send" where the platform supports it. The
+            // actual submit still goes through this form's native
+            // Enter-submits behavior below, so this is a labeling hint
+            // only, not a second submit path.
+            enterKeyHint="send"
             // Real-device report: Enter/Return on this single-line input
             // already submits the form natively (the browser's own
             // single-text-input behavior) — that submit event runs
@@ -411,7 +491,11 @@ export function ChatPanel({
           />
           <button
             type="submit"
-            disabled={pending}
+            // Section 7: never disabled merely because an earlier comment
+            // is still awaiting server confirmation — only for an empty/
+            // whitespace draft, or (mic-request-mode only) the real
+            // fatal-pending condition folded into `canSend` above.
+            disabled={!canSend}
             aria-label={micRequestMode ? "Send speaker request" : "Send comment"}
             // Real-device report, Section 10: the glyph itself is tiny —
             // this button's own tap target now extends well past it
@@ -460,10 +544,11 @@ export function ChatPanel({
             autoComplete="off"
             maxLength={500}
             required
+            enterKeyHint="send"
             className="flex-1"
           />
-          <Button type="submit" disabled={pending}>
-            {micRequestMode ? (pending ? "Requesting…" : "Request") : pending ? "Sending…" : "Send"}
+          <Button type="submit" disabled={!canSend}>
+            {micRequestMode ? (pending ? "Requesting…" : "Request") : "Send"}
           </Button>
         </>
       )}
@@ -493,7 +578,12 @@ export function ChatPanel({
         ) : (
           <div className="divide-y divide-border">
             {messages.map((message) => (
-              <MessageItem key={message.id} message={message} reaction={reactions[message.id]} />
+              <MessageItem
+                key={message.id}
+                message={message}
+                reaction={reactions[message.id]}
+                onRetry={retryComment}
+              />
             ))}
           </div>
         )}

@@ -82,6 +82,8 @@ export function DesktopRoom({
   stageRound,
   messages,
   reactions,
+  submitComment,
+  retryComment,
   pendingRequests,
   profileDirectory,
   onOpenRoomInfo,
@@ -159,6 +161,8 @@ export function DesktopRoom({
             eventId={event.id}
             messages={messages}
             reactions={reactions}
+            submitComment={submitComment}
+            retryComment={retryComment}
             micRequestMode={micRequestMode}
             onMicRequestModeChange={onMicRequestModeChange}
             onHasPendingRequestChange={onHasPendingRequestChange}

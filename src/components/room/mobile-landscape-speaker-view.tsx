@@ -97,6 +97,8 @@ export function MobileLandscapeSpeakerView({
   onOpenRoomInfo,
   messages,
   reactions,
+  submitComment,
+  retryComment,
   pendingRequests,
   profileDirectory,
   stageReactions,
@@ -163,6 +165,8 @@ export function MobileLandscapeSpeakerView({
               eventId={event.id}
               messages={messages}
               reactions={reactions}
+              submitComment={submitComment}
+              retryComment={retryComment}
               micRequestMode={false}
               onMicRequestModeChange={() => {}}
               onHasPendingRequestChange={() => {}}
@@ -189,6 +193,8 @@ export function MobileLandscapeSpeakerView({
         eventId={event.id}
         messages={messages}
         reactions={reactions}
+        submitComment={submitComment}
+        retryComment={retryComment}
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
         viewerIdentity={identity}

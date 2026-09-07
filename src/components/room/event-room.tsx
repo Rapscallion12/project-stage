@@ -130,7 +130,12 @@ export function EventRoom({
   /** Pre-launch interaction pass: computed server-side (`isSimulatorUiEnabled()`, lib/preview-mode.ts) — whether the Session Simulator's own UI (panel + collapsed "SIM" pill) should render at all. Deliberately narrower than, and required *in addition to*, `isPreviewBuild` — see that function's own doc comment for why a Vercel preview alone must no longer be enough. */
   isSimulatorUiEnabled: boolean;
 }) {
-  const { messages, reactions } = useLobbyRealtime(event.id, identity, initialMessages, initialReactions);
+  const { messages, reactions, submitComment, retryComment, clearOptimisticState } = useLobbyRealtime(
+    event.id,
+    identity,
+    initialMessages,
+    initialReactions,
+  );
   // Moved up from its original spot below (still the "one canonical
   // myIdentity" computation, unchanged) — needed here, before
   // useReactionsController, so the reactions controller can tag the
@@ -673,6 +678,8 @@ export function EventRoom({
     reconnectingIdentities,
     messages,
     reactions,
+    submitComment,
+    retryComment,
     pendingRequests,
     microphoneMuted: connection.microphoneMuted,
     cameraMuted: connection.cameraMuted,
@@ -800,6 +807,13 @@ export function EventRoom({
           onSimulatorReset={() => {
             setSimulatedGuestIds(new Set());
             void refetchSpeakers();
+            // Real-device report (optimistic-send redesign, Section 19):
+            // Reset Session must also clear any local-only optimistic
+            // comments, the outgoing send queue, failed/retry state, and
+            // the correlation cache — none of that lives server-side, so
+            // no amount of the simulator's own DB cleanup touches it on
+            // its own.
+            clearOptimisticState();
           }}
         />
       )}

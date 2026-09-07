@@ -145,6 +145,8 @@ export function PortraitSpeakerView({
   onOpenRoomInfo,
   messages,
   reactions,
+  submitComment,
+  retryComment,
   pendingRequests,
   profileDirectory,
   stageReactions,
@@ -213,6 +215,8 @@ export function PortraitSpeakerView({
               eventId={event.id}
               messages={messages}
               reactions={reactions}
+              submitComment={submitComment}
+              retryComment={retryComment}
               micRequestMode={false}
               onMicRequestModeChange={() => {}}
               onHasPendingRequestChange={() => {}}
@@ -239,6 +243,8 @@ export function PortraitSpeakerView({
         eventId={event.id}
         messages={messages}
         reactions={reactions}
+        submitComment={submitComment}
+        retryComment={retryComment}
         pendingRequests={pendingRequests}
         profileDirectory={profileDirectory}
         viewerIdentity={identity}

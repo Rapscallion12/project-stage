@@ -3,6 +3,95 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-07 — Comment composer redesigned as optimistic/non-blocking; client-supplied primary key for exact reconciliation; a real StrictMode-only dispatch bug found live (real-device report)
+
+**Problem — the composer was still fundamentally a blocking model.**
+Last session's fix made a single controlled draft reliable, but sending
+a comment still meant waiting on the server round trip before the user's
+own message appeared and before the composer was ready for the next one
+— unacceptable for a live chat surface, per explicit real-device
+feedback. **Decision**: an optimistic insert (`submitComment`) that adds
+the comment to the shared `messages` array and clears the draft
+synchronously, with the actual network request happening entirely in the
+background via a small outgoing queue. Mic-request mode was deliberately
+excluded from this redesign — it's a real, singular authorization
+decision the server makes, not a chat message safe to assume succeeded —
+so it keeps its original blocking `useActionState` lifecycle unchanged.
+**Tradeoff**: two different submit lifecycles now coexist in one
+component (`ChatPanel`), branching at the top of `handleSubmit`, rather
+than one unified model — accepted as correct rather than a wart, since
+the two things being submitted have genuinely different correctness
+requirements.
+
+**Problem — reconciling a locally-created optimistic message with its
+eventual authoritative row without risking a duplicate or a heuristic
+mismatch.** Alternatives considered: (a) match on body + display name +
+timestamp — rejected outright per explicit instruction, a real (if rare)
+collision risk, and fragile against clock skew; (b) add a new nonce/
+correlation column to `event_chat_messages` — rejected as unnecessary
+schema churn once (c) was found viable. **Decision**: `event_chat_messages.id`
+already accepts a client-supplied value at insert time (`uuid primary
+key default gen_random_uuid()` — supplying `id` explicitly simply
+bypasses the default). The optimistic message's own client-generated id
+is threaded through `insertMessage` unchanged, so the Realtime
+`postgres_changes` INSERT event for that row arrives under the *exact*
+same id the optimistic entry already used, and gets swapped in in place
+(same array index) rather than removed-and-re-appended. **Consequence,
+not itself planned for**: because the array index/id never changes
+across the optimistic→confirmed transition, `ExpandedComments`' existing
+"is this a new arrival" anchoring/flash effect never re-fires on
+confirmation, with no changes needed to that effect at all — an emergent
+correctness property of the id-stability choice, not a separately-built
+guard.
+
+**Problem — idempotent retry.** A retry of a message whose original
+insert actually reached the database (response merely lost) must not
+create a duplicate row. **Decision**: mirrored `insertReaction`'s
+already-established pattern in this exact file — treat a Postgres
+`23505` (unique_violation) on `insertMessage`'s primary-key insert as
+success, not failure. **Reason**: the codebase already had this exact
+solved problem one function away; inventing a second idempotency
+mechanism would be needless duplication.
+
+**Problem — client-side rate-limit interaction.** The composer's new
+"send instantly, always" model risks tripping the server's existing
+2000ms per-identity anti-spam check on a fast typing burst. Alternatives
+considered: loosening or removing the server-side rate limit — explicitly
+rejected ("do not weaken broader anti-spam protections casually"; the
+limit is real anti-spam, not a chat-pacing mechanism, and was left
+untouched). **Decision**: a client-side outgoing-queue pacing floor
+(2100ms, a small margin over the server's 2000ms) serializes only the
+*background* dispatches, never the optimistic UI update itself — the
+user's own perception of "instant" is completely unaffected by a pacing
+delay that only governs when bytes leave the tab.
+
+**Problem — a real bug, found only by driving the finished redesign
+against a real `next dev` server, not by any of the (extensive) mocked
+unit tests.** `mountedRef`, a `useRef(true)` paired with a *cleanup-only*
+effect, never got reset to `true` on React StrictMode's dev-only
+mount→simulated-unmount→remount double-invoke, so it stayed permanently
+`false` for the rest of the component's real lifetime — silently
+defeating the outgoing queue's own "don't dispatch after unmount" guard.
+Every comment still appeared optimistically (untouched by this ref), but
+the actual background `sendMessage` call never ran at all, confirmed via
+a direct query against the real linked database showing zero rows landed
+despite the UI showing "Sending…" indefinitely. **Decision**: move
+`mountedRef.current = true` into the effect body itself, not just the
+initial `useRef` value, so React's own second (real) mount inside the
+StrictMode dance starts the ref correctly `true` again. **Reason this
+survived every prior automated check**: StrictMode's double-invoke of
+effects is dev-only (a production build, including every Vercel preview
+this session had deployed, never does it) — Section 2's own "Production
+interaction" tier (a deployed preview) would never have exercised this
+exact mechanism; only a real local dev server plus a real database query
+did. **Consequence for verification discipline**: confirmed directly
+that this project's own vitest+`@testing-library/react` harness does
+*not* reproduce StrictMode's double-invoke via `renderHook`'s `wrapper`
+option either — a unit test claiming to cover this would have passed
+trivially without exercising the actual mechanism, so this fix is
+deliberately backed by real-browser verification and a doc comment
+rather than a misleading automated test.
+
 ## 2026-09-07 — Comment composer: one controlled draft state, real double-submit and mid-flight-typing bugs found live (real-device report)
 
 **Problem — the previous session's own fix (capture-in-onSubmit,
