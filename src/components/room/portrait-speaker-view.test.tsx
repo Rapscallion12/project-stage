@@ -29,10 +29,9 @@ function fakeVideoTrack(): LocalVideoTrack {
  * participant at all, which can't distinguish "correctly suppressed" from
  * "never rendered in the first place").
  */
-function fakeLocalParticipant(): Participant {
+function fakeLocalParticipant(track: LocalVideoTrack = fakeVideoTrack()): Participant {
   return {
-    getTrackPublication: (source: string) =>
-      source === "camera" ? { track: fakeVideoTrack(), isMuted: false } : undefined,
+    getTrackPublication: (source: string) => (source === "camera" ? { track, isMuted: false } : undefined),
   } as unknown as Participant;
 }
 
@@ -600,6 +599,46 @@ describe("PortraitSpeakerView (issue #18, 'Speaker View' Direction B)", () => {
       // The empty seat 2 still shows its own ordinary empty-seat state —
       // untouched by the presentation toggle.
       expect(screen.getByTestId("empty-seat")).toBeInTheDocument();
+    });
+
+    it("uses the same already-active LocalVideoTrack for my tile's video as the corner preview did — never a fresh acquisition", () => {
+      const sharedTrack = fakeVideoTrack();
+      const participant = fakeLocalParticipant(sharedTrack);
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          localVideoTrack={sharedTrack}
+          getParticipant={(identity) => (identity === "profile:p1" ? participant : undefined)}
+        />,
+      );
+      // Speaker-Focused View: the corner preview attaches the shared track.
+      expect(sharedTrack.attach).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByTestId("self-preview"));
+
+      // Normal Stage View: my own tile attaches the *same* track object —
+      // never a second, independently-acquired one. attach() has now been
+      // called a second time, but always with this one shared instance.
+      expect(sharedTrack.attach).toHaveBeenCalledTimes(2);
+      expect(document.querySelectorAll("video")).toHaveLength(1);
+    });
+
+    it("repeated Focused ↔ Normal cycles never accumulate extra video elements — always exactly one", () => {
+      const sharedTrack = fakeVideoTrack();
+      const participant = fakeLocalParticipant(sharedTrack);
+      render(
+        <PortraitSpeakerView
+          {...baseProps}
+          localVideoTrack={sharedTrack}
+          getParticipant={(identity) => (identity === "profile:p1" ? participant : undefined)}
+        />,
+      );
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(screen.getByTestId("self-preview"));
+        expect(document.querySelectorAll("video")).toHaveLength(1);
+        fireEvent.click(screen.getByTestId("return-to-speaker-view"));
+        expect(document.querySelectorAll("video")).toHaveLength(1);
+      }
     });
 
     it("switching views is purely local — no seat, media, or server action fires just from toggling", () => {

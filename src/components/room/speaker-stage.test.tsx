@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SpeakerStage } from "./speaker-stage";
 import type { LocalVideoTrack, Participant, TrackPublication } from "livekit-client";
@@ -860,6 +860,333 @@ describe("SpeakerStage", () => {
           expect(screen.getByTestId("self-preview")).toBeInTheDocument();
         },
       );
+    });
+  });
+
+  describe("revealOwnVideo / Normal Stage View (speaker presentation-toggle correction, real-device report)", () => {
+    const twoSpeakers = [
+      speaker({ id: "s1", seat_number: 1, profile_id: "p1", display_name: "Me" }),
+      speaker({ id: "s2", seat_number: 2, profile_id: "p2", display_name: "Other" }),
+    ];
+
+    it("suppresses the self-preview corner slot entirely once isSpeaker && !soloMode — my feed now lives in my own tile instead", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+          localVideoTrack={fakeVideoTrack()}
+        />,
+      );
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("self-preview-audio-only")).not.toBeInTheDocument();
+    });
+
+    it("never suppresses the self-preview in soloMode (Speaker-Focused View) or when not a speaker at all (candidate/audience) — only the exact isSpeaker && !soloMode combination", () => {
+      const { rerender } = render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+          localVideoTrack={fakeVideoTrack()}
+          soloMode
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+
+      rerender(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:not-a-speaker"
+          localVideoTrack={fakeVideoTrack()}
+        />,
+      );
+      expect(screen.getByTestId("self-preview")).toBeInTheDocument();
+    });
+
+    it("does not suppress the self-preview in compact mode (Expanded Comments mini stage) — that correction is a separate, out-of-scope track", () => {
+      render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+          localVideoTrack={fakeVideoTrack()}
+          compact
+        />,
+      );
+      // compact never renders the self-preview at all regardless (see
+      // that prop's own doc comment) — this just confirms revealOwnVideo
+      // doesn't change that pre-existing compact behavior either way.
+      expect(screen.queryByTestId("self-preview")).not.toBeInTheDocument();
+    });
+
+    describe("reactions targeting the local speaker's own tile — the whole reason for Normal Stage View", () => {
+      it("On Speaker mode (default): a reaction from another viewer targeting me renders on my own full-size tile", () => {
+        const stageReactions = {
+          ...MOCK_STAGE_REACTIONS_BASE,
+          myIdentity: "profile:p1",
+          incoming: [
+            { id: "r1", targetIdentity: "profile:p1", emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+          ],
+        };
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            stageReactions={stageReactions}
+          />,
+        );
+        const tiles = screen.getAllByTestId("speaker-tile");
+        expect(tiles[0]).toHaveTextContent("🎉"); // my own tile, seat 1, first slot
+      });
+
+      it("Side mode: another viewer's reaction targeting me renders in the side lane for my own currently-visible slot", () => {
+        const stageReactions = {
+          ...MOCK_STAGE_REACTIONS_BASE,
+          myIdentity: "profile:p1",
+          displayMode: "side" as const,
+          incoming: [
+            { id: "r1", targetIdentity: "profile:p1", emoji: "🔥", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+          ],
+        };
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            stageReactions={stageReactions}
+          />,
+        );
+        // I'm seat 1, unswapped — that's the "top" region.
+        expect(screen.getByTestId("reaction-side-lane-top")).toHaveTextContent("🔥");
+        expect(screen.getAllByTestId("speaker-tile").every((t) => !t.textContent?.includes("🔥"))).toBe(true);
+      });
+
+      it("Hidden mode (showReactions=false): a reaction targeting me renders nowhere at all", () => {
+        const stageReactions = {
+          ...MOCK_STAGE_REACTIONS_BASE,
+          myIdentity: "profile:p1",
+          showReactions: false,
+          incoming: [
+            { id: "r1", targetIdentity: "profile:p1", emoji: "😂", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+          ],
+        };
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            stageReactions={stageReactions}
+          />,
+        );
+        expect(screen.queryByText("😂")).not.toBeInTheDocument();
+      });
+
+      it("does not conflate targetIdentity === me with senderIdentity === me: my own outgoing on-speaker feedback still coexists with an incoming reaction from someone else, both visible", () => {
+        const stageReactions = {
+          ...MOCK_STAGE_REACTIONS_BASE,
+          myIdentity: "profile:p1",
+          incoming: [
+            { id: "mine", targetIdentity: "profile:p2", emoji: "❤️", x: 0.2, y: 0.2, senderIdentity: "profile:p1", ts: Date.now() },
+            { id: "theirs", targetIdentity: "profile:p1", emoji: "🎉", x: 0.5, y: 0.5, senderIdentity: "profile:someone-else", ts: Date.now() },
+          ],
+        };
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            stageReactions={stageReactions}
+          />,
+        );
+        const tiles = screen.getAllByTestId("speaker-tile");
+        expect(tiles[0]).toHaveTextContent("🎉"); // targeting me, on my tile
+        expect(tiles[1]).toHaveTextContent("❤️"); // my own sent reaction, on the other speaker's tile
+      });
+    });
+
+    describe("single tap my own tile to return, double tap still sends a reaction (real-device report, Section 10-11)", () => {
+      function mockTileRect(tile: HTMLElement) {
+        const rect = { left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 } as DOMRect;
+        vi.spyOn(tile, "getBoundingClientRect").mockReturnValue(rect);
+      }
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("a single tap on my own full-size tile returns to Speaker-Focused View (soloMode flips back on) after the disambiguation window elapses", () => {
+        vi.useFakeTimers();
+        const onTapSelfPreview = vi.fn();
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            onTapSelfPreview={onTapSelfPreview}
+          />,
+        );
+        const myTile = screen.getAllByTestId("speaker-tile")[0]; // seat 1, unswapped
+        mockTileRect(myTile);
+        fireEvent.pointerUp(myTile, { clientX: 50, clientY: 50 });
+        expect(onTapSelfPreview).not.toHaveBeenCalled(); // not yet — still pending
+        act(() => {
+          vi.advanceTimersByTime(300);
+        });
+        expect(onTapSelfPreview).toHaveBeenCalledTimes(1);
+      });
+
+      it("a double tap on my own tile sends a reaction and does NOT call the view-toggle callback", () => {
+        vi.useFakeTimers();
+        const onTapSelfPreview = vi.fn();
+        const send = vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false }));
+        const stageReactions = { ...MOCK_STAGE_REACTIONS_BASE, send };
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            onTapSelfPreview={onTapSelfPreview}
+            stageReactions={stageReactions}
+          />,
+        );
+        const myTile = screen.getAllByTestId("speaker-tile")[0];
+        mockTileRect(myTile);
+        fireEvent.pointerUp(myTile, { clientX: 50, clientY: 50 });
+        fireEvent.pointerUp(myTile, { clientX: 50, clientY: 50 });
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+        expect(send).toHaveBeenCalledWith("profile:p1", expect.any(String), expect.any(Number), expect.any(Number));
+        expect(onTapSelfPreview).not.toHaveBeenCalled();
+      });
+
+      it("a single tap on the OTHER speaker's tile never triggers the view toggle — only my own tile does", () => {
+        vi.useFakeTimers();
+        const onTapSelfPreview = vi.fn();
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            onTapSelfPreview={onTapSelfPreview}
+          />,
+        );
+        const otherTile = screen.getAllByTestId("speaker-tile")[1]; // seat 2, the other speaker
+        mockTileRect(otherTile);
+        fireEvent.pointerUp(otherTile, { clientX: 50, clientY: 50 });
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+        expect(onTapSelfPreview).not.toHaveBeenCalled();
+      });
+
+      it("a double tap on the other speaker's tile still sends a reaction normally, unaffected by the local single-tap wiring", () => {
+        vi.useFakeTimers();
+        const send = vi.fn(async () => ({ ok: true as const, heatAfter: 0, inCooldownAfter: false }));
+        const stageReactions = { ...MOCK_STAGE_REACTIONS_BASE, send };
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            stageReactions={stageReactions}
+          />,
+        );
+        const otherTile = screen.getAllByTestId("speaker-tile")[1];
+        mockTileRect(otherTile);
+        fireEvent.pointerUp(otherTile, { clientX: 50, clientY: 50 });
+        fireEvent.pointerUp(otherTile, { clientX: 50, clientY: 50 });
+        expect(send).toHaveBeenCalledWith("profile:p2", expect.any(String), expect.any(Number), expect.any(Number));
+      });
+
+      it("toggling via single tap changes only local presentation — no seat/media/round authority prop is ever an output of this gesture", () => {
+        vi.useFakeTimers();
+        const onTapEmptySeat = vi.fn();
+        const onTapSelfPreview = vi.fn();
+        render(
+          <SpeakerStage
+            speakers={twoSpeakers}
+            orientation="portrait"
+            {...baseProps}
+            myIdentity="profile:p1"
+            isSpeaker
+            mySeatNumber={1}
+            onTapEmptySeat={onTapEmptySeat}
+            onTapSelfPreview={onTapSelfPreview}
+          />,
+        );
+        const myTile = screen.getAllByTestId("speaker-tile")[0];
+        mockTileRect(myTile);
+        fireEvent.pointerUp(myTile, { clientX: 50, clientY: 50 });
+        act(() => {
+          vi.advanceTimersByTime(300);
+        });
+        expect(onTapSelfPreview).toHaveBeenCalledTimes(1);
+        expect(onTapEmptySeat).not.toHaveBeenCalled();
+      });
+    });
+
+    it("does not remount the other speaker's tile when toggling soloMode off — same DOM node, just repositioned into the two-tile layout", () => {
+      const { rerender } = render(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+          soloMode
+        />,
+      );
+      const otherTileBefore = screen.getByTestId("speaker-tile");
+      rerender(
+        <SpeakerStage
+          speakers={twoSpeakers}
+          orientation="portrait"
+          {...baseProps}
+          myIdentity="profile:p1"
+          isSpeaker
+          mySeatNumber={1}
+        />,
+      );
+      expect(screen.getAllByTestId("speaker-tile")).toContain(otherTileBefore);
     });
   });
 

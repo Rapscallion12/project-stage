@@ -306,6 +306,71 @@ describe("useReactionsController / useStageReactions (pre-launch interaction pas
       expect(result.current.heat).toBe(0); // still never affects outgoing heat
     });
 
+    it("targetIdentity === me is a completely different concept from senderIdentity === me — a reaction from someone else targeting me is never suppressed by self-echo filtering (Normal Stage View real-device report)", async () => {
+      const fake = makeFakeSupabase();
+      createClient.mockReturnValue(fake.client);
+      const { result } = renderHook(() => useReactionsController("e1", MY_IDENTITY));
+
+      // Person B reacts to ME — targetIdentity is my own identity, but
+      // senderIdentity is theirs. The self-echo dedup is id-based (see
+      // this hook's own doc comment) and has no idea what targetIdentity
+      // even is; it must never conflate "this reaction is *about* me"
+      // with "this tab already sent this exact reaction."
+      act(() => {
+        fake.fireReaction({
+          id: "from-person-b",
+          targetIdentity: MY_IDENTITY,
+          emoji: "🎉",
+          x: 0.4,
+          y: 0.6,
+          senderIdentity: "profile:person-b",
+          ts: Date.now(),
+        });
+      });
+      expect(result.current.incoming).toHaveLength(1);
+      expect(result.current.incoming[0].targetIdentity).toBe(MY_IDENTITY);
+
+      // Person C also reacts to me — a second, independent sender, same
+      // target. Both must render; neither is "mine" to suppress.
+      act(() => {
+        fake.fireReaction({
+          id: "from-person-c",
+          targetIdentity: MY_IDENTITY,
+          emoji: "🔥",
+          x: 0.1,
+          y: 0.9,
+          senderIdentity: "guest:person-c",
+          ts: Date.now(),
+        });
+      });
+      expect(result.current.incoming).toHaveLength(2);
+
+      // My OWN sent reaction (to someone else) still gets suppressed on
+      // its own confirmed echo, exactly as before — this distinction
+      // doesn't loosen that guarantee.
+      sendStageReaction.mockResolvedValue({ ok: true, heatAfter: 5, inCooldownAfter: false });
+      await act(async () => {
+        await result.current.send("profile:someone-else", "❤️", 0.5, 0.5);
+      });
+      const myOwnSentId = result.current.incoming.at(-1)!.id;
+      expect(result.current.incoming).toHaveLength(3);
+      act(() => {
+        fake.fireReaction({
+          id: myOwnSentId,
+          targetIdentity: "profile:someone-else",
+          emoji: "❤️",
+          x: 0.5,
+          y: 0.5,
+          senderIdentity: MY_IDENTITY,
+          ts: Date.now(),
+        });
+      });
+      // Still 3 — the echo of my own send never re-adds itself, while
+      // the two genuine incoming reactions targeting me from earlier
+      // remain untouched.
+      expect(result.current.incoming).toHaveLength(3);
+    });
+
     it("an unexpected authoritative rejection after an optimistic render is not undone — it just finishes on its own and reconciles heat", async () => {
       const fake = makeFakeSupabase();
       createClient.mockReturnValue(fake.client);

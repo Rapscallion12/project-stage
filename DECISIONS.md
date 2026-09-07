@@ -3,6 +3,82 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-06 — Normal Stage View corrections: bounded local-video repaint retry, reaction stacking-context fix, single-tap return gesture (real iPhone Safari report)
+
+**Problem 1 — one repaint-nudge attempt (copied from `SelfPreview`) wasn't
+reliable enough on real Safari; the local speaker's own full-size tile
+could stay grey until the camera was manually toggled off and on.**
+Alternatives considered: (a) toggle the camera automatically as the fix
+itself — rejected outright, explicitly instructed against (real hardware
+churn, visible to remote viewers, risks tripping inactivity logic, and
+would have masked rather than fixed the actual paint problem); (b) a
+single, longer delay before the one nudge — rejected, since the failure
+mode is "sometimes doesn't work," not "needs more time," and a longer
+fixed delay adds latency to the *common*, already-working case for no
+benefit to the failure case. **Decision — a small, bounded retry loop**
+(3 extra attempts, 150ms apart, ≤450ms worst case), verified via
+`videoWidth`/`videoHeight` (the one signal observable from outside
+`livekit-client` that's unambiguous when zero) and cancelled early by the
+`playing` event (the one event that actually implies decoded frames are
+flowing, unlike `loadedmetadata`/`canplay`, which this project has
+already found Safari can reach while still painting nothing). **Reason**:
+gives Safari's decode pipeline several distinct chances to actually
+repaint without the camera ever being touched, and stays bounded per
+explicit instruction — no infinite retry, no production console noise.
+**Tradeoff, reported rather than hidden**: `videoWidth`/`videoHeight`
+becoming non-zero is a *necessary*, not fully *sufficient*, proxy for
+"actually painting" (the documented Safari bug class can in principle
+leave dimensions correct while still not painting) — the fixed 3-attempt
+schedule is a deliberate belt-and-suspenders against exactly that
+residual uncertainty, not a claim of a perfect detector. This is also
+**unverifiable in this environment** (no real Safari here) — reported
+as a real-device-only claim, not "confirmed working."
+
+**Problem 2 — audience reactions targeting the local speaker weren't
+visible in Normal Stage View, even after Problem 1's video fix.** Traced
+the entire filter/routing chain by reading it, not assuming a location
+for the bug: `useStageReactions`' self-echo dedup is strictly id-based
+(never identity-based), `SpeakerStage`'s on-speaker/side-lane filters
+have no `isLocal` exclusion anywhere, and `SpeakerTile`'s own render has
+no local-specific reaction branch — a new regression test reproducing
+the exact "Person B reacts to me" case passes against this logic
+unchanged. **Decision**: the one real, if unglamorous, gap was
+`OnSpeakerReactionBursts`' wrapper never getting the explicit `z-10` its
+sibling `ReactionSideLane` already carries — added it, matching that
+existing convention. **Reason**: per CSS painting-order rules, a
+positioned `z-index:auto` element should already paint above the tile's
+non-positioned `<video>` sibling regardless of DOM order, but this
+project has already documented two *other* cases of Safari's own
+`<video>` compositing not being spec-faithful (see the "renders black
+until forced to repaint" entries above) — an explicit stacking-context
+promotion removes any ambiguity for that same class of behavior to
+exploit here, rather than relying on painting order alone holding on
+every engine. **Also unverifiable here** — reported as the most likely,
+best-justified explanation and fix available without real Safari access,
+not as a confirmed root cause.
+
+**Problem 3 — the corner-only "Speaker View" pill collided with the
+room's own header on a real phone, and real-device testing found "tap my
+own full-size tile" the more natural return gesture — but the same tile
+already uses double-tap to send a reaction.** Alternatives considered:
+(a) a modifier gesture (long-press, swipe) — rejected, inconsistent with
+every other tap-based interaction on this stage; (b) making the whole
+tile single-tap *and* keep double-tap, accepting that a fast double-tap
+sequence briefly and visibly "returns then re-enters" before settling —
+rejected, exactly what Section 10 explicitly forbade ("do not let the
+first tap of a double-tap immediately collapse the view before the
+second tap arrives"). **Decision**: extended `useDoubleTap` with an
+optional `onSingleTap`, held pending on the same bounded window
+(`DOUBLE_TAP_WINDOW_MS`) double-tap detection already uses, firing only
+if no second tap arrives, cancelled outright if one does — the standard
+single/double-tap disambiguation strategy, reusing the existing gesture
+abstraction rather than building a parallel one. **A real bug this
+surfaced**: the pending single tap's own `lastTapRef` wasn't cleared when
+it fired, so a later, unrelated tap could pair with that now-stale first
+tap and misfire as a double tap — caught by a new hook-level test before
+it ever reached a real device, fixed by clearing the ref in the timeout
+callback.
+
 ## 2026-09-06 — Comprehensive sandbox cleanup: fixed `clear-sandbox`, added internal-only "Clear Test Room" (real-device report)
 
 **Problem — the shared permanent test room accumulated real, visible

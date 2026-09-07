@@ -32,6 +32,25 @@ import { cn } from "@/lib/utils";
  * `text-2xl`/`text-3xl` burst would visually overwhelm a tile that small.
  * Shrinks the emoji glyph only; positioning, timing, and drift math are
  * all unchanged. Defaults to `false`.
+ *
+ * **`z-10`** (speaker presentation-toggle correction, real-device
+ * report): a real iPhone Safari test found a speaker's own reactions
+ * invisible once their tile showed a real, live `<video>` — even though
+ * the filtering/routing logic that decides *whether* a reaction reaches
+ * this component was audited and confirmed correct (a regression test
+ * locks that in — see `SpeakerTile.test.tsx`). Per the CSS painting-order
+ * spec, a positioned (`absolute`) `z-index:auto` element like this one's
+ * root should already paint above the tile's non-positioned `<video>`
+ * sibling regardless of DOM order — but Safari's own video-compositing
+ * layer is exactly the kind of non-spec-faithful behavior this codebase
+ * has already documented twice for `<video>` elements specifically (see
+ * DECISIONS.md's "renders black until forced to repaint" entries). This
+ * sibling, `ReactionSideLane` below, already carries an explicit `z-10`
+ * for its own reasons (layering over the stage) — this was the one
+ * reaction surface that never got the same explicit stacking-context
+ * promotion. Matching that value here removes any ambiguity for a
+ * browser's own video compositing to exploit, without depending on paint
+ * order alone.
  */
 export function OnSpeakerReactionBursts({
   reactions,
@@ -43,7 +62,7 @@ export function OnSpeakerReactionBursts({
   const prefersReducedMotion = usePrefersReducedMotion();
 
   return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
       {reactions.map((reaction) => {
         const { driftX, rotate } = burstVariation(reaction.id);
         return (

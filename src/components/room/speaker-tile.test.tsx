@@ -396,10 +396,23 @@ describe("SpeakerTile", () => {
       expect(screen.getByTestId("tile-activate-media")).toBeInTheDocument();
     });
 
-    describe("repaint nudge — the same 'reattached to a brand-new element' remount pattern SelfPreview already handles, at this second call site", () => {
+    describe("repaint nudge + bounded retry (real-device iPhone Safari follow-up: one nudge wasn't reliable — grey video recoverable only by a manual camera toggle)", () => {
       const originalPlay = HTMLMediaElement.prototype.play;
 
+      function fakeLocalCameraTrack() {
+        return {
+          attach: vi.fn((element: HTMLVideoElement) => {
+            element.srcObject = {} as MediaStream;
+            return element;
+          }),
+          detach: vi.fn(),
+          mute: vi.fn(),
+          unmute: vi.fn(),
+        } as unknown as Track & { mute: () => void; unmute: () => void };
+      }
+
       beforeEach(() => {
+        vi.useFakeTimers();
         vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
           cb(0);
           return 0;
@@ -410,17 +423,12 @@ describe("SpeakerTile", () => {
 
       afterEach(() => {
         vi.unstubAllGlobals();
+        vi.useRealTimers();
         HTMLMediaElement.prototype.play = originalPlay;
       });
 
       it("resets srcObject a beat after attach when isLocal && revealOwnVideo — the exact scenario the corner preview just vacated", () => {
-        const track = {
-          attach: vi.fn((element: HTMLVideoElement) => {
-            element.srcObject = {} as MediaStream;
-            return element;
-          }),
-          detach: vi.fn(),
-        } as unknown as Track;
+        const track = fakeLocalCameraTrack();
         const participant = fakeParticipant({ camera: { track, isMuted: false } });
         render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
         expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
@@ -430,6 +438,100 @@ describe("SpeakerTile", () => {
         const participant = fakeParticipant({ camera: { track: fakeVideoTrack(), isMuted: false } });
         render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={false} />);
         expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+      });
+
+      it("retries a small, bounded number of times when no real decoded frame ever appears — never an infinite loop", () => {
+        const track = fakeLocalCameraTrack();
+        const participant = fakeParticipant({ camera: { track, isMuted: false } });
+        render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
+        // videoWidth/videoHeight stay at jsdom's default 0 throughout —
+        // simulating Safari's grey-frame failure mode persisting.
+        const initialCalls = (HTMLMediaElement.prototype.play as ReturnType<typeof vi.fn>).mock.calls.length;
+        expect(initialCalls).toBe(1); // the always-attempted first nudge
+
+        act(() => {
+          vi.advanceTimersByTime(150);
+        });
+        act(() => {
+          vi.advanceTimersByTime(150);
+        });
+        act(() => {
+          vi.advanceTimersByTime(150);
+        });
+        // 1 initial + 3 bounded retries = 4 total, matching
+        // LOCAL_VIDEO_REPAINT_MAX_ATTEMPTS.
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(4);
+
+        // Advancing well past the retry budget never schedules a 5th.
+        act(() => {
+          vi.advanceTimersByTime(5000);
+        });
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(4);
+      });
+
+      it("stops retrying immediately once the 'playing' event confirms real rendering — success cancels the remaining budget", () => {
+        const track = fakeLocalCameraTrack();
+        const participant = fakeParticipant({ camera: { track, isMuted: false } });
+        render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
+        const video = document.querySelector("video") as HTMLVideoElement;
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+
+        act(() => {
+          video.dispatchEvent(new Event("playing"));
+        });
+
+        act(() => {
+          vi.advanceTimersByTime(5000);
+        });
+        // No further nudges once 'playing' fired — the one from the
+        // initial attempt is the last.
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+      });
+
+      it("videoWidth/videoHeight becoming real between scheduled retries also stops further attempts, not just the 'playing' event", () => {
+        const track = fakeLocalCameraTrack();
+        const participant = fakeParticipant({ camera: { track, isMuted: false } });
+        render(<SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />);
+        const video = document.querySelector("video") as HTMLVideoElement;
+        Object.defineProperty(video, "videoWidth", { value: 640, configurable: true });
+        Object.defineProperty(video, "videoHeight", { value: 480, configurable: true });
+
+        act(() => {
+          vi.advanceTimersByTime(5000);
+        });
+        // Only the always-attempted first nudge — every scheduled retry
+        // checks hasRealFrame() before doing anything further.
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+      });
+
+      it("never mutes or unmutes the camera track — the retry is a pure local repaint, not a hardware toggle", () => {
+        const track = fakeLocalCameraTrack();
+        const participant = fakeParticipant({ camera: { track, isMuted: false } });
+        const { unmount } = render(
+          <SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />,
+        );
+        act(() => {
+          vi.advanceTimersByTime(5000);
+        });
+        unmount();
+        expect(track.mute).not.toHaveBeenCalled();
+        expect(track.unmute).not.toHaveBeenCalled();
+      });
+
+      it("cleans up every pending retry timeout on unmount — repeated Focused/Normal cycles never accumulate stray timers", () => {
+        const track = fakeLocalCameraTrack();
+        const participant = fakeParticipant({ camera: { track, isMuted: false } });
+        const { unmount } = render(
+          <SpeakerTile speaker={speaker()} participant={participant} isLocal={true} revealOwnVideo={true} />,
+        );
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+        unmount();
+        act(() => {
+          vi.advanceTimersByTime(5000);
+        });
+        // Nothing further fires post-unmount — every pending timeout was
+        // cleared, not left to resolve against a detached element.
+        expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
       });
     });
 

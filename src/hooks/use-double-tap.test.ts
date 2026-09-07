@@ -126,4 +126,74 @@ describe("useDoubleTap (pre-launch interaction pass, Section 2)", () => {
     result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el, pointerType: "mouse", button: 2 }));
     expect(onDoubleTap).not.toHaveBeenCalled();
   });
+
+  describe("onSingleTap (speaker presentation-toggle correction: single tap own tile returns to Speaker-Focused View, without breaking double-tap-to-react)", () => {
+    it("is omitted entirely — no new behavior at all — when no onSingleTap is given (every existing caller)", () => {
+      const onDoubleTap = vi.fn();
+      const { result } = renderHook(() => useDoubleTap(onDoubleTap));
+      const el = document.createElement("div");
+      vi.useFakeTimers();
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el }));
+      vi.advanceTimersByTime(1000);
+      expect(onDoubleTap).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it("fires after the double-tap window elapses with no second tap arriving — a genuine single tap", () => {
+      vi.useFakeTimers();
+      const onDoubleTap = vi.fn();
+      const onSingleTap = vi.fn();
+      const { result } = renderHook(() => useDoubleTap(onDoubleTap, onSingleTap));
+      const el = document.createElement("div");
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el }));
+      expect(onSingleTap).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(300);
+      expect(onSingleTap).toHaveBeenCalledTimes(1);
+      expect(onDoubleTap).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it("never fires when a second tap arrives in time — the double tap wins outright, not both", () => {
+      vi.useFakeTimers();
+      const onDoubleTap = vi.fn();
+      const onSingleTap = vi.fn();
+      const { result } = renderHook(() => useDoubleTap(onDoubleTap, onSingleTap));
+      const el = document.createElement("div");
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el }));
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el }));
+      expect(onDoubleTap).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1000);
+      expect(onSingleTap).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it("a tap on a nested interactive element never schedules a pending single tap either", () => {
+      vi.useFakeTimers();
+      const onDoubleTap = vi.fn();
+      const onSingleTap = vi.fn();
+      const { result } = renderHook(() => useDoubleTap(onDoubleTap, onSingleTap));
+      const container = document.createElement("div");
+      const button = document.createElement("button");
+      container.appendChild(button);
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, target: button, currentTarget: container }));
+      vi.advanceTimersByTime(1000);
+      expect(onSingleTap).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it("each single tap is independent — firing once doesn't block a later one", () => {
+      vi.useFakeTimers();
+      const onDoubleTap = vi.fn();
+      const onSingleTap = vi.fn();
+      const { result } = renderHook(() => useDoubleTap(onDoubleTap, onSingleTap));
+      const el = document.createElement("div");
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el }));
+      vi.advanceTimersByTime(300);
+      expect(onSingleTap).toHaveBeenCalledTimes(1);
+      result.current.onPointerUp(fakeTap({ x: 50, y: 50, currentTarget: el }));
+      vi.advanceTimersByTime(300);
+      expect(onSingleTap).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+  });
 });

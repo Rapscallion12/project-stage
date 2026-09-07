@@ -18,6 +18,21 @@ import type { EventSpeaker } from "@/lib/repositories/event-speakers";
 import type { Orientation } from "@/hooks/use-orientation";
 import type { ProfileDirectoryEntry } from "@/hooks/use-profile-directory";
 
+/**
+ * Speaker presentation-toggle correction, real-device (iPhone Safari)
+ * follow-up: how many extra repaint-nudge attempts the local video-attach
+ * effect below allows itself, beyond the first (always-attempted)
+ * one — and how far apart, in ms — before giving up. Deliberately small
+ * and fixed, per Section 5's own explicit instruction ("do not create an
+ * infinite retry loop"): three retries at 150ms apart is enough to give
+ * Safari's decode pipeline several distinct chances to actually start
+ * painting without the total added latency (≤450ms worst case) becoming
+ * perceptible, and every attempt after the first stops immediately once
+ * either a real decoded frame is detected or the `playing` event fires.
+ */
+const LOCAL_VIDEO_REPAINT_MAX_ATTEMPTS = 3;
+const LOCAL_VIDEO_REPAINT_RETRY_DELAY_MS = 150;
+
 /** Compact label for the tile's own placeholder — RoomControls still shows the full sentence below; this is just enough to explain the icon at a glance. */
 function mediaErrorShortLabel(error: NonNullable<MediaError>): string {
   switch (error.reason) {
@@ -242,12 +257,37 @@ export function SpeakerTile({
    * already flips the caller's `normalStageView` boolean in both
    * directions, so no new toggle state is needed, only a second place to
    * trigger it from.
+   *
+   * **Real-device follow-up**: no longer the *only* way back — a small
+   * corner affordance turned out to collide visually with the room's own
+   * header on a real phone, and real-device testing found "tap my own
+   * full-size tile" the more natural gesture anyway (see the
+   * `useDoubleTap`/`onSingleTap` wiring below, which is what actually
+   * drives that now). This callback still renders a small, secondary
+   * discoverability icon in the tile's corner (Section 12: "the pill
+   * could become a smaller collapse icon instead") — kept because a
+   * single floating hint that "this tile does something on tap" is worth
+   * having, not because it's load-bearing for the interaction anymore.
    */
   onTapReturnToSpeakerView?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const doubleTap = useDoubleTap(onDoubleTapReact ?? (() => {}));
+  // Real-device follow-up ("single tap my own tile to return to
+  // Speaker-Focused View, without breaking the existing double-tap-to-
+  // react gesture"): `onSingleTap` is wired only for my own tile while
+  // `revealOwnVideo` is showing it normally — every other tile (remote,
+  // or my own tile in Speaker-Focused/candidate contexts where it isn't
+  // rendered at all) passes `undefined`, reproducing `useDoubleTap`'s
+  // exact original single-tap-does-nothing behavior. See that hook's own
+  // `onSingleTap` doc comment for the disambiguation strategy — a single
+  // tap is held pending on a bounded timer and only fires once no second
+  // tap arrives in time, so a genuine double tap (send a reaction) is
+  // never mistaken for two singles.
+  const doubleTap = useDoubleTap(
+    onDoubleTapReact ?? (() => {}),
+    isLocal && revealOwnVideo ? onTapReturnToSpeakerView : undefined,
+  );
 
   // Issue #18 audience-countdown finding, broadened by the unified
   // inactive-speaker finding: the *same* authoritative deadline this
@@ -299,36 +339,109 @@ export function SpeakerTile({
     const element = videoRef.current;
     if (!track || !element || !showBigVideo) return;
     track.attach(element);
-    // Speaker presentation-toggle correction: when `isLocal &&
-    // revealOwnVideo`, the *same* already-flowing LocalVideoTrack was
-    // just detached from `SelfPreview`'s own <video> element (which
-    // unmounts the instant Normal Stage View is entered — see
-    // `SpeakerStage`'s self-preview-slot doc comment) and is being
-    // reattached here, to a brand-new element, moments later — the exact
-    // "reattached to a brand-new element moments after detaching from
-    // another" remount pattern `SelfPreview`'s own doc comment documents
-    // and works around (see DECISIONS.md — this is *not* a new bug, it's
-    // the same one, just at a second call site). Apply the identical
-    // repaint-nudge technique here, scoped to this exact case: a remote
+
+    // Speaker presentation-toggle correction, real-device (iPhone
+    // Safari) follow-up: when `isLocal && revealOwnVideo`, the *same*
+    // already-flowing LocalVideoTrack was just detached from
+    // `SelfPreview`'s own <video> element (which unmounts the instant
+    // Normal Stage View is entered — see `SpeakerStage`'s self-preview-
+    // slot doc comment) and is being reattached here, to a brand-new
+    // element, moments later — the exact "reattached to a brand-new
+    // element moments after detaching from another" remount pattern
+    // `SelfPreview`'s own doc comment documents and works around (see
+    // DECISIONS.md — this is *not* a new bug, it's the same one, just at
+    // a second call site). A single rAF-later `srcObject` reset (the
+    // original fix, copied verbatim from `SelfPreview`) turned out to be
+    // *insufficient* on a real device: real-device testing found the
+    // tile could still show a flat grey surface after that one nudge,
+    // recoverable only by manually toggling the camera hardware off and
+    // on — proof the `LocalVideoTrack` itself was fine and Safari's own
+    // paint/compositing pipeline was what got stuck, not the media
+    // itself (see this effect's own bounded-retry design below, chosen
+    // specifically to avoid that hardware toggle — see DECISIONS.md for
+    // the full audit of why a camera off/on cycle was rejected as the
+    // fix here). Scoped to this exact case throughout: a remote
     // participant's track is never detached-and-reattached by a local
-    // presentation toggle, so this never runs for any other tile.
+    // presentation toggle, so none of this ever runs for any other tile.
+    let stopped = false;
+    let attempt = 0;
+    const pendingRetries = new Set<ReturnType<typeof setTimeout>>();
+
+    // Arrow-function `const`s, not `function` declarations — TypeScript's
+    // control-flow narrowing of `element` (from the guard above) doesn't
+    // reliably carry into a hoisted `function` declaration's own body,
+    // even though it's never actually called before that guard runs.
+    const hasRealFrame = () =>
+      // The one bounded, verifiable signal available from outside
+      // `livekit-client` itself: real decoded video frames set these to
+      // the stream's actual dimensions. Zero here is unambiguous — if
+      // Safari is still grey, these are still zero regardless of what
+      // `readyState`/`play()`'s own resolved Promise claim.
+      element.videoWidth > 0 && element.videoHeight > 0;
+
+    const repaintNudge = () => {
+      const stream = element.srcObject;
+      if (!stream) return;
+      element.srcObject = null;
+      element.srcObject = stream;
+      void element.play().catch(() => {
+        // Same tolerance attach() itself already applies to its own
+        // play() call — a rejected replay here is never a reason to
+        // surface an error.
+      });
+    };
+
+    const scheduleNextAttempt = () => {
+      if (stopped || hasRealFrame() || attempt >= LOCAL_VIDEO_REPAINT_MAX_ATTEMPTS) {
+        if (!stopped && attempt >= LOCAL_VIDEO_REPAINT_MAX_ATTEMPTS && !hasRealFrame() && process.env.NODE_ENV !== "production") {
+          // Dev-only — Section 5's own "do not spam console in
+          // production" instruction. A real, if rare, remaining failure
+          // mode worth knowing about while developing, never surfaced to
+          // a real user.
+          console.warn(
+            "[SpeakerTile] local video still shows no decoded frame after the bounded repaint-retry budget — Safari may still need a manual camera toggle to recover.",
+          );
+        }
+        return;
+      }
+      attempt += 1;
+      const timeout = setTimeout(() => {
+        pendingRetries.delete(timeout);
+        if (stopped || hasRealFrame()) return;
+        repaintNudge();
+        scheduleNextAttempt();
+      }, LOCAL_VIDEO_REPAINT_RETRY_DELAY_MS);
+      pendingRetries.add(timeout);
+    };
+
+    // `playing` is the one event that actually implies real decoded
+    // frames are flowing (unlike `loadedmetadata`/`canplay`, which the
+    // known Safari bug this project has already documented can reach
+    // while still painting nothing) — Section 5's "successful rendering
+    // cancels retries" requirement. Belt-and-suspenders with the
+    // `hasRealFrame()` check each attempt already does on its own.
+    function handlePlaying() {
+      stopped = true;
+      for (const timeout of pendingRetries) clearTimeout(timeout);
+      pendingRetries.clear();
+    }
+
     let raf: number | undefined;
     if (isLocal && revealOwnVideo) {
+      element.addEventListener("playing", handlePlaying);
       raf = requestAnimationFrame(() => {
-        if (videoRef.current !== element) return;
-        const stream = element.srcObject;
-        if (!stream) return;
-        element.srcObject = null;
-        element.srcObject = stream;
-        void element.play().catch(() => {
-          // Same tolerance attach() itself already applies to its own
-          // play() call — a rejected replay here is never a reason to
-          // surface an error.
-        });
+        if (videoRef.current !== element || stopped) return;
+        repaintNudge();
+        scheduleNextAttempt();
       });
     }
+
     return () => {
+      stopped = true;
       if (raf !== undefined) cancelAnimationFrame(raf);
+      for (const timeout of pendingRetries) clearTimeout(timeout);
+      pendingRetries.clear();
+      element.removeEventListener("playing", handlePlaying);
       track.detach(element);
     };
   }, [cameraPublication?.track, showBigVideo, isLocal, revealOwnVideo]);
@@ -400,11 +513,17 @@ export function SpeakerTile({
     );
   }
 
+  // Real-device follow-up: the gesture handler must be wired whenever
+  // *either* gesture applies, not only when `onDoubleTapReact` is given —
+  // my own tile in Normal Stage View needs single-tap-to-return to work
+  // even in the (currently theoretical) case reactions are unavailable.
+  const hasTileGesture = Boolean(onDoubleTapReact) || (isLocal && revealOwnVideo && Boolean(onTapReturnToSpeakerView));
+
   return (
     <div
       data-testid="speaker-tile"
       className="relative h-full w-full overflow-hidden bg-foreground/10"
-      onPointerUp={onDoubleTapReact ? doubleTap.onPointerUp : undefined}
+      onPointerUp={hasTileGesture ? doubleTap.onPointerUp : undefined}
     >
       {showOnSpeakerReactions && onSpeakerReactions.length > 0 && (
         <OnSpeakerReactionBursts reactions={onSpeakerReactions} compact={compact} />
@@ -526,27 +645,37 @@ export function SpeakerTile({
       )}
       {!isLocal && <audio ref={audioRef} autoPlay />}
       {isLocal && revealOwnVideo && onTapReturnToSpeakerView && (
-        // Speaker presentation-toggle correction, Section 6: the one-tap
-        // way back to Speaker-Focused View — the corner self-preview (the
-        // *previous* return affordance) doesn't exist while Normal Stage
-        // View shows my own tile normally, so this tile carries its own
-        // small, unobtrusive return control instead. Same callback
-        // SpeakerStage already wires to the self-preview tap in the other
-        // direction (`onTapSelfPreview` — see that prop's own doc
-        // comment); it's a plain toggle, direction-agnostic. `z-10`, not
-        // `pointer-events-none` (unlike the reaction-burst overlay this
-        // sits alongside) — this is a real tap target, positioned clear
-        // of the identity label (left-anchored/bottom-gradient, never
-        // top-right) and the round badge.
+        // Speaker presentation-toggle correction, real-device follow-up:
+        // no longer the *only* way back (single-tapping anywhere on this
+        // tile's own background now does the same thing — see the
+        // `useDoubleTap`/`onSingleTap` wiring above) — this shrank from a
+        // labeled pill to a small icon-only affordance per Section 12
+        // ("the pill could become a smaller collapse icon instead"), kept
+        // purely as a discoverability hint that this tile does something
+        // on tap. Same callback SpeakerStage already wires to the
+        // self-preview tap in the other direction (`onTapSelfPreview`);
+        // it's a plain toggle, direction-agnostic. Uses the *same*
+        // `clearTopChrome`-driven offset the identity label already uses
+        // (real-device finding: a fixed `top-3` collided with the room's
+        // own header overlay for whichever tile renders first in
+        // portrait) — this icon sits on the opposite (right) edge at the
+        // same vertical band, so it drops below the header exactly when
+        // the identity label does. A plain `<button>`, so `useDoubleTap`'s
+        // own interactive-descendant check (`target.closest('button, ...')`)
+        // already excludes it from the tile's own tap-gesture handling —
+        // tapping this icon fires only this `onClick`, never also
+        // counted as the tile's own single/double tap.
         <button
           type="button"
           data-testid="return-to-speaker-view"
           onClick={onTapReturnToSpeakerView}
           aria-label="Switch stage view"
-          className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white shadow transition-colors hover:bg-black/75"
+          className={cn(
+            "absolute right-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-sm text-white shadow transition-colors hover:bg-black/75",
+            clearTopChrome ? "top-12" : "top-3",
+          )}
         >
           <span aria-hidden="true">⤡</span>
-          <span>Speaker View</span>
         </button>
       )}
       {orientation === "portrait" ? (

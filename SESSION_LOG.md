@@ -4,6 +4,71 @@ Newest entry first.
 
 ---
 
+## 2026-09-06 — Session 73: Normal Stage View corrections — real iPhone Safari testing found grey local video, invisible reactions, and an awkward return gesture (issue #21), on `feature/mobile-speaker-view-toggle`
+
+**Goal**: two rounds of real-device testing on the Normal Stage View
+toggle (`69db8c9` fixed the local speaker's own tile showing a "You're
+live" placeholder instead of real video; this pass fixes what that fix
+still got wrong on a real iPhone).
+
+**Issue 1 — grey local video on view switch**: the single rAF-later
+`srcObject` reset (copied from `SelfPreview`'s own repaint-nudge) wasn't
+reliable enough — Safari could still paint a flat grey tile, recoverable
+only by manually toggling the camera hardware off and on. Root-caused as
+the *same* remount pattern `SelfPreview` already documents (a
+already-flowing track reattached to a brand-new element moments after
+detaching from another), just needing a *more persistent* nudge than one
+attempt. Fixed with a bounded retry (`LOCAL_VIDEO_REPAINT_MAX_ATTEMPTS`
+= 3, 150ms apart — ≤450ms worst case), verified via `videoWidth`/
+`videoHeight` and cancelled early by the `playing` event. Explicitly
+**not** an automatic camera off/on cycle (rejected — real hardware churn,
+visible to remote viewers, could trip inactivity logic) — this stays a
+pure local repaint, never touching the publication.
+
+**Issue 2 — reactions targeting the local speaker invisible in Normal
+Stage View**: audited the full filter/routing chain end to end (self-
+echo dedup, `SpeakerStage`'s on-speaker/side-lane filters, `SpeakerTile`'s
+own render) and found the logic already correct — a regression test
+(`use-stage-reactions.test.ts`) reproduces the exact "Person B reacts to
+me" case and passes. The one real gap: `OnSpeakerReactionBursts`'
+wrapper had no explicit `z-index`, unlike its sibling `ReactionSideLane`
+(`z-10`) — Safari's own documented non-spec-faithful `<video>`
+compositing (two prior entries in this file) is exactly the kind of
+behavior an explicit stacking-context promotion protects against, even
+though standard CSS painting order should already put a positioned
+`z-index:auto` overlay above a non-positioned `<video>` regardless of DOM
+order. Matched `ReactionSideLane`'s existing value.
+
+**Issue 3 — return gesture**: replaced the corner-only "Speaker View"
+pill (kept, shrunk to an icon-only discoverability hint) with single-tap-
+anywhere-on-my-own-tile to return to Speaker-Focused View, while double-
+tap-to-react must keep working on the same tile. `useDoubleTap` gained an
+optional `onSingleTap` — a tap is held pending on a bounded 300ms timer
+and only fires if no second tap arrives, cancelled outright if one does.
+A real bug surfaced by the new hook-level tests: the pending single tap's
+own `lastTapRef` wasn't cleared when it fired, letting a later, unrelated
+tap misfire as a "double tap" paired with the stale first one — fixed by
+clearing it in the timeout callback.
+
+**Testing**: `speaker-tile.test.tsx` gained a bounded-retry describe
+block (retries capped, cancelled by `playing`/`videoWidth`, never
+mutes/unmutes, cleans up on unmount). `use-double-tap.test.ts` gained an
+`onSingleTap` describe block. `use-stage-reactions.test.ts` gained the
+targetIdentity-vs-senderIdentity regression test. `speaker-stage.test.tsx`
+gained a `revealOwnVideo` describe block (self-preview suppression,
+On Speaker/Side/Hidden reaction routing for the local tile, single-tap-
+to-return vs double-tap-to-react gesture disambiguation, no-remount).
+`portrait-speaker-view.test.tsx` gained same-track-identity and repeated-
+cycle stability tests.
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, room/hooks suites clean (1112 tests). Full project
+suite run separately — see this session's own handoff.
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-06 — Session 72: Comprehensive sandbox cleanup — root-caused stale test-room state, fixed `clear-sandbox`, added an internal "Clear Test Room" control (real-device report), on `fix/sandbox-cleanup-comprehensive`
 
 **Goal**: a real user testing the mobile UX correction found stale
