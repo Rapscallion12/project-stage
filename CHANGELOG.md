@@ -32,6 +32,12 @@ merged to `main`.
   one's confirmation. A comment that fails to send stays visible with a
   small "Not sent · Retry" — tapping it retries just that message,
   without touching whatever you're currently typing.
+- **Dragging inside Expanded Comments once it reached the top/bottom (or
+  when there weren't enough comments to fill it) moved the whole page**
+  (real-device report, iPhone Safari) — the comments list now feels like
+  its own contained surface: dragging past its edge gives a small,
+  springy resistance that settles back into place on release, and the
+  page underneath never moves.
 
 ## [public-beta-v2] - 2026-09-05
 

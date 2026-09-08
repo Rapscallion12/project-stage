@@ -211,6 +211,34 @@ body.room-active > header {
 }
 
 /*
+ * Real-device report (iPhone Safari): dragging inside Expanded Comments
+ * once its own scroll reached an edge (or, worse, when there weren't
+ * even enough comments to make it scrollable at all) was rubber-banding
+ * the *whole page* — root layout's own `body` is `overflow-y-auto` (see
+ * layout.tsx, needed for every ordinary, non-room route that genuinely
+ * scrolls), which is exactly the ancestor a chained/unhandled touch
+ * scroll gesture lands on once the nested comments list has nowhere
+ * further to go. `overscroll-behavior-y: none` on the *root scrolling
+ * element* is the standard, correct way to disable that page-level
+ * bounce/chain in Safari (supported since Safari 16) — scoped to
+ * `body.room-active` (the same existing, already-precisely-scoped class
+ * `EventRoom` toggles for exactly the lifetime of a mounted room — see
+ * that rule's own doc comment above) so no other route's ordinary
+ * scrolling is touched at all. This is the outer safety net for the
+ * post-release momentum/fling phase in particular, which no touch-move
+ * JS handler can intercept (a native deceleration animation after the
+ * finger lifts fires no further events for JS to preventDefault) — see
+ * `ExpandedComments`' own scroll container for the complementary
+ * `overscroll-y-contain` + custom touch handling that covers the
+ * active-drag phase and the "list too short to scroll at all" case
+ * `overscroll-behavior` alone can't help with (it only governs the
+ * boundary of an *already*-scrollable element).
+ */
+body.room-active {
+  overscroll-behavior-y: none;
+}
+
+/*
  * Issue #21, seventh corrective pass, Sections 1-5: the two speaker
  * tiles' own side-by-side/stacked arrangement responds to the STAGE's
  * own actual available geometry (a container query on its real

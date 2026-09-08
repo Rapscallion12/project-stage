@@ -3,6 +3,67 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-07 — Expanded Comments' scroll chaining to the page; a real effect-dependency bug found live (real-device report, iPhone Safari)
+
+**Problem — dragging inside Expanded Comments once its own list reached
+an edge (or wasn't scrollable at all) rubber-banded the whole page.**
+Root cause: `body` is globally `overflow-y-auto` (needed for every
+ordinary, non-room route), which is exactly the ancestor a touch-scroll
+gesture chains to once the nested comments list has nowhere further to
+go. Alternatives considered: a global `overflow: hidden`/scroll-lock on
+`body` — rejected outright, explicitly instructed against ("do not
+create a global site-wide scroll lock that breaks other routes") and
+unnecessary once the actual scroll owner is correctly targeted instead
+of reaching for the crudest ancestor-level fix. **Decision**: three
+complementary containment layers, each covering a phase/case none of the
+others do alone — native `overscroll-behavior-y: contain` on the actual
+scroll owner (not a random ancestor) for the genuinely-scrollable case;
+`overscroll-behavior-y: none` scoped to the already-existing
+`body.room-active` class (toggled for exactly a room's mounted lifetime)
+for the post-release momentum/fling phase, which no JS touch handler can
+intercept; and a manual, non-passive `touchmove` listener on the scroll
+owner itself for the "not scrollable at all" case (`overscroll-behavior`
+only governs an *already*-scrollable element's boundary — a too-short
+list is never handed a scroll gesture as its own to begin with) and to
+produce the requested tactile spring feel. **Tradeoff**: three
+mechanisms instead of one is more surface area to maintain, but each is
+independently necessary — verified live that removing any one of them
+leaves a real gap the others don't cover (confirmed via direct real-
+browser touch-event dispatch and DOM inspection, not assumed).
+
+**Problem — the edge-damping spring must never fight the existing live-
+comment viewport-anchoring logic**, which reads `scrollTop`/
+`scrollHeight` directly. **Decision**: the spring is a pure `transform`
+on the scroll container itself, never `scrollTop` — `transform` is a
+compositing-only property, completely decoupled from an element's own
+scroll metrics, so every anchoring calculation continues reading
+`scrollTop` exactly as if the spring didn't exist.
+
+**Problem — a real bug found only by driving the finished implementation
+against a real `next dev` server, not caught by the (otherwise
+comprehensive) jsdom test suite.** The `touchmove` listener's own
+`useEffect` depended on `[prefersReducedMotion]` only. `ExpandedComments`
+is always mounted by its caller — `open` just toggles its own internal
+`if (!open) return null`, so `listRef.current` is `null` for the entire
+time the sheet is closed. The effect ran exactly once at that point,
+found nothing to attach a listener to, and — because nothing in its
+dependency array ever changed on a later open — never ran again: every
+actual opening of the sheet had *no listener at all*, confirmed live via
+synthetic `TouchEvent` dispatch showing `preventDefault()` never firing.
+**Decision**: added `open` to the dependency array, so the effect
+re-runs (finding the now-real DOM node) on every closed→open transition.
+**Consequence for verification discipline**: this is the same *category*
+of bug as last session's `mountedRef`/React-StrictMode finding — an
+effect whose own re-run condition didn't actually track when the thing
+it depends on (a DOM ref) becomes available/valid — different root
+cause, same lesson: jsdom-based tests exercised the *logic* inside the
+handler correctly (all passed), but none of them exercised the
+*lifecycle* of attaching that handler across a real open/close cycle the
+way an actual mounted-and-toggled component does, because the existing
+test suite always rendered the component already `open`. Real-browser
+verification remains the authoritative check for exactly this class of
+"does the effect actually run when I need it to" bug.
+
 ## 2026-09-07 — Comment composer redesigned as optimistic/non-blocking; client-supplied primary key for exact reconciliation; a real StrictMode-only dispatch bug found live (real-device report)
 
 **Problem — the composer was still fundamentally a blocking model.**

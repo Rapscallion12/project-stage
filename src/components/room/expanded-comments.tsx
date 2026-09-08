@@ -25,6 +25,13 @@ import type { Identity } from "@/lib/identity";
 
 /** Two taps on the same row within this window count as a double-tap-to-like — long enough for a real double-tap, short enough not to pair up two unrelated taps. */
 const DOUBLE_TAP_MS = 350;
+/**
+ * Real-device report (iPhone Safari overscroll finding): the visual cap
+ * (px) on the edge-damping spring's own travel — "small," per the
+ * explicit request, never a large displacement. Sits inside the
+ * requested ~10-30px range.
+ */
+const MAX_OVERSCROLL_PX = 24;
 /** Downward drag distance (px) on the grabber/header past which release closes the sheet — short of this, it snaps back. */
 const CLOSE_DRAG_PX = 90;
 /** Up to this many pending requests render in "Top Speaker Requests" — see this file's own doc comment on the ordering signal. */
@@ -131,6 +138,56 @@ function isMyMessage(message: LobbyMessage, viewerIdentity: Identity | null): bo
  * (past `CLOSE_DRAG_PX`) via `onClose`. The ✕ button remains a full
  * alternative, unconditionally.
  *
+ * **Contained scroll, no page-level rubber-band** (real-device report,
+ * iPhone Safari): the root cause was `body`'s own `overflow-y-auto`
+ * (needed globally for ordinary, non-room routes — see layout.tsx) being
+ * exactly the ancestor a touch-scroll gesture chains to once the nested
+ * Recent Comments list (`listRef` below) has nowhere further to scroll —
+ * whether because it genuinely reached its top/bottom edge, or (the
+ * "few comments" case, easy to under-test since it's easy to *assume*
+ * `scrollHeight > clientHeight`) because it was never scrollable to
+ * begin with, so the browser never even treated it as a scroll target
+ * and handed the gesture straight to the page. Three complementary
+ * layers, each covering a different phase/case none of the others do
+ * alone:
+ * 1. `overscroll-y-contain` (Tailwind's `overscroll-behavior-y:
+ *    contain`) on `listRef` itself — the correct native primitive for
+ *    "don't chain scroll past me," applied to the actual scroll owner
+ *    (not a random ancestor). Free native momentum/inertia inside the
+ *    list; covers the genuinely-scrollable, reached-an-edge case with
+ *    zero JS.
+ * 2. `body.room-active { overscroll-behavior-y: none }` (globals.css) —
+ *    the outer safety net for the post-release *momentum/fling* phase,
+ *    which fires no further events for any JS touch handler to
+ *    intercept once the finger has lifted. Scoped to the same
+ *    already-established `room-active` class (toggled for exactly a
+ *    room's mounted lifetime — see that rule's own doc comment), so no
+ *    other route's ordinary body scrolling is affected.
+ * 3. A manual, non-passive `touchmove` listener on `listRef` (below) —
+ *    the only thing that can cover the "not scrollable at all" case
+ *    (`overscroll-behavior` only governs the boundary of an
+ *    *already*-scrollable element; a too-short list is never handed a
+ *    scroll gesture as its own in the first place) and is what actually
+ *    produces the requested small rubber-band *feel* while the finger is
+ *    still moving: once a drag is detected trying to go past the top or
+ *    bottom edge (`overscrollAnchorYRef` snapshots the finger's position
+ *    at the exact moment the boundary is crossed, so a normal scroll
+ *    that happened earlier in the same touch never contributes a
+ *    misleading head start), `event.preventDefault()` stops the browser
+ *    from ever handing the gesture to `body`, and a damped, capped
+ *    (`MAX_OVERSCROLL_PX`) offset is applied as a `transform` on
+ *    `listRef` itself — never touching `scrollTop`, so none of the live-
+ *    anchoring math below (which reads `scrollTop`/`scrollHeight`
+ *    directly) is ever affected by this purely cosmetic offset.
+ *    Registered via `addEventListener(..., { passive: false })` in a
+ *    `useEffect`, deliberately not React's synthetic `onTouchMove` —
+ *    browsers (and React, mirroring them) treat synthetic touch-move
+ *    listeners as passive by default for scroll-performance reasons,
+ *    which silently makes `preventDefault()` a no-op exactly when this
+ *    fix needs it most. `prefers-reduced-motion` skips the visual offset
+ *    entirely (containment/`preventDefault` still applies either way) —
+ *    see `usePrefersReducedMotion`.
+ *
  * **Presentation-only, deliberately**: this component owns no role,
  * media, seat, or LiveKit state — `open`/`onClose` are plain local UI
  * state owned by the caller, never lifted into `EventRoom`. See
@@ -220,6 +277,33 @@ export function ExpandedComments({
   const listRef = useRef<HTMLDivElement>(null);
   const wasOpenRef = useRef(false);
   const prefersReducedMotion = usePrefersReducedMotion();
+
+  // Real-device report (iPhone Safari overscroll finding) — the small
+  // rubber-band spring applied to `listRef` itself when a drag goes past
+  // the top/bottom edge (or the list isn't scrollable at all). Purely
+  // presentational: a `transform`, never `scrollTop` — see this
+  // component's own doc comment above ("Contained scroll, no page-level
+  // rubber-band") for the full three-layer design and why `scrollTop`
+  // must stay untouched (every anchoring calculation below reads it
+  // directly).
+  //
+  // `lastTouchYRef`: the previous touchmove's Y, used only to detect
+  // which direction *this* move is actually going — needed because
+  // "at the top edge" alone doesn't mean "overscrolling": scrolling
+  // further *into* the list while already sitting at scrollTop 0 is a
+  // perfectly ordinary forward scroll, not a pull past the boundary.
+  // `overscrollEdgeRef`/`overscrollAnchorYRef`: once a move is
+  // identified as actually crossing an edge, these record *which* edge
+  // and the finger's Y at that exact crossing instant — the overshoot
+  // distance is measured from this anchor, never from the touch's
+  // original start position, so a normal scroll that happened earlier in
+  // the same gesture never produces a misleading head-start the instant
+  // the edge is reached.
+  const [overscrollY, setOverscrollY] = useState(0);
+  const [isOverscrolling, setIsOverscrolling] = useState(false);
+  const lastTouchYRef = useRef<number | null>(null);
+  const overscrollAnchorYRef = useRef<number | null>(null);
+  const overscrollEdgeRef = useRef<"top" | "bottom" | null>(null);
 
   // Real-device report: the live timeline itself — just the same
   // `messages` array reversed, newest first. No local copy, so a new
@@ -355,6 +439,138 @@ export function ExpandedComments({
       setCaughtUpToId(messages.length > 0 ? messages[messages.length - 1].id : null);
     }
   }
+
+  // Real-device report (iPhone Safari overscroll finding): the actual
+  // edge-damping + scroll-chaining prevention — see this component's own
+  // doc comment above for why this needs a *manual*, non-passive
+  // `touchmove` listener rather than React's synthetic `onTouchMove`
+  // (which browsers/React treat as passive by default, silently making
+  // `preventDefault()` a no-op). Deliberately real Touch Events, not
+  // Pointer Events — WebKit's own handling of `preventDefault()` on
+  // `pointermove` actually suppressing native touch scrolling has a long
+  // history of being unreliable, unlike `touchmove`, which is the
+  // battle-tested primitive for exactly this "block/replace native
+  // scroll" pattern (do not assume Chromium behavior matches Safari).
+  //
+  // Real-device verification finding: this component is always mounted
+  // by its caller (`open` just toggles its own internal `if (!open)
+  // return null;` above) — `listRef.current` is `null` the entire time
+  // `open` is false, since nothing renders. Depending on
+  // `prefersReducedMotion` alone meant this effect ran exactly once
+  // while `listRef.current` was still `null`, found nothing to attach
+  // to, and then never ran again — the very first time the sheet
+  // actually opened (and every time after) had no listener at all,
+  // silently defeating the whole fix. `open` in the dependency array is
+  // what makes this effect re-run (finding the now-real DOM node) on
+  // every closed→open transition.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+
+    function resetOverscroll() {
+      lastTouchYRef.current = null;
+      overscrollAnchorYRef.current = null;
+      overscrollEdgeRef.current = null;
+      setIsOverscrolling(false);
+      setOverscrollY(0);
+    }
+
+    function handleTouchMove(event: TouchEvent) {
+      if (event.touches.length !== 1) {
+        // A second finger joining (pinch-zoom, etc.) is never this
+        // gesture — abandon any in-progress overscroll rather than
+        // fighting the browser's own multi-touch handling.
+        resetOverscroll();
+        return;
+      }
+      const node = listRef.current;
+      if (!node) return;
+
+      const touchY = event.touches[0].clientY;
+      const previousY = lastTouchYRef.current;
+      lastTouchYRef.current = touchY;
+
+      if (previousY === null) return; // first move of this gesture — nothing to compare direction against yet
+
+      if (overscrollEdgeRef.current === null) {
+        // Not currently in an overscroll excursion — figure out whether
+        // *this specific move* is one that actually crosses an edge.
+        // "At the top" alone isn't enough: scrolling further into the
+        // list while already sitting at scrollTop 0 is a perfectly
+        // ordinary forward scroll, not a pull past the boundary.
+        const atTop = node.scrollTop <= 0;
+        // -1px epsilon for subpixel/rounding slack, same reasoning as
+        // AmbientComments' own analogous near-bottom check elsewhere in
+        // this codebase. Trivially true for a list shorter than its own
+        // container (Section 6's "few comments" case) — scrollHeight <=
+        // clientHeight makes both this and `atTop` true regardless of
+        // direction, which is exactly the wanted behavior there: any
+        // drag, either direction, is "at an edge" when there's nothing
+        // to scroll at all.
+        const atBottom = node.scrollTop >= node.scrollHeight - node.clientHeight - 1;
+        const movingDown = touchY > previousY;
+        const movingUp = touchY < previousY;
+
+        if (atTop && movingDown) {
+          overscrollEdgeRef.current = "top";
+        } else if (atBottom && movingUp) {
+          overscrollEdgeRef.current = "bottom";
+        } else {
+          return; // ordinary in-bounds movement — let native scrolling handle it, untouched
+        }
+
+        // The exact moment this drag crossed the boundary — the
+        // overshoot grows from zero starting here, never from the
+        // touch's original start position (which could already be far
+        // away if the user scrolled normally for a while first).
+        overscrollAnchorYRef.current = touchY;
+        setIsOverscrolling(true);
+        // Past an edge — this is exactly the gesture that would
+        // otherwise chain to `body` on iOS Safari. Stop it here, at the
+        // actual scroll owner, rather than only at some ancestor.
+        event.preventDefault();
+        return; // this move just marks the crossing — zero visual offset for this one frame
+      }
+
+      // Already mid-excursion — keep blocking native scroll for the
+      // duration of it.
+      event.preventDefault();
+
+      const anchor = overscrollAnchorYRef.current ?? touchY;
+      const raw = overscrollEdgeRef.current === "top" ? touchY - anchor : anchor - touchY;
+
+      if (raw <= 0) {
+        // The finger came back to (or past) the crossing point — the
+        // excursion is over. Reset and let the very next move re-derive
+        // fresh whether it's ordinary scrolling or a brand new crossing.
+        resetOverscroll();
+        lastTouchYRef.current = touchY; // restore — otherwise the next move would see this as "no previous position yet"
+        return;
+      }
+
+      if (prefersReducedMotion) {
+        // Containment above still applies unconditionally — only the
+        // decorative visual travel is skipped.
+        return;
+      }
+
+      // Diminishing-returns damping (a standard rubber-band curve): near-
+      // linear for a small pull, asymptotically approaching the cap the
+      // farther past it the finger goes — "movement becomes harder the
+      // farther you pull," never a hard, sudden stop.
+      const damped = (MAX_OVERSCROLL_PX * raw) / (raw + MAX_OVERSCROLL_PX);
+      setOverscrollY(overscrollEdgeRef.current === "top" ? damped : -damped);
+    }
+
+    el.addEventListener("touchmove", handleTouchMove, { passive: false });
+    el.addEventListener("touchend", resetOverscroll);
+    el.addEventListener("touchcancel", resetOverscroll);
+    return () => {
+      el.removeEventListener("touchmove", handleTouchMove);
+      el.removeEventListener("touchend", resetOverscroll);
+      el.removeEventListener("touchcancel", resetOverscroll);
+    };
+  }, [open, prefersReducedMotion]);
 
   // Derived, never a separately-incremented counter that could drift
   // from the live array — "how many messages exist after the one I've
@@ -497,7 +713,25 @@ export function ExpandedComments({
         ref={listRef}
         onScroll={handleScroll}
         data-testid="expanded-comments-scroll"
-        className="min-h-0 flex-1 overflow-y-auto px-4 pb-2"
+        // `overscroll-y-contain` (Tailwind's `overscroll-behavior-y:
+        // contain`) is the native, zero-JS layer of the three-layer
+        // containment design — see this component's own doc comment
+        // above. `touch-pan-y` (`touch-action: pan-y`) tells the browser
+        // this element's own vertical drags are its to interpret as
+        // scroll gestures, same intent as this file's own drag-handle
+        // `touch-none` elsewhere, just the opposite (allow vertical pan,
+        // rather than suppress touch handling entirely).
+        className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-y-contain px-4 pb-2"
+        style={{
+          transform: overscrollY !== 0 ? `translateY(${overscrollY}px)` : undefined,
+          // No transition while actively dragging (1:1 tracking, same
+          // reasoning as the grabber drag-to-close's own `dragging ?
+          // "none" : ...` below) — only animates on release. Instant
+          // (no transition at all) under reduced motion, since there's
+          // never a non-zero offset to animate away from in the first
+          // place (see `handleTouchMove`'s own reduced-motion branch).
+          transition: isOverscrolling || prefersReducedMotion ? "none" : "transform 200ms ease-out",
+        }}
       >
         {topRequests.length > 0 && (
           <div data-testid="expanded-top-requests" className="mb-3 rounded-xl bg-accent/10 p-2">

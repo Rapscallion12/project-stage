@@ -1080,4 +1080,273 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("contained scroll, no page-level rubber-band (real-device report, iPhone Safari overscroll finding)", () => {
+    /**
+     * jsdom performs no real layout — every element's `scrollHeight`/
+     * `clientHeight`/`scrollTop` default to 0 unless explicitly stubbed.
+     * That default (`scrollHeight === clientHeight === 0`) is actually
+     * the exact "few comments"/non-scrollable case (Section 6) already,
+     * useful on its own — `stubScrollMetrics` lets the genuinely-
+     * scrollable cases override it explicitly.
+     */
+    function stubScrollMetrics(el: HTMLElement, metrics: { scrollTop?: number; scrollHeight?: number; clientHeight?: number }) {
+      if (metrics.scrollTop !== undefined) {
+        Object.defineProperty(el, "scrollTop", { value: metrics.scrollTop, writable: true, configurable: true });
+      }
+      if (metrics.scrollHeight !== undefined) {
+        Object.defineProperty(el, "scrollHeight", { value: metrics.scrollHeight, configurable: true });
+      }
+      if (metrics.clientHeight !== undefined) {
+        Object.defineProperty(el, "clientHeight", { value: metrics.clientHeight, configurable: true });
+      }
+    }
+
+    function touchMoveAt(el: HTMLElement, clientY: number): boolean {
+      const event = new TouchEvent("touchmove", {
+        touches: [{ clientY } as Touch],
+        cancelable: true,
+        bubbles: true,
+      });
+      return el.dispatchEvent(event);
+    }
+
+    it("the scroll container carries native overscroll containment (overscroll-y-contain) and vertical touch-action (touch-pan-y)", () => {
+      render(<ExpandedComments {...baseProps} open messages={[]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      expect(list.className).toMatch(/\boverscroll-y-contain\b/);
+      expect(list.className).toMatch(/\btouch-pan-y\b/);
+    });
+
+    it("reaching the bottom and dragging further up prevents the native touchmove — never left to chain to the page", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 100, scrollHeight: 200, clientHeight: 100 }); // exactly at the bottom edge
+
+      let notCanceled = touchMoveAt(list, 100); // establish a baseline position — no direction to compare yet
+      expect(notCanceled).toBe(true);
+
+      act(() => {
+        notCanceled = touchMoveAt(list, 80); // finger moves up 20px while already at the bottom
+      });
+      expect(notCanceled).toBe(false); // defaultPrevented — the browser never saw this as a normal scroll
+    });
+
+    it("reaching the top and dragging further down prevents the native touchmove — never left to chain to the page", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 }); // at the top edge, genuinely scrollable
+
+      let notCanceled = touchMoveAt(list, 200);
+      expect(notCanceled).toBe(true);
+
+      act(() => {
+        notCanceled = touchMoveAt(list, 220); // finger moves down 20px while already at the top
+      });
+      expect(notCanceled).toBe(false);
+    });
+
+    it("an ordinary in-bounds scroll (not at either edge) is never intercepted — native scrolling proceeds untouched", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 150, scrollHeight: 400, clientHeight: 100 }); // comfortably mid-list, neither edge
+
+      touchMoveAt(list, 200);
+      let notCanceled = true;
+      act(() => {
+        notCanceled = touchMoveAt(list, 150); // a normal 50px drag, nowhere near either boundary
+      });
+      expect(notCanceled).toBe(true); // never prevented — this is exactly the "don't break ordinary scrolling" requirement
+    });
+
+    it("the few-comments / non-scrollable case (scrollHeight === clientHeight) is contained in either drag direction — never assumes scrollHeight > clientHeight", () => {
+      render(<ExpandedComments {...baseProps} open messages={[]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      // jsdom's own default (no explicit stub) already models a
+      // non-scrollable element — scrollHeight/clientHeight both 0 — but
+      // stubbed explicitly here for clarity/robustness against jsdom
+      // ever changing that default.
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 80, clientHeight: 80 });
+
+      touchMoveAt(list, 100);
+      let notCanceledDown = true;
+      act(() => {
+        notCanceledDown = touchMoveAt(list, 130); // dragging down with nothing to scroll
+      });
+      expect(notCanceledDown).toBe(false);
+    });
+
+    it("the damped visual offset is capped — a large drag never produces a large transform", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 });
+
+      touchMoveAt(list, 0);
+      act(() => {
+        touchMoveAt(list, 10); // crosses the boundary — this frame just marks the crossing (Section 3, no huge initial jump)
+      });
+      act(() => {
+        touchMoveAt(list, 2000); // a huge, unrealistic pull — the cap must hold regardless
+      });
+
+      const match = list.style.transform.match(/translateY\(([-\d.]+)px\)/);
+      expect(match).not.toBeNull();
+      const offset = Math.abs(Number(match?.[1]));
+      expect(offset).toBeLessThanOrEqual(24); // MAX_OVERSCROLL_PX
+      expect(offset).toBeGreaterThan(0);
+    });
+
+    it("releasing (touchend) resets the offset back to zero", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 });
+
+      touchMoveAt(list, 0);
+      act(() => {
+        touchMoveAt(list, 10);
+      });
+      act(() => {
+        touchMoveAt(list, 40);
+      });
+      expect(list.style.transform).toMatch(/translateY/);
+
+      act(() => {
+        list.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
+      });
+      expect(list.style.transform).toBeFalsy();
+    });
+
+    it("releasing via touchcancel also resets the offset back to zero", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 });
+
+      touchMoveAt(list, 0);
+      act(() => {
+        touchMoveAt(list, 15);
+      });
+      act(() => {
+        list.dispatchEvent(new TouchEvent("touchcancel", { bubbles: true }));
+      });
+      expect(list.style.transform).toBeFalsy();
+    });
+
+    it("a second finger joining (pinch-zoom) abandons any in-progress overscroll rather than fighting multi-touch gestures", () => {
+      render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 });
+
+      touchMoveAt(list, 0);
+      act(() => {
+        touchMoveAt(list, 10); // crosses the boundary — zero offset on this frame
+      });
+      act(() => {
+        touchMoveAt(list, 20); // continues past it — offset now visible
+      });
+      expect(list.style.transform).toMatch(/translateY/);
+
+      act(() => {
+        const event = new TouchEvent("touchmove", {
+          touches: [{ clientY: 30 } as Touch, { clientY: 60 } as Touch],
+          cancelable: true,
+          bubbles: true,
+        });
+        list.dispatchEvent(event);
+      });
+      expect(list.style.transform).toBeFalsy();
+    });
+
+    describe("prefers-reduced-motion", () => {
+      const originalMatchMedia = window.matchMedia;
+
+      beforeEach(() => {
+        vi.stubGlobal("matchMedia", (query: string) => ({
+          matches: query.includes("prefers-reduced-motion"),
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }));
+      });
+
+      afterEach(() => {
+        window.matchMedia = originalMatchMedia;
+      });
+
+      it("skips the decorative visual offset entirely, while containment (preventDefault) still applies", () => {
+        render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+        const list = screen.getByTestId("expanded-comments-scroll");
+        stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 });
+
+        touchMoveAt(list, 0);
+        let notCanceled = true;
+        act(() => {
+          notCanceled = touchMoveAt(list, 20);
+        });
+        expect(notCanceled).toBe(false); // containment still holds
+        act(() => {
+          touchMoveAt(list, 60);
+        });
+        expect(list.style.transform).toBeFalsy(); // but no decorative bounce is ever applied
+      });
+    });
+
+    it("does not regress new-comment viewport anchoring — a stranger's comment while reading older ones still increments the indicator, not a jump", () => {
+      const messages = [makeMessage({ id: "m1", author_profile_id: "someone-else" })];
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 200, scrollHeight: 600, clientHeight: 100 }); // reading older comments, not near the top
+      fireEvent.scroll(list);
+
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          messages={[...messages, makeMessage({ id: "m2", author_profile_id: "someone-else-entirely" })]}
+        />,
+      );
+      expect(screen.getByTestId("expanded-comments-new-indicator")).toHaveTextContent("1 new comment");
+    });
+
+    it("does not regress own-comment jump-to-newest — posting my own comment still scrolls to it even while mid-excursion state is otherwise idle", async () => {
+      const viewerIdentity = { type: "profile" as const, id: "p1", displayName: "Jamie", username: null };
+      const messages = [makeMessage({ id: "m1", author_profile_id: "someone-else" })];
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={messages} viewerIdentity={viewerIdentity} />);
+      rerender(
+        <ExpandedComments
+          {...baseProps}
+          open
+          viewerIdentity={viewerIdentity}
+          messages={[...messages, makeMessage({ id: "m2", author_profile_id: "p1" })]}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-message-id="m2"]')).toHaveAttribute("data-just-sent", "true");
+    });
+
+    it("does not regress the composer — sending still works normally alongside the new touch handling", () => {
+      const submitComment = vi.fn();
+      render(<ExpandedComments {...baseProps} submitComment={submitComment} open messages={[]} />);
+      const input = screen.getByPlaceholderText("Add a comment…");
+      fireEvent.change(input, { target: { value: "still works" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send comment" }));
+      expect(submitComment).toHaveBeenCalledWith("still works");
+    });
+
+    it("closing removes the touch listeners — a stray touchmove on the old node afterward does nothing and never throws", () => {
+      const { rerender } = render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+      const list = screen.getByTestId("expanded-comments-scroll");
+      stubScrollMetrics(list, { scrollTop: 0, scrollHeight: 400, clientHeight: 100 });
+      touchMoveAt(list, 0);
+
+      rerender(<ExpandedComments {...baseProps} open={false} messages={[makeMessage()]} />);
+
+      expect(() => touchMoveAt(list, 999)).not.toThrow();
+    });
+  });
 });
