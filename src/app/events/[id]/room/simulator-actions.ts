@@ -535,7 +535,49 @@ export type ClearTestRoomResult = {
  * votes; speakers → round votes; stage_rounds and stage_reaction_heat
  * independently, since neither cascades from anything else).
  */
-export async function clearTestRoomSandbox(eventId: string): Promise<ClearTestRoomResult> {
+/**
+ * Real-device report (reset/reseed race, issue #21): `protectedGuestIds`
+ * is what makes a *delayed follow-up* call of this function generation-
+ * safe — see `SessionSimulatorPanel`'s own `handleReset` doc comment for
+ * the full incident (Reset's ~2s follow-up sweep, meant only to catch a
+ * write that was still in flight when the primary pass ran, instead
+ * wiped a *brand-new* Start/Seed generation that began during that same
+ * window, since this function had no concept of "old" vs. "new" at all —
+ * every call was an unconditional, event-wide delete). Omitted (or
+ * empty) for every *other* caller — the primary Reset pass, the CLI
+ * harness's equivalent, and the always-blank-slate guarantee this
+ * function exists for all still get the original, fully comprehensive
+ * wipe with zero exceptions.
+ *
+ * **Same ownership precedent as `resetSimulatorSession`'s own guest-id
+ * list** (see that function's own doc comment) — no new schema column,
+ * no timestamp-based cutoff (a fast "Reset → immediately Seed" can land
+ * well inside any fixed grace window a clock-based guard would need,
+ * exactly the scenario a real-device report reproduced), just an exact,
+ * freshly-random guest-id set this *same browser tab* already knows are
+ * its own current generation's real, live identities the instant it
+ * creates them — client-side, in-memory, impossible to collide with an
+ * older run's own (structurally different) random ids either way. This
+ * function does the *opposite* filter from `resetSimulatorSession`
+ * (exclude these ids from an otherwise-comprehensive delete, rather than
+ * delete only rows matching an exact list) — a genuinely different job
+ * (catch *anything* unrecognized, not just one known-old run), so kept
+ * here rather than unified into that function.
+ *
+ * `stage_rounds` gets the same protection `resetSimulatorSession`'s own
+ * `reconcileStageRound` already established: never blind-deleted while
+ * any protected (still-live, this-generation) speaker occupies a seat —
+ * an occupied seat with its own backing round abruptly deleted out from
+ * under it is exactly the inconsistent state that (per the real-device
+ * report's own debug snapshot) a separate, legitimate reconciliation
+ * path later "corrects" by evicting the seat entirely, several seconds
+ * after the fact — the actual seat loss the report described was
+ * downstream of this, not a second, independent bug.
+ */
+export async function clearTestRoomSandbox(
+  eventId: string,
+  options?: { protectedGuestIds?: ReadonlySet<string> | readonly string[] },
+): Promise<ClearTestRoomResult> {
   assertSimulatorAvailable();
   const supabase = createServiceClient();
 
@@ -551,45 +593,74 @@ export async function clearTestRoomSandbox(eventId: string): Promise<ClearTestRo
     );
   }
 
-  const { data: requestRows } = await supabase.from("speaker_requests").select("id").eq("event_id", eventId);
-  const requestIds = (requestRows ?? []).map((r) => r.id);
+  const protectedIds = new Set(options?.protectedGuestIds ?? []);
+  const isProtected = (guestId: string | null) => guestId !== null && protectedIds.has(guestId);
+
+  const { data: requestRows } = await supabase.from("speaker_requests").select("id, guest_id").eq("event_id", eventId);
+  const requestIds = (requestRows ?? []).filter((r) => !isProtected(r.guest_id)).map((r) => r.id);
   let requestVotesDeleted = 0;
   if (requestIds.length > 0) {
     const { count } = await supabase.from("speaker_request_votes").delete({ count: "exact" }).in("request_id", requestIds);
     requestVotesDeleted = count ?? 0;
   }
-  const { count: requestsDeleted } = await supabase.from("speaker_requests").delete({ count: "exact" }).eq("event_id", eventId);
+  const requestsDeleted =
+    requestIds.length > 0
+      ? ((await supabase.from("speaker_requests").delete({ count: "exact" }).in("id", requestIds)).count ?? 0)
+      : 0;
 
-  const { data: messageRows } = await supabase.from("event_chat_messages").select("id").eq("event_id", eventId);
-  const messageIds = (messageRows ?? []).map((m) => m.id);
+  const { data: messageRows } = await supabase
+    .from("event_chat_messages")
+    .select("id, author_guest_id")
+    .eq("event_id", eventId);
+  const messageIds = (messageRows ?? []).filter((m) => !isProtected(m.author_guest_id)).map((m) => m.id);
   let reactionsDeleted = 0;
   if (messageIds.length > 0) {
     const { count } = await supabase.from("event_chat_message_reactions").delete({ count: "exact" }).in("message_id", messageIds);
     reactionsDeleted = count ?? 0;
   }
-  const { count: messagesDeleted } = await supabase.from("event_chat_messages").delete({ count: "exact" }).eq("event_id", eventId);
+  const messagesDeleted =
+    messageIds.length > 0
+      ? ((await supabase.from("event_chat_messages").delete({ count: "exact" }).in("id", messageIds)).count ?? 0)
+      : 0;
 
-  const { data: speakerRows } = await supabase.from("event_speakers").select("id").eq("event_id", eventId);
-  const speakerRowIds = (speakerRows ?? []).map((s) => s.id);
+  const { data: speakerRows } = await supabase.from("event_speakers").select("id, guest_id").eq("event_id", eventId);
+  const deletableSpeakerRows = (speakerRows ?? []).filter((s) => !isProtected(s.guest_id));
+  const speakerRowIds = deletableSpeakerRows.map((s) => s.id);
+  const anySpeakerProtected = deletableSpeakerRows.length < (speakerRows ?? []).length;
   let roundVotesDeleted = 0;
   if (speakerRowIds.length > 0) {
     const { count } = await supabase.from("speaker_round_votes").delete({ count: "exact" }).in("event_speakers_id", speakerRowIds);
     roundVotesDeleted = count ?? 0;
   }
-  const { count: speakersDeleted } = await supabase.from("event_speakers").delete({ count: "exact" }).eq("event_id", eventId);
+  const speakersDeleted =
+    speakerRowIds.length > 0
+      ? ((await supabase.from("event_speakers").delete({ count: "exact" }).in("id", speakerRowIds)).count ?? 0)
+      : 0;
 
-  const { count: roundsDeleted } = await supabase.from("stage_rounds").delete({ count: "exact" }).eq("event_id", eventId);
-  const { count: reactionHeatDeleted } = await supabase.from("stage_reaction_heat").delete({ count: "exact" }).eq("event_id", eventId);
+  const roundsDeleted = anySpeakerProtected
+    ? 0
+    : ((await supabase.from("stage_rounds").delete({ count: "exact" }).eq("event_id", eventId)).count ?? 0);
+
+  // Deliberately unaffected by `protectedGuestIds` — out of scope for
+  // this pass (reaction heat/cooldown behavior is explicitly preserved
+  // as-is), and this table has no single-column primary key to scope a
+  // partial delete by in the first place. Reaction heat is harmless,
+  // low-stakes bookkeeping that naturally rebuilds from live activity
+  // either way, unlike an occupied seat or its backing round.
+  const { count: reactionHeatDeleted } = await supabase
+    .from("stage_reaction_heat")
+    .delete({ count: "exact" })
+    .eq("event_id", eventId);
 
   return {
     eventId,
-    messagesDeleted: messagesDeleted ?? 0,
+    messagesDeleted,
     reactionsDeleted,
-    requestsDeleted: requestsDeleted ?? 0,
+    requestsDeleted,
     requestVotesDeleted,
-    speakersDeleted: speakersDeleted ?? 0,
+    speakersDeleted,
     roundVotesDeleted,
-    roundsDeleted: roundsDeleted ?? 0,
+    roundsDeleted,
     reactionHeatDeleted: reactionHeatDeleted ?? 0,
   };
 }

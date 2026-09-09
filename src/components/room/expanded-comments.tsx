@@ -187,6 +187,21 @@ function isMyMessage(message: LobbyMessage, viewerIdentity: Identity | null): bo
  *    fix needs it most. `prefers-reduced-motion` skips the visual offset
  *    entirely (containment/`preventDefault` still applies either way) —
  *    see `usePrefersReducedMotion`.
+ * 4. A fourth, panel-level backstop on the sheet root itself
+ *    (`sheetRef`) — real-device follow-up found blank-area drags still
+ *    leaking, traced live (via `document.elementFromPoint` against the
+ *    actual mounted DOM, not assumed) to `expanded-comments-mini-stage`
+ *    being a *sibling* of the scroller, not a descendant: a touch
+ *    starting on the mini-stage band (or any other sheet-level chrome
+ *    outside the scroller) never bubbles through `listRef` at all, so
+ *    layer 3 above never even sees it. This backstop is deliberately
+ *    much simpler than the scroller's own handler — the region it covers
+ *    has no legitimate scroll of its own, so it just blocks every
+ *    `touchmove` that didn't originate inside the scroller, no edge-
+ *    detection or spring needed. Safe for taps (Close, mic/RTS buttons,
+ *    comment rows, the composer) — see this backstop's own doc comment
+ *    below for why a `touchmove`'s `preventDefault()` never affects the
+ *    eventual `click`.
  *
  * **Presentation-only, deliberately**: this component owns no role,
  * media, seat, or LiveKit state — `open`/`onClose` are plain local UI
@@ -275,6 +290,7 @@ export function ExpandedComments({
   viewerIdentity?: Identity | null;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
   const wasOpenRef = useRef(false);
   const prefersReducedMotion = usePrefersReducedMotion();
 
@@ -572,6 +588,56 @@ export function ExpandedComments({
     };
   }, [open, prefersReducedMotion]);
 
+  // Real-device report (follow-up): blank-area drags were still leaking
+  // to the page. Traced live, not assumed — `document.elementFromPoint`
+  // against the actual mounted DOM confirmed `expanded-comments-scroll`
+  // itself already fills its entire available region correctly (the
+  // `flex-1`/`min-h-0` sizing was never the bug), but
+  // `expanded-comments-mini-stage` is a *sibling* of the scroller, not a
+  // descendant — a touch starting on the mini-stage band (or any other
+  // sheet-level chrome outside the scroller) never bubbles through
+  // `listRef` at all, so that handler's own listener never even fires
+  // for it. This backstop, attached to the sheet root, is what the user
+  // described as "the comments sheet background itself" / "near the top
+  // of the comments body."
+  //
+  // Deliberately much simpler than the scroller's own handler: this
+  // region has no legitimate scroll/spring behavior of its own to
+  // preserve, so it doesn't need edge-detection, damping, or a visual
+  // offset — every `touchmove` that reaches here (i.e., didn't originate
+  // inside the scroller, which owns and fully handles its own gestures
+  // above) is simply blocked from chaining to `body`. Safe for taps: a
+  // `touchmove`'s own `preventDefault()` never suppresses the eventual
+  // synthesized `click` (only `touchstart`/`touchend`'s own
+  // `preventDefault()` could do that, which this never calls) — the
+  // browser's click-after-touch heuristic is based purely on how far the
+  // touch actually moved, unaffected by what a `touchmove` handler
+  // returns. Close, the mic/RTS buttons, comment rows, and the composer
+  // all stay fully tappable; only a genuine drag chaining toward `body`
+  // is what this stops.
+  useEffect(() => {
+    const sheetEl = sheetRef.current;
+    if (!sheetEl) return;
+
+    function handleSheetTouchMove(event: TouchEvent) {
+      if (event.touches.length !== 1) return; // let multi-touch gestures pass through untouched, same as the scroller's own handler
+      const target = event.target as Node | null;
+      if (listRef.current && target && listRef.current.contains(target)) {
+        // Originated inside the actual scroll owner — that element's own
+        // listener (above) already fully handles this gesture (normal
+        // scrolling, or its own edge spring). Never double-handle it
+        // here.
+        return;
+      }
+      event.preventDefault();
+    }
+
+    sheetEl.addEventListener("touchmove", handleSheetTouchMove, { passive: false });
+    return () => {
+      sheetEl.removeEventListener("touchmove", handleSheetTouchMove);
+    };
+  }, [open]);
+
   // Derived, never a separately-incremented counter that could drift
   // from the live array — "how many messages exist after the one I've
   // caught up to." A `caughtUpToId` no longer present (the 300-message
@@ -664,6 +730,7 @@ export function ExpandedComments({
 
   return (
     <div
+      ref={sheetRef}
       data-testid="expanded-comments"
       className={cn(
         "absolute inset-x-0 bottom-0 z-20 flex flex-col border-t border-white/10 bg-black/92 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]",

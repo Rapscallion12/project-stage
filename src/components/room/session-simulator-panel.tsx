@@ -627,6 +627,29 @@ export function SessionSimulatorPanel({
     setLog((prev) => [`${new Date().toLocaleTimeString()} [tab ${tabIdRef.current}] — ${line}`, ...prev].slice(0, 30));
   }
 
+  // Real-device report (reset/reseed race, Sections 15-16): the most
+  // recent explicit action *this panel* initiated that could plausibly
+  // affect seat occupancy or the shared round — Reset, Start, and Seed 2
+  // Speakers, the three implicated in the actual incident. Purely
+  // client-side, best-effort context for the "OBSERVED" watchers below:
+  // a seat vacating or the round phase changing shortly after one of
+  // these is a real, useful causal hint for debugging exactly this class
+  // of race; a transition with nothing recent logged here means it came
+  // from somewhere this tab didn't initiate (a different tab, or genuine
+  // production reconciliation/expiry) — reported as such, never guessed.
+  const lastSimulatorActionRef = useRef<{ label: string; at: number; generation: number } | null>(null);
+  function markSimulatorAction(label: string) {
+    lastSimulatorActionRef.current = { label, at: new Date().getTime(), generation: resetGenerationRef.current };
+  }
+  /** `null` if nothing was marked, or the mark is stale enough (30s) to no longer be a plausible cause — never asserted as *the* cause, only offered as a hint. */
+  function recentActionHint(): string {
+    const mark = lastSimulatorActionRef.current;
+    if (!mark) return " [no recent simulator-initiated action recorded]";
+    const secondsAgo = (new Date().getTime() - mark.at) / 1000;
+    if (secondsAgo > 30) return " [no recent simulator-initiated action recorded]";
+    return ` [most recent simulator action: ${mark.label} (generation ${mark.generation}), ${secondsAgo.toFixed(1)}s ago]`;
+  }
+
   // Part 14 observability: a crude, honest proxy for "pool generation/
   // reset count" — increments whenever the live pending-request count
   // drops to zero after having been non-zero, which is what a
@@ -667,7 +690,7 @@ export function SessionSimulatorPanel({
         const prevOccupant = prevSpeakers.find((s) => s.seat_number === seatNumber);
         const nowOccupant = speakers.find((s) => s.seat_number === seatNumber);
         if (prevOccupant && !nowOccupant) {
-          appendLog(`OBSERVED: Seat ${seatNumber} vacated (was ${prevOccupant.display_name})`);
+          appendLog(`OBSERVED: Seat ${seatNumber} vacated (was ${prevOccupant.display_name})${recentActionHint()}`);
         } else if (!prevOccupant && nowOccupant) {
           appendLog(`OBSERVED: Seat ${seatNumber} occupied (${nowOccupant.display_name})`);
         } else if (prevOccupant && nowOccupant && prevOccupant.id !== nowOccupant.id) {
@@ -699,7 +722,7 @@ export function SessionSimulatorPanel({
     const prevPhase = prevRoundPhaseForLogRef.current;
     const nowPhase = stageRound?.phase ?? null;
     if (prevPhase !== null && prevPhase !== nowPhase) {
-      appendLog(`OBSERVED: Round phase ${prevPhase} → ${nowPhase ?? "none"}`);
+      appendLog(`OBSERVED: Round phase ${prevPhase} → ${nowPhase ?? "none"}${recentActionHint()}`);
     }
     prevRoundPhaseForLogRef.current = nowPhase;
   }, [stageRound?.phase]);
@@ -958,6 +981,7 @@ export function SessionSimulatorPanel({
       return;
     }
     startupInFlightRef.current = true;
+    markSimulatorAction("Start");
     try {
       const token = ++startupTokenRef.current;
       startupAttemptRef.current += 1;
@@ -1261,6 +1285,7 @@ export function SessionSimulatorPanel({
     resetInFlightRef.current = true;
     setResetInFlight(true);
     resetGenerationRef.current += 1;
+    markSimulatorAction("Reset");
     startupAttemptRef.current = 0;
     startupTokenRef.current++; // see `startupTokenRef`'s own doc comment
     runningRef.current = false;
@@ -1303,7 +1328,15 @@ export function SessionSimulatorPanel({
 
       resetFollowUpTimerRef.current = setTimeout(() => {
         resetFollowUpTimerRef.current = null;
-        void clearTestRoomSandbox(eventId).then((followUp) => {
+        // Real-device report (reset/reseed race): read fresh, right here
+        // at fire-time, not captured back when the timer was scheduled —
+        // this is exactly what needs to reflect a brand-new Start/Seed
+        // that happened *during* the 2s wait, so that generation's own
+        // guest ids are excluded from this sweep's delete. See
+        // `clearTestRoomSandbox`'s own doc comment for the full
+        // generation-safety design.
+        const protectedGuestIds = new Set(allSimulatedGuestIdsRef.current);
+        void clearTestRoomSandbox(eventId, { protectedGuestIds }).then((followUp) => {
           const strayTotal =
             followUp.messagesDeleted +
             followUp.reactionsDeleted +
@@ -1314,9 +1347,13 @@ export function SessionSimulatorPanel({
             followUp.roundsDeleted +
             followUp.reactionHeatDeleted;
           if (strayTotal === 0 || !mountedRef.current) return;
+          const protectionNote =
+            protectedGuestIds.size > 0
+              ? ` (${protectedGuestIds.size} newer-generation guest id(s) protected from this sweep)`
+              : "";
           setLog((prev) =>
             [
-              `${new Date().toLocaleTimeString()} — Reset follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight when Reset ran`,
+              `${new Date().toLocaleTimeString()} — Reset follow-up — caught ${strayTotal} straggler row(s) from a write that was still in flight when Reset ran${protectionNote}`,
               ...prev,
             ].slice(0, 30),
           );
@@ -1910,6 +1947,7 @@ export function SessionSimulatorPanel({
     const pool = requireAudience();
     const seedSpeakers = seedSpeakersRef.current;
     if (!pool || !seedSpeakers) return;
+    markSimulatorAction("Seed 2 Speakers");
     const token = ++startupTokenRef.current;
     await establishInitialPairing(seedSpeakers, token);
   }
@@ -2480,6 +2518,7 @@ export function SessionSimulatorPanel({
     push(`Bootstrap generation: ${startupTokenRef.current}`);
     push(`Reset in progress: ${resetInFlightRef.current ? "yes" : "no"}`);
     push(`Reset generation: ${resetGenerationRef.current}`);
+    push(`Most recent simulator action:${recentActionHint()}`);
     push(`Startup attempt: ${startupAttemptRef.current}`);
     push(`Existing stage established: ${established ? "yes" : "no"}`);
     const seat1Bootstrap = bootstrapResultRef.current.seat1;

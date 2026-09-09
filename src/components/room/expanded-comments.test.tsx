@@ -1348,5 +1348,95 @@ describe("ExpandedComments (issue #21, Discussion Expanded)", () => {
 
       expect(() => touchMoveAt(list, 999)).not.toThrow();
     });
+
+    describe("panel-level backstop — blank-area drags outside the scroller (real-device follow-up: dragging from the mini-stage band, or any other sheet chrome, still leaked to the page)", () => {
+      /**
+       * Real-device follow-up, traced live via `document.elementFromPoint`
+       * against the actual mounted DOM: `expanded-comments-mini-stage` is
+       * a *sibling* of `expanded-comments-scroll`, not a descendant — a
+       * touch starting there never bubbles through the scroller's own
+       * listener at all. This backstop, attached to the sheet root, is
+       * what covers it — deliberately unconditional (no edge-detection,
+       * no spring) since this region never legitimately scrolls.
+       */
+      function touchMoveOn(el: HTMLElement, clientY: number): boolean {
+        const event = new TouchEvent("touchmove", {
+          touches: [{ clientY } as Touch],
+          cancelable: true,
+          bubbles: true,
+        });
+        return el.dispatchEvent(event);
+      }
+
+      it("expanded-comments-mini-stage is a sibling of the scroller, not a descendant — confirms why the scroller's own listener alone can never see a touch that starts there", () => {
+        render(<ExpandedComments {...baseProps} open messages={[]} miniStage={<div data-testid="fake-mini-stage" />} />);
+        const scroller = screen.getByTestId("expanded-comments-scroll");
+        const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+        expect(scroller.contains(miniStage)).toBe(false);
+      });
+
+      it("a drag starting on the mini-stage band is prevented from chaining to the page", () => {
+        render(<ExpandedComments {...baseProps} open messages={[]} miniStage={<div data-testid="fake-mini-stage">stage</div>} />);
+        const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+
+        // First move only establishes a baseline for the *scroller's own*
+        // handler — the backstop has no such warm-up, it's unconditional
+        // from the very first move that reaches it.
+        const notCanceled = touchMoveOn(miniStage, 100);
+        expect(notCanceled).toBe(false);
+      });
+
+      it("a drag starting directly on the sheet root (background chrome outside every named region) is also contained", () => {
+        render(<ExpandedComments {...baseProps} open messages={[]} />);
+        const sheet = screen.getByTestId("expanded-comments");
+        const notCanceled = touchMoveOn(sheet, 100);
+        expect(notCanceled).toBe(false);
+      });
+
+      it("never double-handles (or breaks) a drag that started inside the actual scroller — the backstop defers to the scroller's own listener entirely", () => {
+        render(<ExpandedComments {...baseProps} open messages={[makeMessage()]} />);
+        const list = screen.getByTestId("expanded-comments-scroll");
+        stubScrollMetrics(list, { scrollTop: 150, scrollHeight: 400, clientHeight: 100 }); // comfortably mid-list, not at an edge
+
+        touchMoveAt(list, 200);
+        let notCanceled = true;
+        act(() => {
+          notCanceled = touchMoveAt(list, 150); // ordinary in-bounds scroll
+        });
+        // The backstop must not additionally prevent this — normal
+        // scrolling inside the list is untouched, exactly as it was
+        // before this backstop existed.
+        expect(notCanceled).toBe(true);
+      });
+
+      it("a multi-touch gesture (pinch-zoom) starting outside the scroller is left alone, same as the scroller's own handler", () => {
+        render(<ExpandedComments {...baseProps} open messages={[]} miniStage={<div data-testid="fake-mini-stage" />} />);
+        const miniStage = screen.getByTestId("expanded-comments-mini-stage");
+        const event = new TouchEvent("touchmove", {
+          touches: [{ clientY: 100 } as Touch, { clientY: 200 } as Touch],
+          cancelable: true,
+          bubbles: true,
+        });
+        const notCanceled = miniStage.dispatchEvent(event);
+        expect(notCanceled).toBe(true);
+      });
+
+      it("interactive controls outside the scroller (e.g. Close) remain fully clickable — the backstop only ever prevents touchmove, never touchstart/touchend/click", () => {
+        const onClose = vi.fn();
+        render(<ExpandedComments {...baseProps} onClose={onClose} open messages={[]} miniStage={<div />} />);
+        fireEvent.click(screen.getByTestId("expanded-comments-close"));
+        expect(onClose).toHaveBeenCalledTimes(1);
+      });
+
+      it("removes the backstop listener on close — a stray touchmove on the old sheet node afterward does nothing and never throws", () => {
+        const { rerender } = render(<ExpandedComments {...baseProps} open messages={[]} miniStage={<div data-testid="fake-mini-stage" />} />);
+        const sheet = screen.getByTestId("expanded-comments");
+        touchMoveOn(sheet, 0);
+
+        rerender(<ExpandedComments {...baseProps} open={false} messages={[]} miniStage={<div data-testid="fake-mini-stage" />} />);
+
+        expect(() => touchMoveOn(sheet, 999)).not.toThrow();
+      });
+    });
   });
 });

@@ -674,4 +674,199 @@ describe.skipIf(!hasServiceCredentials)("clearTestRoomSandbox (real database) �
     const { data: sandboxStillThere } = await service.from("events").select("id").eq("id", sandbox.id).maybeSingle();
     expect(sandboxStillThere?.id).toBe(sandbox.id);
   });
+
+  /**
+   * Real-device report (reset/reseed race, issue #21): `protectedGuestIds`
+   * is what makes a delayed follow-up sweep generation-safe — see
+   * `clearTestRoomSandbox`'s own doc comment for the full incident and
+   * design. These tests exercise the real sandbox room directly (the
+   * same one every other test in this describe block already does),
+   * simulating the exact Reset → immediate Seed 2 Speakers race by hand:
+   * seed "old" rows, run an unprotected sweep (the primary Reset pass),
+   * seed "new" rows under fresh guest ids (the immediate reseed), then
+   * run a *protected* sweep (the delayed follow-up) and confirm the new
+   * generation survives while anything genuinely unprotected does not.
+   */
+  describe("protectedGuestIds — generation-safe follow-up sweep (reset/reseed race)", () => {
+    async function getSandboxId(): Promise<string> {
+      const { data: sandbox, error } = await service.from("events").select("id").eq("is_permanent_test", true).single();
+      if (error || !sandbox) throw new Error(error?.message ?? "permanent test room not found");
+      return sandbox.id;
+    }
+
+    it("excludes a protected guest's occupied seat and its backing round from the sweep, while an unprotected stray speaker and message are still removed", async () => {
+      const eventId = await getSandboxId();
+      const strayGuestId = crypto.randomUUID();
+      const protectedGuestId = crypto.randomUUID();
+
+      const { error: strayMessageError } = await service.from("event_chat_messages").insert({
+        event_id: eventId,
+        author_guest_id: strayGuestId,
+        author_display_name: "stray (unprotected) guest",
+        body: "an old-generation straggler — must be removed",
+      });
+      if (strayMessageError) throw new Error(strayMessageError.message);
+
+      const { error: straySpeakerError } = await service
+        .from("event_speakers")
+        .insert({ event_id: eventId, guest_id: strayGuestId, seat_number: 2, display_name: "stray (unprotected) guest" });
+      if (straySpeakerError) throw new Error(straySpeakerError.message);
+
+      const { error: protectedSpeakerError } = await service
+        .from("event_speakers")
+        .insert({ event_id: eventId, guest_id: protectedGuestId, seat_number: 1, display_name: "protected (new-generation) guest" });
+      if (protectedSpeakerError) throw new Error(protectedSpeakerError.message);
+
+      const { error: roundError } = await service.from("stage_rounds").insert({ event_id: eventId });
+      if (roundError) throw new Error(roundError.message);
+
+      try {
+        const result = await clearTestRoomSandbox(eventId, { protectedGuestIds: new Set([protectedGuestId]) });
+
+        expect(result.messagesDeleted).toBeGreaterThan(0); // the stray message was removed
+        expect(result.speakersDeleted).toBe(1); // only the stray speaker, never the protected one
+        expect(result.roundsDeleted).toBe(0); // never blind-deleted while a protected seat is still occupied
+
+        const { data: messagesAfter } = await service
+          .from("event_chat_messages")
+          .select("id")
+          .eq("event_id", eventId)
+          .eq("author_guest_id", strayGuestId);
+        expect(messagesAfter).toEqual([]);
+
+        const { data: straySpeakerAfter } = await service
+          .from("event_speakers")
+          .select("id")
+          .eq("event_id", eventId)
+          .eq("guest_id", strayGuestId);
+        expect(straySpeakerAfter).toEqual([]);
+
+        const { data: protectedSpeakerAfter } = await service
+          .from("event_speakers")
+          .select("id, guest_id")
+          .eq("event_id", eventId)
+          .eq("guest_id", protectedGuestId)
+          .maybeSingle();
+        expect(protectedSpeakerAfter?.guest_id).toBe(protectedGuestId);
+
+        const { data: roundAfter } = await service.from("stage_rounds").select("id").eq("event_id", eventId);
+        expect(roundAfter?.length).toBeGreaterThan(0);
+      } finally {
+        await service.from("event_speakers").delete().eq("event_id", eventId);
+        await service.from("stage_rounds").delete().eq("event_id", eventId);
+        await service.from("event_chat_messages").delete().eq("event_id", eventId);
+      }
+    });
+
+    it("still deletes the round when nothing is protected — the primary Reset pass's own unconditional behavior is unchanged", async () => {
+      const eventId = await getSandboxId();
+      // Defensive: `stage_rounds` has a UNIQUE(event_id) constraint, and
+      // this describe block shares the one real permanent test room with
+      // every other test/live-verification session that's ever touched
+      // it — clear any pre-existing round first so this test's own
+      // fixture setup is never blocked by something unrelated left
+      // behind.
+      await service.from("stage_rounds").delete().eq("event_id", eventId);
+      const guestId = crypto.randomUUID();
+      const { error: speakerError } = await service
+        .from("event_speakers")
+        .insert({ event_id: eventId, guest_id: guestId, seat_number: 1, display_name: "unprotected guest" });
+      if (speakerError) throw new Error(speakerError.message);
+      const { error: roundError } = await service.from("stage_rounds").insert({ event_id: eventId });
+      if (roundError) throw new Error(roundError.message);
+
+      const result = await clearTestRoomSandbox(eventId);
+      expect(result.speakersDeleted).toBeGreaterThan(0);
+      expect(result.roundsDeleted).toBeGreaterThan(0);
+
+      const { data: roundAfter } = await service.from("stage_rounds").select("id").eq("event_id", eventId);
+      expect(roundAfter).toEqual([]);
+    });
+
+    it("end-to-end: Reset (unprotected) then an immediate reseed under new guest ids survives a subsequent protected follow-up sweep, while a genuinely-late old-generation straggler is still caught", async () => {
+      const eventId = await getSandboxId();
+      const oldGuestId = crypto.randomUUID();
+      const newGuestIdSeat1 = crypto.randomUUID();
+      const newGuestIdSeat2 = crypto.randomUUID();
+
+      // Defensive: see the previous test's own comment on why this is
+      // cleared first.
+      await service.from("stage_rounds").delete().eq("event_id", eventId);
+
+      // "Old" generation: a speaker + round already sitting in the room.
+      const { error: oldSpeakerError } = await service
+        .from("event_speakers")
+        .insert({ event_id: eventId, guest_id: oldGuestId, seat_number: 1, display_name: "old generation" });
+      if (oldSpeakerError) throw new Error(oldSpeakerError.message);
+      const { error: oldRoundError } = await service.from("stage_rounds").insert({ event_id: eventId });
+      if (oldRoundError) throw new Error(oldRoundError.message);
+
+      try {
+        // Reset's own primary pass — unconditional, exactly as the real button fires it.
+        const primary = await clearTestRoomSandbox(eventId);
+        expect(primary.speakersDeleted).toBeGreaterThan(0);
+        expect(primary.roundsDeleted).toBeGreaterThan(0);
+
+        // Immediately reseed under a brand-new generation's own guest ids —
+        // the exact "Reset → immediately Seed 2 Speakers" sequence.
+        const { error: newSpeaker1Error } = await service
+          .from("event_speakers")
+          .insert({ event_id: eventId, guest_id: newGuestIdSeat1, seat_number: 1, display_name: "new generation seat 1" });
+        if (newSpeaker1Error) throw new Error(newSpeaker1Error.message);
+        const { error: newSpeaker2Error } = await service
+          .from("event_speakers")
+          .insert({ event_id: eventId, guest_id: newGuestIdSeat2, seat_number: 2, display_name: "new generation seat 2" });
+        if (newSpeaker2Error) throw new Error(newSpeaker2Error.message);
+        // Defensive re-clear immediately before this insert — see the
+        // sibling test's own comment on why (a UNIQUE(event_id)
+        // constraint on this table, sharing the one real permanent test
+        // room with everything else that's ever touched it).
+        await service.from("stage_rounds").delete().eq("event_id", eventId);
+        const { error: newRoundError } = await service.from("stage_rounds").insert({ event_id: eventId });
+        if (newRoundError) throw new Error(newRoundError.message);
+
+        // A genuinely late straggler from the OLD generation, landing only
+        // now — exactly the write-still-in-flight-when-Reset-ran case the
+        // follow-up sweep exists to catch.
+        const { error: lateMessageError } = await service.from("event_chat_messages").insert({
+          event_id: eventId,
+          author_guest_id: oldGuestId,
+          author_display_name: "old generation",
+          body: "a write that was still in flight when Reset ran",
+        });
+        if (lateMessageError) throw new Error(lateMessageError.message);
+
+        // The delayed follow-up sweep, protecting the new generation's own
+        // guest ids — exactly what the panel's real `setTimeout` callback
+        // now does.
+        const followUp = await clearTestRoomSandbox(eventId, {
+          protectedGuestIds: new Set([newGuestIdSeat1, newGuestIdSeat2]),
+        });
+        expect(followUp.messagesDeleted).toBeGreaterThan(0); // the old straggler
+        expect(followUp.speakersDeleted).toBe(0); // never the new generation
+        expect(followUp.roundsDeleted).toBe(0); // never the new generation's own round
+
+        const { data: speakersAfter } = await service
+          .from("event_speakers")
+          .select("guest_id")
+          .eq("event_id", eventId)
+          .order("seat_number", { ascending: true });
+        expect((speakersAfter ?? []).map((s) => s.guest_id)).toEqual([newGuestIdSeat1, newGuestIdSeat2]);
+
+        const { data: roundsAfter } = await service.from("stage_rounds").select("id").eq("event_id", eventId);
+        expect(roundsAfter?.length).toBe(1);
+
+        const { data: staleMessageAfter } = await service
+          .from("event_chat_messages")
+          .select("id")
+          .eq("event_id", eventId)
+          .eq("author_guest_id", oldGuestId);
+        expect(staleMessageAfter).toEqual([]);
+      } finally {
+        await service.from("event_speakers").delete().eq("event_id", eventId);
+        await service.from("stage_rounds").delete().eq("event_id", eventId);
+        await service.from("event_chat_messages").delete().eq("event_id", eventId);
+      }
+    });
+  });
 });

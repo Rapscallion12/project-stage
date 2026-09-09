@@ -1909,6 +1909,85 @@ describe("SessionSimulatorPanel (issue #21, Part 5 + shared-round corrective pas
       expect(screen.getByTestId("sim-log")).not.toHaveTextContent("follow-up");
     });
 
+    /**
+     * Real-device report (reset/reseed race, issue #21): the actual
+     * incident this whole describe block exists to prevent — Reset's own
+     * primary pass fires immediately (call #1, always unprotected — see
+     * `clearTestRoomSandbox`'s own doc comment), but a *new* Start/Seed
+     * happening before the ~2s delayed follow-up (call #2) must have its
+     * own fresh guest ids protected from that follow-up's own sweep. This
+     * exercises the exact "Reset → immediately re-seed" timing, not just
+     * "Reset → wait → seed."
+     */
+    it("Reset → immediately Start again (before the follow-up sweep fires) — the follow-up's own call protects the new generation's guest ids", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      fireEvent.click(screen.getByTestId("sim-reset"));
+      // Wait for the *primary* pass to have fully landed — `resetInFlight`
+      // clearing (Start's own barrier releasing) happens in the same
+      // synchronous block as `handleReset`'s own bookkeeping reset
+      // (clearing `allSimulatedGuestIdsRef`), so this is the precise
+      // signal that block has finished, not merely that the mock was
+      // *called* (which says nothing about whether its continuation has
+      // run yet — a real, if subtle, distinction this test's own first
+      // draft got wrong).
+      await vi.waitFor(() => expect(screen.getByTestId("sim-start")).not.toBeDisabled());
+      expect(clearTestRoomSandbox).toHaveBeenCalledTimes(1);
+      // Confirm the *primary* pass call is the ordinary, unconditional one
+      // — no protection on Reset's own deliberate full wipe.
+      expect(clearTestRoomSandbox).toHaveBeenNthCalledWith(1, "e1");
+
+      // Immediately re-seed, well inside the follow-up's own 2s window —
+      // the exact real-device sequence.
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(2));
+
+      const followUpCall = clearTestRoomSandbox.mock.calls[1];
+      expect(followUpCall[0]).toBe("e1");
+      const options = followUpCall[1] as { protectedGuestIds?: Set<string> } | undefined;
+      expect(options?.protectedGuestIds).toBeDefined();
+      expect(options?.protectedGuestIds?.size).toBeGreaterThan(0);
+    });
+
+    it("a repeated Reset → immediately Start stress loop remains stable — every follow-up sweep call always protects a non-empty, current generation", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<SessionSimulatorPanel {...baseProps} />);
+      fireEvent.click(screen.getByTestId("sim-start"));
+      await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+      const ITERATIONS = 5;
+      for (let i = 0; i < ITERATIONS; i++) {
+        const callsBefore = clearTestRoomSandbox.mock.calls.length;
+
+        fireEvent.click(screen.getByTestId("sim-reset"));
+        // See the standalone test's own comment on why this precise
+        // signal (not merely "the mock was called") is required.
+        await vi.waitFor(() => expect(screen.getByTestId("sim-start")).not.toBeDisabled());
+        expect(clearTestRoomSandbox).toHaveBeenCalledTimes(callsBefore + 1);
+
+        // Immediately re-seed, before this iteration's own follow-up fires.
+        fireEvent.click(screen.getByTestId("sim-start"));
+        await vi.waitFor(() => expect(screen.getByTestId("sim-stop")).not.toBeDisabled());
+
+        await vi.advanceTimersByTimeAsync(2000);
+        await vi.waitFor(() => expect(clearTestRoomSandbox).toHaveBeenCalledTimes(callsBefore + 2));
+
+        const followUpCall = clearTestRoomSandbox.mock.calls[callsBefore + 1];
+        const options = followUpCall[1] as { protectedGuestIds?: Set<string> } | undefined;
+        expect(options?.protectedGuestIds?.size ?? 0).toBeGreaterThan(0);
+      }
+
+      // Stable throughout — the simulation is still genuinely running at
+      // the end, never left in some half-reset limbo by the loop above.
+      expect(screen.getByTestId("sim-stop")).not.toBeDisabled();
+    });
+
     it("starting again after reset seeds a clean 2-speaker stage again — auto-seeding is not a one-time-per-mount thing", async () => {
       render(<SessionSimulatorPanel {...baseProps} />);
       fireEvent.click(screen.getByTestId("sim-start"));

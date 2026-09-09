@@ -4,6 +4,113 @@ Newest entry first.
 
 ---
 
+## 2026-09-08 — Session 78: two-part diagnostic pass — Expanded Comments blank-area overscroll leak (mini-stage band), and a real simulator Reset/reseed race that could delete a brand-new generation's own speakers/round (issue #21), on `feature/mobile-speaker-view-toggle`
+
+**Part A — blank-area drags still leaked to the page.** Root cause found
+by live DOM inspection (`document.elementFromPoint`), not assumed:
+`expanded-comments-scroll` itself already correctly filled its entire
+available region (the `flex-1`/`min-h-0` sizing from last session's own
+pass was never the bug) — but `expanded-comments-mini-stage` is a
+*sibling* of the scroller, not a descendant. A drag starting on the
+mini-stage band (or any other sheet-level chrome outside the scroller)
+never bubbles through the scroller's own touchmove handler at all, so
+last session's whole fix never even saw it. Fixed with a fourth,
+panel-level backstop: a second, much simpler touchmove listener on the
+sheet root itself, deliberately unconditional (no edge-detection, no
+spring — this region never legitimately scrolls) for anything that
+didn't originate inside the scroller. Verified safe for taps (a
+`touchmove`'s own `preventDefault()` never suppresses the eventual
+synthesized `click`) and confirmed live: a real `TouchEvent` dispatched
+on the mini-stage band is now correctly prevented, `body`/`window`
+scroll stay at 0, and Close/the mic buttons/composer remain fully
+clickable.
+
+**Part B — the actual root cause was authoritative, not a rendering
+bug**, exactly as the debug snapshot indicated. Traced the full chain:
+`Reset Session`'s own **delayed ~2s follow-up sweep** (added a prior
+session to catch a write still in flight when the primary Reset pass
+ran) calls the same comprehensive, unconditional `clearTestRoomSandbox`
+the primary pass does — with **zero concept of "old" vs. "new"**. A
+prior session's consolidation from the older, guest-id-scoped
+`resetSimulatorSession` (which already had exactly this kind of
+protection, plus a `reconcileStageRound` flag for this exact race) onto
+the newer, broader `clearTestRoomSandbox` silently dropped that
+guarantee for the follow-up sweep specifically. Sequence: Reset's
+primary pass runs and clears everything (correct); the follow-up is
+scheduled for 2s later; a **new** Start/Seed begins inside that window,
+creating a real, legitimate new pairing + round; 2s after the *original*
+Reset, the follow-up fires its own unconditional comprehensive wipe —
+deleting the round row the new pairing's own seats depended on (not
+necessarily the seats themselves, if their own guest ids happened not to
+be swept in the same pass) — and a **separate, legitimate** reconciliation
+path later (the exact several-second delay the report saw) notices the
+seats now have no valid backing round and evicts them, restoring
+consistency. The "seat loss" was real but entirely downstream of the
+round's own deletion — not a second, independent bug, and not a defect
+in the seat/round/reconciliation systems themselves (left untouched, per
+explicit instruction).
+
+**Fix — generation-safe follow-up sweep, no schema change**:
+`clearTestRoomSandbox` gained an optional `protectedGuestIds` parameter
+— rows (and, transitively, the shared round while any protected seat
+remains occupied) belonging to a currently-known-live guest id are
+excluded from that call's own delete. The panel's follow-up sweep now
+passes `allSimulatedGuestIdsRef.current` (read fresh, at fire time, not
+captured when the timer was scheduled) — since every seed/start action
+already adds its own fresh identities to that exact ref *before* any
+DB write begins, a brand-new generation started inside the 2s window is
+automatically protected the instant it's created, with zero new
+plumbing. The primary Reset pass itself stays fully unconditional,
+unchanged. Confirmed the client's own barrier/bookkeeping reset
+(`resetInFlightRef`, clearing `allSimulatedGuestIdsRef`) is atomic within
+one synchronous block — a real user genuinely cannot wedge a new Start
+between "Reset's primary pass resolves" and "its own bookkeeping clears"
+the way a naive test first assumed; the actual race lived entirely in
+the *database-level* follow-up sweep, not client-side sequencing.
+
+**Observability** (Sections 15-16): a lightweight, best-effort
+`markSimulatorAction`/`recentActionHint` — Reset/Start/Seed 2 Speakers
+now stamp a client-side generation+timestamp mark, surfaced as a
+`[most recent simulator action: ...]` suffix on the existing "OBSERVED"
+seat-vacate/round-phase-change log lines and in the debug snapshot.
+Explicitly a hint, never asserted as *the* cause — confirmed live it
+correctly labels a genuinely-unattributed natural round resolution as
+`[no recent simulator-initiated action recorded]`, distinguishing real
+production reconciliation from anything this tab itself triggered.
+
+**Timer**: never independently broken — confirmed directly. With the
+round-deletion race fixed, the timer's own prior "disappearance" no
+longer reproduces at all; no timer-rendering code was touched.
+
+**Testing**: `expanded-comments.test.tsx` gained a dedicated backstop
+describe block (mini-stage-is-a-sibling structural check, contained
+mini-stage drag, sheet-background drag, never double-handling a
+scroller-originated drag, multi-touch passthrough, Close staying
+clickable, listener cleanup on close). `simulator-actions.test.ts`
+gained three real-database tests against the actual sandbox
+(`protectedGuestIds` excludes a live seat + its round while still
+sweeping an unprotected stray; unprotected calls still wipe the round;
+a full Reset→immediate-reseed→protected-follow-up end-to-end scenario).
+`session-simulator-panel.test.tsx` gained a precise Reset→immediate-Start
+race test and a 5-iteration stress loop, both asserting the follow-up's
+own `protectedGuestIds` argument is always non-empty and current.
+
+**Verification**: `npm run lint` clean, `npx tsc --noEmit` clean, `npm
+run build` clean, full suite clean (see this session's own handoff for
+the exact count). **Real-browser + real-backend** (not unit tests alone,
+per explicit instruction): reproduced Reset→immediate-Start against the
+real dev server and the real linked sandbox four separate times (an
+initial single reproduction plus a 3-iteration loop), confirming via
+direct authoritative database queries after each that both speakers and
+the active round survived every time, including a 15s wait past the
+original bug's own observed delay window; normal simulator progression
+(a legitimate later round replacement) was correctly distinguished from
+the fixed race throughout.
+
+Not merged to `main`. Not deployed to production.
+
+---
+
 ## 2026-09-07 — Session 77: Expanded Comments scroll contained to its own surface, real iPhone Safari page-level rubber-band fixed, small native+custom edge-damping spring added (issue #21), on `feature/mobile-speaker-view-toggle`
 
 **Root cause**: `body` is globally `overflow-y-auto` (needed for every ordinary, non-room route — see layout.tsx). Once the nested Recent Comments list had nowhere further to scroll — genuinely reaching its top/bottom edge, or (the easy-to-miss case) never being scrollable at all because there weren't enough comments to fill it — iOS Safari handed the touch-drag gesture straight up to `body`, rubber-banding the whole page. Nothing in the room's own layout was previously telling the browser "stop the gesture here."

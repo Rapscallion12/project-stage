@@ -3,6 +3,95 @@
 Architecture Decision Record. Newest first. Format: Problem, Alternatives
 considered, Decision, Reason, Tradeoffs.
 
+## 2026-09-08 — Simulator Reset's delayed follow-up sweep made generation-safe without a schema change; Expanded Comments overscroll backstop extended to sheet chrome outside the scroller
+
+**Problem — a real-device report's debug snapshot showed two seeded
+speakers and an active round spontaneously collapsing, with the client's
+own canonical state matching the authoritative backend throughout (no
+reconciliation bug, no stale-cache bug).** Traced the full chain: Reset
+Session's own delayed ~2s follow-up sweep (added a prior session — see
+that session's own entry — specifically to catch a write still in flight
+when the primary Reset pass ran) calls the same comprehensive,
+unconditional `clearTestRoomSandbox` the primary pass does, with no
+concept of "old" vs. "new" generation at all. A **prior session's own
+consolidation** from the older, guest-id-scoped `resetSimulatorSession`
+(which already carried exactly this kind of protection — see that
+function's own doc comment, plus a `reconcileStageRound` flag added
+specifically for this class of race) onto the newer, broader
+`clearTestRoomSandbox` silently dropped that guarantee for the follow-up
+sweep specifically, while keeping it correct for the primary pass (which
+should always be unconditional). Sequence: Reset's primary pass runs and
+clears everything (correct, intended); the follow-up is scheduled 2s
+later; a *new* Start/Seed begins inside that window, creating a real,
+legitimate new pairing + round; 2s after the *original* Reset, the
+follow-up fires its own blanket wipe, deleting the round row the new
+pairing's own occupied seats depend on; a separate, legitimate
+reconciliation path several seconds later notices the now-invalid seats
+and evicts them, restoring consistency — the reported "seat loss" was
+real but entirely downstream of the round's own deletion, not a second,
+independent defect, and not a bug in the seat/round/reconciliation
+systems themselves (deliberately left untouched, per explicit
+instruction to prefer fixing simulator ownership over touching
+production speaker logic without proof it's the actual culprit).
+
+**Alternatives considered for making the follow-up sweep generation-
+aware**: (a) a `created_at`-timestamp cutoff on the follow-up's own
+delete queries — rejected: a genuine straggler's own commit time and a
+deliberately-fast "Reset → immediately reseed" can land inside the same
+narrow window, so no fixed grace period reliably distinguishes them
+(confirmed by reasoning through the exact real-device timing, not
+assumed); (b) skip the follow-up sweep entirely whenever any new
+simulator activity is detected — rejected: this only gates *whether* the
+sweep runs, not *what* it deletes, so a legitimate new generation would
+still eventually get wiped once things go quiet, incompatible with "the
+new generation should persist indefinitely once seeded"; (c) a new
+`simulator_generation` schema column on `event_speakers`/`stage_rounds`
+— rejected: mixes internal test-tooling bookkeeping into core production
+game-state tables for a need only this one internal panel has, and a
+schema change was explicitly discouraged unless nothing narrower would
+work. **Decision**: `clearTestRoomSandbox` gained an optional
+`protectedGuestIds` parameter — an exact, in-memory guest-id set
+excludes matching rows (and, transitively, the shared round while any
+protected seat is still occupied) from that one call's delete. The
+panel's follow-up sweep passes `allSimulatedGuestIdsRef.current`,
+read fresh at fire time — every seed/start action already adds its own
+fresh identities to that exact ref *before* any DB write begins (a
+pre-existing convention, confirmed by reading the code, not assumed), so
+a brand-new generation started inside the 2s window is automatically
+protected the instant it exists, with zero new plumbing and the same
+"exact in-memory id list, no schema column" ownership precedent
+`resetSimulatorSession` already established. The primary Reset pass
+itself stays fully unconditional, unchanged — protection only ever
+applies to the delayed, non-deliberate follow-up.
+
+**A narrower client-side race was also considered and ruled out**:
+whether `handleReset`'s own bookkeeping reset (clearing
+`allSimulatedGuestIdsRef`) could itself race against an immediately-
+following Start clearing the ref out from under it. Confirmed by reading
+the code (and by a test that initially assumed a looser wait and failed
+in exactly this way, revealing the assumption was in the test, not the
+code): `resetInFlightRef` clearing and the ref-clearing happen in the
+same synchronous block with no `await` between them, so a real user
+physically cannot land a click in between — the actual race only ever
+existed at the database level, in `clearTestRoomSandbox` itself.
+
+**Problem — Expanded Comments' overscroll containment (previous
+session) still leaked for drags starting in blank space.** Traced live
+via `document.elementFromPoint` against the real mounted DOM: the
+scroll owner's own box already correctly filled its available region
+(previous session's `flex-1`/`min-h-0` fix was never the bug) — but
+`expanded-comments-mini-stage` renders as a *sibling* of the scroller,
+not a descendant, so a drag starting there never reaches the scroller's
+own touchmove listener at all. **Decision**: a fourth containment layer,
+a second touchmove listener on the sheet root itself — deliberately much
+simpler than the scroller's own (no edge-detection, no spring, since
+this region has no legitimate scroll of its own), unconditionally
+blocking any touchmove that didn't originate inside the scroller.
+Confirmed safe for taps: a `touchmove`'s own `preventDefault()` never
+suppresses the browser's separately-computed synthesized `click`, which
+depends only on total touch movement, not on what any `touchmove`
+handler returned.
+
 ## 2026-09-07 — Expanded Comments' scroll chaining to the page; a real effect-dependency bug found live (real-device report, iPhone Safari)
 
 **Problem — dragging inside Expanded Comments once its own list reached
